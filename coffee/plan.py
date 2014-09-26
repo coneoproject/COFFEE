@@ -33,15 +33,12 @@
 
 """Transform the kernel's AST according to the backend we are running over."""
 
-from ast_base import *
-from ast_utils import *
-from ast_optimizer import AssemblyOptimizer
-from ast_vectorizer import AssemblyVectorizer
-from ast_linearalgebra import AssemblyLinearAlgebra
-from ast_autotuner import Autotuner
-
-# PyOP2 dependencies
-from pyop2.profiling import timed_function
+from base import *
+from utils import *
+from optimizer import AssemblyOptimizer
+from vectorizer import AssemblyVectorizer
+from linear_algebra import AssemblyLinearAlgebra
+from autotuner import Autotuner
 
 from copy import deepcopy as dcopy
 
@@ -165,7 +162,6 @@ class ASTKernel(object):
             self.fundecl.pred = [q for q in self.fundecl.pred
                                  if q not in ['static', 'inline']]
 
-    @timed_function('COFFEE plan_cpu')
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
 

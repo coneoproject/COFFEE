@@ -35,9 +35,9 @@ from math import ceil
 from copy import deepcopy as dcopy
 from collections import defaultdict
 
-from ast_base import *
-from ast_utils import ast_update_ofs, itspace_merge
-import ast_plan as ap
+from base import *
+from utils import ast_update_ofs, itspace_merge
+import plan as ap
 
 
 class AssemblyVectorizer(object):

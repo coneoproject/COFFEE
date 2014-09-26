@@ -39,7 +39,7 @@ except ImportError:
     from ordereddict import OrderedDict
 from copy import deepcopy as dcopy
 
-from pyop2.coffee.ast_base import *
+from base import *
 
 
 class AssemblyLinearAlgebra(object):

@@ -43,9 +43,9 @@ from copy import deepcopy as dcopy
 
 import networkx as nx
 
-from ast_base import *
-from ast_utils import ast_update_ofs, itspace_size_ofs, itspace_merge
-import ast_plan
+from base import *
+from utils import ast_update_ofs, itspace_size_ofs, itspace_merge
+import plan
 
 
 class AssemblyOptimizer(object):
@@ -135,7 +135,7 @@ class AssemblyOptimizer(object):
             elif isinstance(node, Par):
                 return inspect(node.children[0], node, fors, decls, symbols)
             elif isinstance(node, Decl):
-                decls[node.sym.symbol] = (node, ast_plan.LOCAL_VAR)
+                decls[node.sym.symbol] = (node, plan.LOCAL_VAR)
                 return (fors, decls, symbols)
             elif isinstance(node, Symbol):
                 symbols.add(node)
@@ -803,7 +803,7 @@ class AssemblyRewriter(object):
 
                 # 4) Update the lists of symbols accessed and of decls
                 self.syms.update([d.sym for d in var_decl])
-                lv = ast_plan.LOCAL_VAR
+                lv = plan.LOCAL_VAR
                 self.decls.update(dict(zip([d.sym.symbol for d in var_decl],
                                            [(v, lv) for v in var_decl])))
 
@@ -1035,7 +1035,7 @@ class ExpressionExpander(object):
             const_sym = Symbol("const%d" % len(self.found_consts), ())
             new_const_decl = Decl("double", dcopy(const_sym), const)
             # Keep track of the expansion
-            self.expanded_decls[new_const_decl.sym.symbol] = (new_const_decl, ast_plan.LOCAL_VAR)
+            self.expanded_decls[new_const_decl.sym.symbol] = (new_const_decl, plan.LOCAL_VAR)
             self.expanded_syms.append(new_const_decl.sym)
             self.found_consts[const_str] = const_sym
             self.expr_graph.add_dependency(const_sym, const, False)
@@ -1058,7 +1058,7 @@ class ExpressionExpander(object):
         # Append new expression and declaration
         inv_for.children[0].children.append(new_node)
         place.insert(place.index(var_decl), new_var_decl)
-        self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, ast_plan.LOCAL_VAR)
+        self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, plan.LOCAL_VAR)
         self.expanded_syms.append(new_var_decl.sym)
         # Update tracked information
         self.var_info[sym.symbol] = (new_expr, new_var_decl, inv_for, place)

@@ -37,7 +37,7 @@ import resource
 import operator
 import itertools
 
-from ast_base import Symbol
+from base import Symbol
 
 from pyop2.logger import warning
 

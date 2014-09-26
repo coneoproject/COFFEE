@@ -33,8 +33,8 @@
 
 """COFFEE's autotuning system."""
 
-from ast_base import *
-from ast_vectorizer import vect_roundup
+from base import *
+from vectorizer import vect_roundup
 
 from pyop2.mpi import MPI
 
