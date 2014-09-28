@@ -81,7 +81,6 @@ class AssemblyOptimizer(object):
         self.hoisted = OrderedDict()
         # Inspect the assembly loop nest and collect info
         self.fors, self.decls, self.sym = self._visit_nest(loop_nest)
-        self.fors = zip(*self.fors)[0]
 
     def _visit_nest(self, node):
         """Explore the loop nest and collect various info like:

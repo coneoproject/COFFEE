@@ -210,8 +210,7 @@ class AssemblyVectorizer(object):
                 loop_peel[0].incr.children[1] = c_sym(1)
                 loop_peel[1].incr.children[1] = c_sym(1)
                 # Append peeling loop after the main loop
-                parent_loop = self.asm_opt.fors[0]
-                parent_loop.children[0].children.append(loop_peel[0])
+                self.asm_opt._get_root().children.append(loop_peel[0])
 
             # Insert the vectorized code at the right point in the loop nest
             blk = parent.children
@@ -220,8 +219,7 @@ class AssemblyVectorizer(object):
 
         # Append the layout code after the loop nest
         if layout:
-            parent = self.asm_opt.pre_header.children
-            parent.insert(parent.index(self.asm_opt.fors[0]) + 1, layout)
+            parent = self.asm_opt.pre_header.children.append(layout)
 
 
 class OuterProduct():
@@ -441,7 +439,7 @@ class OuterProduct():
         # the innermost loop (i.e. loop nest is j-k-i), stores in memory are
         # done outside of ip, i.e. immediately before the outer product's
         # inner loop terminates.
-        if self.loops[1].it_var() == self.nest.fors[-1].it_var():
+        if self.loops[1] in inner_loops(self.loops[0]):
             mode = self.OP_STORE_IN_MEM
             tensor_size = cols
         else:
