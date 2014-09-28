@@ -1,7 +1,7 @@
-# This file is part of PyOP2
+# This file is part of COFFEE
 #
-# PyOP2 is Copyright (c) 2012, Imperial College London and
-# others. Please see the AUTHORS file in the main source directory for
+# COFFEE is Copyright (c) 2014, Imperial College London.
+# Please see the AUTHORS file in the main source directory for
 # a full list of copyright holders.  All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -35,8 +35,6 @@
 
 from base import *
 from vectorizer import vect_roundup
-
-from pyop2.mpi import MPI
 
 import subprocess
 import os
@@ -270,8 +268,7 @@ int main()
         # Set the directory where the autotuner will dump its output
         kernel_name = variants[0][0].children[1].name
         tempfile.tempdir = coffee_dir
-        self.coffee_dir = tempfile.mkdtemp(suffix="_tune_%s_rank%d" % (kernel_name,
-                                                                       MPI.comm.rank))
+        self.coffee_dir = tempfile.mkdtemp(suffix="_tune_%s" % kernel_name)
         tempfile.tempdir = None
 
     def _retrieve_coords_size(self, kernel):

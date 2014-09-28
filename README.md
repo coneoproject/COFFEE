@@ -1,4 +1,4 @@
 COFFEE
 ======
 
-COmpiler For Finite Element local assEmbly
+COmpiler For Fast Expressions Evaluation

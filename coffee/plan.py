@@ -1,7 +1,7 @@
-# This file is part of PyOP2
+# This file is part of COFFEE
 #
-# PyOP2 is Copyright (c) 2012, Imperial College London and
-# others. Please see the AUTHORS file in the main source directory for
+# COFFEE is Copyright (c) 2014, Imperial College London.
+# Please see the AUTHORS file in the main source directory for
 # a full list of copyright holders.  All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Transform the kernel's AST according to the backend we are running over."""
+"""COFFEE's optimization plan constructor."""
 
 from base import *
 from utils import *
