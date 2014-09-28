@@ -172,13 +172,16 @@ class AssemblyVectorizer(object):
             # First, find outer product loops in the nest
             it_vars, parent, loops = stmt_info
 
+            # Check if outer-product vectorization is actually doable
             vect_len = self.intr["dp_reg"]
             rows = loops[0].size()
-            unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
+            if rows < vect_len:
+                continue
 
             op = OuterProduct(stmt, loops, self.intr, self.asm_opt)
 
             # Vectorisation
+            unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
             rows_per_it = vect_len*unroll_factor
             if opts == ap.V_OP_UAJ:
                 if rows_per_it <= rows:
@@ -217,9 +220,9 @@ class AssemblyVectorizer(object):
             ofs = blk.index(stmt)
             parent.children = blk[:ofs] + body + blk[ofs + 1:]
 
-        # Append the layout code after the loop nest
-        if layout:
-            parent = self.asm_opt.pre_header.children.append(layout)
+            # Append the layout code after the loop nest
+            if layout:
+                parent = self.asm_opt.pre_header.children.append(layout)
 
 
 class OuterProduct():
