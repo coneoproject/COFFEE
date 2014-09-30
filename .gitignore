@@ -1,0 +1,9 @@
+# Build
+build
+dist
+MANIFEST
+*.py[cdo]
+
+# Extension modules
+
+# Docs
