@@ -57,3 +57,11 @@ coffee Package
     :undoc-members:
     :show-inheritance:
 
+:mod:`version` Module
+---------------------
+
+.. automodule:: coffee.version
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
