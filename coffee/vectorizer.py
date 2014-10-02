@@ -213,7 +213,7 @@ class ExpressionVectorizer(object):
                 loop_peel[0].incr.children[1] = c_sym(1)
                 loop_peel[1].incr.children[1] = c_sym(1)
                 # Append peeling loop after the main loop
-                self.expr_opt._get_root().children.append(loop_peel[0])
+                self.expr_opt.root.children.append(loop_peel[0])
 
             # Insert the vectorized code at the right point in the loop nest
             blk = parent.children

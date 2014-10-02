@@ -150,3 +150,11 @@ def itspace_merge(itspaces):
             current_stop = max(current_stop, stop)
     merged_itspaces.append((current_start, current_stop))
     return tuple(merged_itspaces)
+
+
+#############################
+# Generic utility functions #
+#############################
+
+
+any_in = lambda a, b: any(i in b for i in a)

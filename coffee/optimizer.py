@@ -62,8 +62,6 @@ class ExpressionOptimizer(object):
         self.kernel_decls = kernel_decls
         # Track applied optimizations
         self._is_precomputed = False
-        # Expressions evaluating the element matrix
-        self.asm_expr = {}
         # Track nonzero regions accessed in the various loops
         self.nz_in_fors = {}
         # Integration loop (if any)
@@ -75,7 +73,7 @@ class ExpressionOptimizer(object):
         # Dictionary contaning various information about hoisted expressions
         self.hoisted = OrderedDict()
         # Inspect the loop nest and collect info
-        _, self.decls, self.sym = self._visit()
+        _, self.decls, self.sym, self.asm_expr = self._visit()
 
     def rewrite(self, level, is_block_sparse):
         """Rewrite an expression to minimize floating point operations and to
@@ -120,7 +118,7 @@ class ExpressionOptimizer(object):
                 ew.distribute()
                 ew.licm()
                 # Fuse loops iterating along the same iteration space
-                lm = PerfectSSALoopMerger(self.expr_graph, self._get_root())
+                lm = PerfectSSALoopMerger(self.expr_graph, self.root)
                 lm.merge()
                 ew.simplify()
             # Precompute expressions
@@ -137,12 +135,12 @@ class ExpressionOptimizer(object):
             # columns in different positions. The ZeroLoopScheduler analyzes statements
             # "one by one", and changes the iteration spaces of the enclosing
             # loops accordingly.
-            elf = ExprLoopFissioner(self.expr_graph, self._get_root(), 1)
+            elf = ExprLoopFissioner(self.expr_graph, self.root, 1)
             new_asm_expr = {}
             for expr in self.asm_expr.items():
                 new_asm_expr.update(elf.expr_fission(expr, False))
             # Search for zero-valued columns and restructure the iteration spaces
-            zls = ZeroLoopScheduler(self.expr_graph, self._get_root(),
+            zls = ZeroLoopScheduler(self.expr_graph, self.root,
                                     (self.kernel_decls, self.decls))
             self.asm_expr = zls.reschedule()[-1]
             self.nz_in_fors = zls.nz_in_fors
@@ -322,7 +320,7 @@ class ExpressionOptimizer(object):
             return
 
         new_asm_expr = {}
-        elf = ExprLoopFissioner(self.expr_graph, self._get_root(), cut)
+        elf = ExprLoopFissioner(self.expr_graph, self.root, cut)
         for splittable in self.asm_expr.items():
             # Split the expression
             new_asm_expr.update(elf.expr_fission(splittable, True))
@@ -343,10 +341,33 @@ class ExpressionOptimizer(object):
             parent.remove(node)
             itspace_vrs.add(node.it_var())
 
-        any_in = lambda a, b: any(i in b for i in a)
+        from utils import any_in
         accessed_vrs = [s for s in self.sym if any_in(s.rank, itspace_vrs)]
 
         return (itspace_vrs, accessed_vrs)
+
+    @property
+    def root(self):
+        """Return the root node of the assembly loop nest. It can be either the
+        loop over quadrature points or, if absent, a generic point in the
+        assembly routine."""
+        return self.int_loop.children[0] if self.int_loop else self.header
+
+    @property
+    def expr_loops(self):
+        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
+        loops that expressions depend on."""
+        return [expr_info[2] for expr_info in self.asm_expr.values()]
+
+    @property
+    def indep_loops(self):
+        """Return ``[loop1, loop2, ...]``, where each entry is a loop node along
+        which expressions do not iterate."""
+        all_loops = zip(*self._visit()[0])[0]
+        expr_loops = [l for el in self.expr_loops for l in el]
+        from utils import any_in
+        return [l for l in all_loops if any_in(expr_loops, l.children[0].children)
+                and l not in expr_loops]
 
     def _visit(self):
         """Explore the loop nest and collect various info like:
@@ -361,16 +382,16 @@ class ExpressionOptimizer(object):
             if node.pragma:
                 opts = node.pragma[0].split(" ", 2)
                 if len(opts) < 3:
-                    return
+                    return {}
                 if opts[1] == "pyop2":
                     if opts[2] == "integration":
                         # Found integration loop
                         self.int_loop = node
-                        return
+                        return {}
                     if opts[2] == "itspace":
                         # Found high-level optimisation
                         self.asm_itspace.append((node, parent))
-                        return
+                        return {}
                     delim = opts[2].find('(')
                     opt_name = opts[2][:delim].replace(" ", "")
                     opt_par = opts[2][delim:].replace(" ", "")
@@ -379,49 +400,44 @@ class ExpressionOptimizer(object):
                         # Store outer product iteration variables, parent, loops
                         it_vars = [opt_par[1], opt_par[3]]
                         fors, fors_parents = zip(*fors)
-                        loops = [l for l in fors if l.it_var() in it_vars]
-                        self.asm_expr[node] = (it_vars, parent, loops)
+                        loops = tuple([l for l in fors if l.it_var() in it_vars])
+                        return {node: (it_vars, parent, loops)}
                     else:
                         raise RuntimeError("Unrecognised opt %s - skipping it", opt_name)
                 else:
                     raise RuntimeError("Unrecognised pragma found '%s'", node.pragma[0])
+            return {}
 
-        def inspect(node, parent, fors, decls, symbols):
+        def inspect(node, parent, fors, decls, symbols, exprs):
             if isinstance(node, (Block, Root)):
                 for n in node.children:
-                    inspect(n, node, fors, decls, symbols)
-                return (fors, decls, symbols)
+                    inspect(n, node, fors, decls, symbols, exprs)
+                return (fors, decls, symbols, exprs)
             elif isinstance(node, For):
                 check_opts(node, parent, fors)
                 fors.append((node, parent))
-                return inspect(node.children[0], node, fors, decls, symbols)
+                return inspect(node.children[0], node, fors, decls, symbols, exprs)
             elif isinstance(node, Par):
-                return inspect(node.children[0], node, fors, decls, symbols)
+                return inspect(node.children[0], node, fors, decls, symbols, exprs)
             elif isinstance(node, Decl):
                 decls[node.sym.symbol] = (node, plan.LOCAL_VAR)
-                return (fors, decls, symbols)
+                return (fors, decls, symbols, exprs)
             elif isinstance(node, Symbol):
                 symbols.add(node)
-                return (fors, decls, symbols)
+                return (fors, decls, symbols, exprs)
             elif isinstance(node, Expr):
                 for child in node.children:
-                    inspect(child, node, fors, decls, symbols)
-                return (fors, decls, symbols)
+                    inspect(child, node, fors, decls, symbols, exprs)
+                return (fors, decls, symbols, exprs)
             elif isinstance(node, Perfect):
-                check_opts(node, parent, fors)
+                exprs.update(check_opts(node, parent, fors))
                 for child in node.children:
-                    inspect(child, node, fors, decls, symbols)
-                return (fors, decls, symbols)
+                    inspect(child, node, fors, decls, symbols, exprs)
+                return (fors, decls, symbols, exprs)
             else:
-                return (fors, decls, symbols)
+                return (fors, decls, symbols, exprs)
 
-        return inspect(self._get_root(), self.header, [], {}, set())
-
-    def _get_root(self):
-        """Return the root node of the assembly loop nest. It can be either the
-        loop over quadrature points or, if absent, a generic point in the
-        assembly routine."""
-        return self.int_loop.children[0] if self.int_loop else self.header
+        return inspect(self.header, None, [], {}, set(), {})
 
     def _precompute(self, expr):
         """Precompute all statements out of the loop nest, which implies scalar
