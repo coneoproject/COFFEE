@@ -51,16 +51,16 @@ class ExpressionOptimizer(object):
 
     """Expression optimiser class."""
 
-    def __init__(self, loop_nest, pre_header, kernel_decls, is_mixed):
+    def __init__(self, loop_nest, header, kernel_decls, is_mixed):
         """Initialize the ExpressionOptimizer.
 
         :arg loop_nest:    root loop node of an optimizable expression.
-        :arg pre_header:   parent of the root loop node
+        :arg header:       parent of the root loop node
         :arg kernel_decls: list of declarations of the variables that are visible
                            within ``loop_nest``.
         :arg is_mixed:     true if the expression is characterized by block-sparse
                            arrays."""
-        self.pre_header = pre_header
+        self.header = header
         self.kernel_decls = kernel_decls
         # Properties of the expression
         self._is_mixed = is_mixed
@@ -150,13 +150,13 @@ class ExpressionOptimizer(object):
             else:
                 return (fors, decls, symbols)
 
-        return inspect(node, self.pre_header, [], {}, set())
+        return inspect(node, self.header, [], {}, set())
 
     def _get_root(self):
         """Return the root node of the assembly loop nest. It can be either the
         loop over quadrature points or, if absent, a generic point in the
         assembly routine."""
-        return self.int_loop.children[0] if self.int_loop else self.pre_header
+        return self.int_loop.children[0] if self.int_loop else self.header
 
     def extract_itspace(self):
         """Remove fully-parallel loop from the iteration space. These are
@@ -203,7 +203,7 @@ class ExpressionOptimizer(object):
         if not self.asm_expr:
             return
 
-        parent = (self.pre_header, self.kernel_decls)
+        parent = (self.header, self.kernel_decls)
         for expr in self.asm_expr.items():
             ew = ExpressionRewriter(expr, self.int_loop, self.sym, self.decls,
                                     parent, self.hoisted, self.expr_graph)
@@ -428,14 +428,14 @@ class ExpressionOptimizer(object):
             new_outer_loop.children[0].children = new_inner_loops
             # Track symbols whose storage layout should be transposed for unit-stridness
             transpose_layout(stmt.children[1], transposed, set())
-        blk = self.pre_header.children
+        blk = self.header.children
         blk.insert(blk.index(self.int_loop), new_outer_loop)
         blk.remove(self.int_loop)
         # Update expressions and integration loop
         self.asm_expr = new_asm_expr
         self.int_loop = inner_loop
         # Transpose the storage layout of all symbols involved
-        transpose_layout(self.pre_header, set(), transposed)
+        transpose_layout(self.header, set(), transposed)
 
     def split(self, cut=1):
         """Split expressions into multiple chunks exploiting sum's associativity.
@@ -594,9 +594,9 @@ class ExpressionOptimizer(object):
         self.int_loop.children[0].children = [asm_outer_loop]
 
         # Update the AST adding the newly precomputed blocks
-        root = self.pre_header.children
+        root = self.header.children
         ofs = root.index(self.int_loop)
-        self.pre_header.children = root[:ofs] + new_outer_block + root[ofs:]
+        self.header.children = root[:ofs] + new_outer_block + root[ofs:]
 
         # Update the AST by vector-expanding the pre-computed accessed variables
         update_syms(expr.children[1], precomputed_syms)

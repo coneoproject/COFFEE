@@ -68,7 +68,7 @@ class ExpressionVectorizer(object):
         pragmas to inner loops to inform the backend compiler about this
         property."""
 
-        iloops = inner_loops(self.expr_opt.pre_header)
+        iloops = inner_loops(self.expr_opt.header)
         adjusted_loops = []
         # 1) Bound adjustment
         # Bound adjustment consists of modifying the start point and the
@@ -222,7 +222,7 @@ class ExpressionVectorizer(object):
 
             # Append the layout code after the loop nest
             if layout:
-                parent = self.expr_opt.pre_header.children.append(layout)
+                parent = self.expr_opt.header.children.append(layout)
 
 
 class OuterProduct():
