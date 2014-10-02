@@ -75,99 +75,7 @@ class ExpressionOptimizer(object):
         # Dictionary contaning various information about hoisted expressions
         self.hoisted = OrderedDict()
         # Inspect the loop nest and collect info
-        self.fors, self.decls, self.sym = self._visit_nest(loop_nest)
-
-    def _visit_nest(self, node):
-        """Explore the loop nest and collect various info like:
-
-        * Loops
-        * Declarations and Symbols
-        * Optimisations requested by the higher layers via pragmas"""
-
-        def check_opts(node, parent, fors):
-            """Check if node is associated with some pragmas. If that is the case,
-            it saves info about the node to speed the transformation process up."""
-            if node.pragma:
-                opts = node.pragma[0].split(" ", 2)
-                if len(opts) < 3:
-                    return
-                if opts[1] == "pyop2":
-                    if opts[2] == "integration":
-                        # Found integration loop
-                        self.int_loop = node
-                        return
-                    if opts[2] == "itspace":
-                        # Found high-level optimisation
-                        self.asm_itspace.append((node, parent))
-                        return
-                    delim = opts[2].find('(')
-                    opt_name = opts[2][:delim].replace(" ", "")
-                    opt_par = opts[2][delim:].replace(" ", "")
-                    if opt_name == "assembly":
-                        # Found high-level optimisation
-                        # Store outer product iteration variables, parent, loops
-                        it_vars = [opt_par[1], opt_par[3]]
-                        fors, fors_parents = zip(*fors)
-                        loops = [l for l in fors if l.it_var() in it_vars]
-                        self.asm_expr[node] = (it_vars, parent, loops)
-                    else:
-                        raise RuntimeError("Unrecognised opt %s - skipping it", opt_name)
-                else:
-                    raise RuntimeError("Unrecognised pragma found '%s'", node.pragma[0])
-
-        def inspect(node, parent, fors, decls, symbols):
-            if isinstance(node, Block):
-                self.block = node
-                for n in node.children:
-                    inspect(n, node, fors, decls, symbols)
-                return (fors, decls, symbols)
-            elif isinstance(node, For):
-                check_opts(node, parent, fors)
-                fors.append((node, parent))
-                return inspect(node.children[0], node, fors, decls, symbols)
-            elif isinstance(node, Par):
-                return inspect(node.children[0], node, fors, decls, symbols)
-            elif isinstance(node, Decl):
-                decls[node.sym.symbol] = (node, plan.LOCAL_VAR)
-                return (fors, decls, symbols)
-            elif isinstance(node, Symbol):
-                symbols.add(node)
-                return (fors, decls, symbols)
-            elif isinstance(node, Expr):
-                for child in node.children:
-                    inspect(child, node, fors, decls, symbols)
-                return (fors, decls, symbols)
-            elif isinstance(node, Perfect):
-                check_opts(node, parent, fors)
-                for child in node.children:
-                    inspect(child, node, fors, decls, symbols)
-                return (fors, decls, symbols)
-            else:
-                return (fors, decls, symbols)
-
-        return inspect(node, self.header, [], {}, set())
-
-    def _get_root(self):
-        """Return the root node of the assembly loop nest. It can be either the
-        loop over quadrature points or, if absent, a generic point in the
-        assembly routine."""
-        return self.int_loop.children[0] if self.int_loop else self.header
-
-    def extract_itspace(self):
-        """Remove fully-parallel loop from the iteration space. These are
-        the loops that were marked by the user/higher layer with a ``pragma
-        pyop2 itspace``."""
-
-        itspace_vrs = []
-        for node, parent in reversed(self.asm_itspace):
-            parent.children.extend(node.children[0].children)
-            parent.children.remove(node)
-            itspace_vrs.append(node.it_var())
-
-        any_in = lambda a, b: any(i in b for i in a)
-        accessed_vrs = [s for s in self.sym if any_in(s.rank, itspace_vrs)]
-
-        return (itspace_vrs, accessed_vrs)
+        _, self.decls, self.sym = self._visit()
 
     def rewrite(self, level, is_block_sparse):
         """Rewrite an expression to minimize floating point operations and to
@@ -476,6 +384,101 @@ class ExpressionOptimizer(object):
             # Split the expression
             new_asm_expr.update(elf.expr_fission(splittable, True))
         self.asm_expr = new_asm_expr
+
+    def extract_itspace(self):
+        """Remove the fully-parallel loops enclosing the expression. No data
+        dependency analysis is performed; rather, these are the loops that are
+        marked with ``pragma pyop2 itspace``."""
+
+        itspace_vrs = set()
+        for node, parent in reversed(self._visit()[0]):
+            if '#pragma pyop2 itspace' not in node.pragma:
+                continue
+            parent = parent.children
+            for n in node.children[0].children:
+                parent.insert(parent.index(node), n)
+            parent.remove(node)
+            itspace_vrs.add(node.it_var())
+
+        any_in = lambda a, b: any(i in b for i in a)
+        accessed_vrs = [s for s in self.sym if any_in(s.rank, itspace_vrs)]
+
+        return (itspace_vrs, accessed_vrs)
+
+    def _visit(self):
+        """Explore the loop nest and collect various info like:
+
+        * Loops
+        * Declarations and Symbols
+        * Optimisations requested by the higher layers via pragmas"""
+
+        def check_opts(node, parent, fors):
+            """Check if node is associated with some pragmas. If that is the case,
+            it saves info about the node to speed the transformation process up."""
+            if node.pragma:
+                opts = node.pragma[0].split(" ", 2)
+                if len(opts) < 3:
+                    return
+                if opts[1] == "pyop2":
+                    if opts[2] == "integration":
+                        # Found integration loop
+                        self.int_loop = node
+                        return
+                    if opts[2] == "itspace":
+                        # Found high-level optimisation
+                        self.asm_itspace.append((node, parent))
+                        return
+                    delim = opts[2].find('(')
+                    opt_name = opts[2][:delim].replace(" ", "")
+                    opt_par = opts[2][delim:].replace(" ", "")
+                    if opt_name == "assembly":
+                        # Found high-level optimisation
+                        # Store outer product iteration variables, parent, loops
+                        it_vars = [opt_par[1], opt_par[3]]
+                        fors, fors_parents = zip(*fors)
+                        loops = [l for l in fors if l.it_var() in it_vars]
+                        self.asm_expr[node] = (it_vars, parent, loops)
+                    else:
+                        raise RuntimeError("Unrecognised opt %s - skipping it", opt_name)
+                else:
+                    raise RuntimeError("Unrecognised pragma found '%s'", node.pragma[0])
+
+        def inspect(node, parent, fors, decls, symbols):
+            if isinstance(node, (Block, Root)):
+                for n in node.children:
+                    inspect(n, node, fors, decls, symbols)
+                return (fors, decls, symbols)
+            elif isinstance(node, For):
+                check_opts(node, parent, fors)
+                fors.append((node, parent))
+                return inspect(node.children[0], node, fors, decls, symbols)
+            elif isinstance(node, Par):
+                return inspect(node.children[0], node, fors, decls, symbols)
+            elif isinstance(node, Decl):
+                decls[node.sym.symbol] = (node, plan.LOCAL_VAR)
+                return (fors, decls, symbols)
+            elif isinstance(node, Symbol):
+                symbols.add(node)
+                return (fors, decls, symbols)
+            elif isinstance(node, Expr):
+                for child in node.children:
+                    inspect(child, node, fors, decls, symbols)
+                return (fors, decls, symbols)
+            elif isinstance(node, Perfect):
+                check_opts(node, parent, fors)
+                for child in node.children:
+                    inspect(child, node, fors, decls, symbols)
+                return (fors, decls, symbols)
+            else:
+                return (fors, decls, symbols)
+
+        return inspect(self._get_root(), self.header, [], {}, set())
+
+    def _get_root(self):
+        """Return the root node of the assembly loop nest. It can be either the
+        loop over quadrature points or, if absent, a generic point in the
+        assembly routine."""
+        return self.int_loop.children[0] if self.int_loop else self.header
 
     def _precompute(self, expr):
         """Precompute all statements out of the loop nest, which implies scalar
