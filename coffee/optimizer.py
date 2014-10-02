@@ -47,22 +47,22 @@ from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopSche
 import plan
 
 
-class AssemblyOptimizer(object):
+class ExpressionOptimizer(object):
 
-    """Assembly optimiser interface class"""
+    """Expression optimiser class."""
 
     def __init__(self, loop_nest, pre_header, kernel_decls, is_mixed):
-        """Initialize the AssemblyOptimizer.
+        """Initialize the ExpressionOptimizer.
 
-        :arg loop_nest:    root node of the local assembly code.
-        :arg pre_header:   parent of the root node
-        :arg kernel_decls: list of declarations of variables which are visible
-                           within the local assembly code block.
-        :arg is_mixed:     true if the assembly operation uses mixed (vector)
-                           function spaces."""
+        :arg loop_nest:    root loop node of an optimizable expression.
+        :arg pre_header:   parent of the root loop node
+        :arg kernel_decls: list of declarations of the variables that are visible
+                           within ``loop_nest``.
+        :arg is_mixed:     true if the expression is characterized by block-sparse
+                           arrays."""
         self.pre_header = pre_header
         self.kernel_decls = kernel_decls
-        # Properties of the assembly operation
+        # Properties of the expression
         self._is_mixed = is_mixed
         # Track applied optimizations
         self._is_precomputed = False
@@ -79,7 +79,7 @@ class AssemblyOptimizer(object):
         self.expr_graph = ExpressionGraph()
         # Dictionary contaning various information about hoisted expressions
         self.hoisted = OrderedDict()
-        # Inspect the assembly loop nest and collect info
+        # Inspect the loop nest and collect info
         self.fors, self.decls, self.sym = self._visit_nest(loop_nest)
 
     def _visit_nest(self, node):
@@ -175,8 +175,8 @@ class AssemblyOptimizer(object):
         return (itspace_vrs, accessed_vrs)
 
     def rewrite(self, level):
-        """Rewrite an assembly expression to minimize floating point operations
-        and relieve register pressure. This involves several possible transformations:
+        """Rewrite an expression to minimize floating point operations and to
+        relieve register pressure. This involves several possible transformations:
 
         1. Generalized loop-invariant code motion
         2. Factorization of common loop-dependent terms
@@ -185,8 +185,8 @@ class AssemblyOptimizer(object):
         5. Precomputation of integration-dependent terms
 
         :arg level: The optimization level (0, 1, 2, 3, 4). The higher, the more
-                    invasive is the re-writing of the assembly expressions,
-                    trying to eliminate unnecessary floating point operations.
+                    invasive is the re-writing of the expression, trying to
+                    eliminate unnecessary floating point operations.
 
                     * level == 1: performs "basic" generalized loop-invariant \
                                   code motion
@@ -197,7 +197,7 @@ class AssemblyOptimizer(object):
                                   sub-expressions exposed by factorization
                     * level == 3: level 2 + avoid computing zero-columns
                     * level == 4: level 3 + precomputation of read-only expressions \
-                                  out of the assembly loop nest
+                                  out of the loop nest
         """
 
         if not self.asm_expr:
@@ -205,8 +205,8 @@ class AssemblyOptimizer(object):
 
         parent = (self.pre_header, self.kernel_decls)
         for expr in self.asm_expr.items():
-            ew = AssemblyRewriter(expr, self.int_loop, self.sym, self.decls,
-                                  parent, self.hoisted, self.expr_graph)
+            ew = ExpressionRewriter(expr, self.int_loop, self.sym, self.decls,
+                                    parent, self.hoisted, self.expr_graph)
             # Perform expression rewriting
             if level > 0:
                 ew.licm()
@@ -223,14 +223,13 @@ class AssemblyOptimizer(object):
                 self._precompute(expr)
                 self._is_precomputed = True
 
-        # Eliminate zero-valued columns if the kernel operation uses mixed (vector)
-        # function spaces, leading to zero-valued columns in basis function arrays
+        # Eliminate zero-valued columns if the kernel operation uses block-sparse
+        # arrays (contiguous zero-valued columns are present)
         if level == 3 and self._is_mixed:
-            # Split the assembly expression into separate loop nests,
-            # based on sum's associativity. This exposes more opportunities
-            # for restructuring loops, since different summands may have
-            # contiguous regions of zero-valued columns in different
-            # positions. The ZeroLoopScheduler, indeed, analyzes statements
+            # Split the expression into separate loop nests, based on sum's
+            # associativity. This exposes more opportunities for restructuring loops,
+            # since different summands may have contiguous regions of zero-valued
+            # columns in different positions. The ZeroLoopScheduler analyzes statements
             # "one by one", and changes the iteration spaces of the enclosing
             # loops accordingly.
             elf = ExprLoopFissioner(self.expr_graph, self._get_root(), 1)
@@ -302,7 +301,7 @@ class AssemblyOptimizer(object):
             par_block.children = pb[:idx] + sliced_loops + pb[idx + 1:]
 
     def unroll(self, loops_factor):
-        """Unroll loops in the assembly nest.
+        """Unroll loops in the loop nest.
 
         :arg loops_factor: dictionary from loops to unroll (factor, increment).
             Loops are specified as integers:
@@ -328,7 +327,7 @@ class AssemblyOptimizer(object):
                     update_stmt(n, var, factor)
 
         def unroll_loop(asm_expr, it_var, factor):
-            """Unroll assembly expressions in ``asm_expr`` along iteration variable
+            """Unroll all expressions in ``asm_expr`` along the iteration variable
             ``it_var`` a total of ``factor`` times."""
             new_asm_expr = {}
             unroll_loops = set()
@@ -374,7 +373,7 @@ class AssemblyOptimizer(object):
                                              asm_inner_factor-1))
 
     def permute(self):
-        """Permute the integration loop with the innermost loop in the assembly nest.
+        """Permute the outermost loop with the innermost loop in the loop nest.
         This transformation is legal if ``_precompute`` was invoked. Storage layout of
         all 2-dimensional arrays involved in the element matrix computation is
         transposed."""
@@ -422,7 +421,8 @@ class AssemblyOptimizer(object):
             inner_loop.cond = dcopy(self.int_loop.cond)
             inner_loop.incr = dcopy(self.int_loop.incr)
             inner_loop.pragma = dcopy(self.int_loop.pragma)
-            new_asm_loops = (new_outer_loop,) if len(loops) == 1 else (new_outer_loop, loops[0])
+            new_asm_loops = (new_outer_loop,) if len(loops) == 1 else \
+                (new_outer_loop, loops[0])
             new_asm_expr[stmt] = (it_vars, parent, new_asm_loops)
             new_inner_loops.append(new_asm_loops[-1])
             new_outer_loop.children[0].children = new_inner_loops
@@ -431,15 +431,15 @@ class AssemblyOptimizer(object):
         blk = self.pre_header.children
         blk.insert(blk.index(self.int_loop), new_outer_loop)
         blk.remove(self.int_loop)
-        # Update assembly expressions and integration loop
+        # Update expressions and integration loop
         self.asm_expr = new_asm_expr
         self.int_loop = inner_loop
-        # Transpose storage layout of all symbols involved in assembly
+        # Transpose the storage layout of all symbols involved
         transpose_layout(self.pre_header, set(), transposed)
 
     def split(self, cut=1):
-        """Split assembly expressions into multiple chunks exploiting sum's
-        associativity. Each chunk will have ``cut`` summands.
+        """Split expressions into multiple chunks exploiting sum's associativity.
+        Each chunk will have ``cut`` summands.
 
         For example, consider the following piece of code: ::
 
@@ -482,9 +482,8 @@ class AssemblyOptimizer(object):
         self.asm_expr = new_asm_expr
 
     def _precompute(self, expr):
-        """Precompute all expressions contributing to the evaluation of the local
-        assembly tensor. Precomputation implies vector expansion and hoisting
-        outside of the loop nest. This renders the assembly loop nest perfect.
+        """Precompute all statements out of the loop nest, which implies scalar
+        expansion and code hoisting. This makes the loop nest perfect.
 
         For example:
         for i
@@ -603,24 +602,25 @@ class AssemblyOptimizer(object):
         update_syms(expr.children[1], precomputed_syms)
 
 
-class AssemblyRewriter(object):
-    """Provide operations to re-write an assembly expression:
+class ExpressionRewriter(object):
+    """Provide operations to re-write an expression:
 
     * Loop-invariant code motion: find and hoist sub-expressions which are
-      invariant with respect to an assembly loop
+      invariant with respect to a loop
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
-    * Distribute: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
+    * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
     def __init__(self, expr, int_loop, syms, decls, parent, hoisted, expr_graph):
-        """Initialize the AssemblyRewriter.
+        """Initialize the ExpressionRewriter.
 
-        :arg expr:       provide generic information related to an assembly
-                         expression, including the depending for loops.
+        :arg expr:       provide generic information related to an expression,
+                         including the iteration space it depends on.
         :arg int_loop:   the loop along which integration is performed.
         :arg syms:       list of AST symbols used to evaluate the local element
                          matrix.
         :arg decls:      list of AST declarations of the various symbols in ``syms``.
-        :arg parent:     the parent AST node of the assembly loop nest.
+        :arg parent:     the parent AST node of the loop nest sorrounding the
+                         expression.
         :arg hoisted:    dictionary that tracks hoisted expressions
         :arg expr_graph: expression graph that tracks symbol dependencies
         """
@@ -631,7 +631,8 @@ class AssemblyRewriter(object):
         self.parent, self.parent_decls = parent
         self.hoisted = hoisted
         self.expr_graph = expr_graph
-        # Properties of the assembly expression
+
+        # Properties of the transformed expression
         self._licm = 0
         self._expanded = False
 
@@ -652,8 +653,8 @@ class AssemblyRewriter(object):
         as well, in which case hoisting after the outermost loop takes place."""
 
         def extract(node, expr_dep, length=0):
-            """Extract invariant sub-expressions from the original assembly
-            expression. Hoistable sub-expressions are stored in expr_dep."""
+            """Extract invariant sub-expressions from the original expression.
+            Hoistable sub-expressions are stored in expr_dep."""
 
             def hoist(node, dep, expr_dep, _extract=True):
                 if _extract:
@@ -843,7 +844,7 @@ class AssemblyRewriter(object):
                 self.hoisted[i.sym.symbol] = old_sym_info
 
     def count_occurrences(self, str_key=False):
-        """For each variable in the assembly expression, count how many times
+        """For each variable in the expression, count how many times
         it appears as involved in some operations. For example, for the
         expression ``a*(5+c) + b*(a+4)``, return ``{a: 2, b: 1, c: 1}``."""
 
@@ -863,7 +864,7 @@ class AssemblyRewriter(object):
         return counter
 
     def expand(self):
-        """Expand assembly expressions such that: ::
+        """Expand expressions such that: ::
 
             Y[j] = f(...)
             (X[i]*Y[j])*F + ...
@@ -881,10 +882,10 @@ class AssemblyRewriter(object):
         * It is also a step towards exposing well-known linear algebra
           operations, like matrix-matrix multiplies."""
 
-        # Select the assembly iteration variable along which the expansion should
-        # be performed. The heuristics here is that the expansion occurs along the
-        # iteration variable which appears in more unique arrays. This will allow
-        # distribution to be more effective.
+        # Select the iteration variable along which the expansion should be performed.
+        # The heuristics here is that the expansion occurs along the iteration
+        # variable which appears in more unique arrays. This will allow factorization
+        # to be more effective.
         asm_out, asm_in = (self.expr_info[0][0], self.expr_info[0][1])
         it_var_occs = {asm_out: 0, asm_in: 0}
         for s in self.count_occurrences().keys():
@@ -899,7 +900,7 @@ class AssemblyRewriter(object):
         self._expanded = True
 
     def distribute(self):
-        """Apply to the distributivity property to the assembly expression.
+        """Factorize terms in the expression.
         E.g. ::
 
             A[i]*B[j] + A[i]*C[j]
@@ -953,7 +954,7 @@ class AssemblyRewriter(object):
         to_distr = defaultdict(list)
         find_prod(self.expr.children[1], self.count_occurrences(True), to_distr)
 
-        # Create the new assembly expression
+        # Create the new expression
         new_prods = []
         for d in to_distr.values():
             dist, target = zip(*d)
@@ -994,7 +995,7 @@ class AssemblyRewriter(object):
 
 
 class ExpressionExpander(object):
-    """Expand assembly expressions such that: ::
+    """Expand expressions such that: ::
 
         Y[j] = f(...)
         (X[i]*Y[j])*F + ...

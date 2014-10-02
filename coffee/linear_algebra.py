@@ -42,21 +42,21 @@ from copy import deepcopy as dcopy
 from base import *
 
 
-class AssemblyLinearAlgebra(object):
+class LinearAlgebra(object):
 
-    """Convert assembly code into sequences of calls to external dense linear
+    """Convert an expression into sequences of calls to external dense linear
     algebra libraries. Currently, MKL, ATLAS, and EIGEN are supported."""
 
-    def __init__(self, assembly_optimizer, kernel_decls):
+    def __init__(self, expr_opt, kernel_decls):
         """Initialize an AssemblyLinearAlgebra object.
 
-        :arg assembly_optimizer: an AssemblyOptimizer object of the AST
-        :arg kernel_decls:       list of declarations used in the AST"""
+        :arg expr_opt:     an AssemblyOptimizer object of the AST
+        :arg kernel_decls: list of declarations used in the AST"""
 
         self.kernel_decls = kernel_decls
-        self.header = assembly_optimizer.pre_header
-        self.int_loop = assembly_optimizer.int_loop
-        self.asm_expr = assembly_optimizer.asm_expr
+        self.header = expr_optimizer.pre_header
+        self.int_loop = expr_opt.int_loop
+        self.asm_expr = expr_opt.asm_expr
 
     def transform(self, library):
         """Transform perfect loop nests representing matrix-matrix multiplies into

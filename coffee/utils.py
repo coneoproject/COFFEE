@@ -42,7 +42,7 @@ from base import Symbol
 from warnings import warn as warning
 
 
-def increase_stack(asm_opt):
+def increase_stack(expr_opts):
     """"Increase the stack size it the total space occupied by the kernel's local
     arrays is too big."""
     # Assume the size of a C type double is 8 bytes
@@ -51,8 +51,8 @@ def increase_stack(asm_opt):
     stack_size = 1.7*1024*1024
 
     size = 0
-    for asm in asm_opt:
-        decls = asm.decls.values()
+    for expr_opt in expr_opts:
+        decls = expr_opt.decls.values()
         if decls:
             size += sum([reduce(operator.mul, d.sym.rank) for d in zip(*decls)[0]
                          if d.sym.rank])

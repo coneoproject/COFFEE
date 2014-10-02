@@ -326,7 +326,7 @@ class ExprLoopFissioner(LoopScheduler):
 class ZeroLoopScheduler(LoopScheduler):
 
     """Analyze data dependencies, iteration spaces, and domain-specific
-    information to perform symbolic execution of the assembly code so as to
+    information to perform symbolic execution of the code so as to
     determine how to restructure the loop nests to skip iteration over
     zero-valued columns.
     This implies that loops can be fissioned or merged. For example: ::

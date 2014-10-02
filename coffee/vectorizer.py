@@ -42,12 +42,12 @@ from utils import ast_update_ofs, itspace_merge
 import plan as ap
 
 
-class AssemblyVectorizer(object):
+class ExpressionVectorizer(object):
 
-    """ Loop vectorizer """
+    """ Expression vectorizer class."""
 
-    def __init__(self, assembly_optimizer, intrinsics, compiler):
-        self.asm_opt = assembly_optimizer
+    def __init__(self, expr_opt, intrinsics, compiler):
+        self.expr_opt = expr_opt
         self.intr = intrinsics
         self.comp = compiler
         self.padded = []
@@ -68,7 +68,7 @@ class AssemblyVectorizer(object):
         pragmas to inner loops to inform the backend compiler about this
         property."""
 
-        iloops = inner_loops(self.asm_opt.pre_header)
+        iloops = inner_loops(self.expr_opt.pre_header)
         adjusted_loops = []
         # 1) Bound adjustment
         # Bound adjustment consists of modifying the start point and the
@@ -143,7 +143,7 @@ class AssemblyVectorizer(object):
                 l.pragma.append(self.comp["decl_aligned_for"])
 
         # 3) Padding
-        used_syms = [s.symbol for s in self.asm_opt.sym]
+        used_syms = [s.symbol for s in self.expr_opt.sym]
         acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
         for d, s in acc_decls:
             if d.sym.rank:
@@ -165,10 +165,10 @@ class AssemblyVectorizer(object):
           unroll-and-jam factor. Note that factor is just a suggestion to the
           compiler, which can freely decide to use a higher or lower value."""
 
-        if not self.asm_opt.asm_expr:
+        if not self.expr_opt.asm_expr:
             return
 
-        for stmt, stmt_info in self.asm_opt.asm_expr.items():
+        for stmt, stmt_info in self.expr_opt.asm_expr.items():
             # First, find outer product loops in the nest
             it_vars, parent, loops = stmt_info
 
@@ -178,7 +178,7 @@ class AssemblyVectorizer(object):
             if rows < vect_len:
                 continue
 
-            op = OuterProduct(stmt, loops, self.intr, self.asm_opt)
+            op = OuterProduct(stmt, loops, self.intr, self.expr_opt)
 
             # Vectorisation
             unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
@@ -213,7 +213,7 @@ class AssemblyVectorizer(object):
                 loop_peel[0].incr.children[1] = c_sym(1)
                 loop_peel[1].incr.children[1] = c_sym(1)
                 # Append peeling loop after the main loop
-                self.asm_opt._get_root().children.append(loop_peel[0])
+                self.expr_opt._get_root().children.append(loop_peel[0])
 
             # Insert the vectorized code at the right point in the loop nest
             blk = parent.children
@@ -222,7 +222,7 @@ class AssemblyVectorizer(object):
 
             # Append the layout code after the loop nest
             if layout:
-                parent = self.asm_opt.pre_header.children.append(layout)
+                parent = self.expr_opt.pre_header.children.append(layout)
 
 
 class OuterProduct():

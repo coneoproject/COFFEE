@@ -35,9 +35,9 @@
 
 from base import *
 from utils import *
-from optimizer import AssemblyOptimizer
-from vectorizer import AssemblyVectorizer
-from linear_algebra import AssemblyLinearAlgebra
+from optimizer import ExpressionOptimizer
+from vectorizer import ExpressionVectorizer
+from linear_algebra import LinearAlgebra
 from autotuner import Autotuner
 
 from copy import deepcopy as dcopy
@@ -129,9 +129,9 @@ class ASTKernel(object):
         """
 
         decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-        asm = [AssemblyOptimizer(l, pre_l, decls, self._is_sparse) for l, pre_l in fors]
-        for ao in asm:
-            itspace_vrs, accessed_vrs = ao.extract_itspace()
+        expr_opts = [ExpressionOptimizer(l, pre_l, decls, self._is_sparse) for l, pre_l in fors]
+        for expr_opt in expr_opts:
+            itspace_vrs, accessed_vrs = expr_opt.extract_itspace()
 
             for v in accessed_vrs:
                 # Change declaration of non-constant iteration space-dependent
@@ -206,38 +206,38 @@ class ASTKernel(object):
                 raise RuntimeError("COFFEE Error: outer-product vectorization needs no permute")
 
             decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-            asm = [AssemblyOptimizer(l, pre_l, decls, self._is_sparse) for l, pre_l in fors]
-            for ao in asm:
-                # 1) Expression Re-writer
+            expr_opts = [ExpressionOptimizer(l, pre_l, decls, self._is_sparse) for l, pre_l in fors]
+            for expr_opt in expr_opts:
+                # 1) Expression Rewriting
                 if licm:
-                    ao.rewrite(licm)
-                    decls.update(ao.decls)
+                    expr_opt.rewrite(licm)
+                    decls.update(expr_opt.decls)
 
                 # 2) Splitting
                 if split:
-                    ao.split(split)
+                    expr_opt.split(split)
 
                 # 3) Permute integration loop
                 if permute:
-                    ao.permute()
+                    expr_opt.permute()
 
                 # 3) Unroll/Unroll-and-jam
                 if unroll:
-                    ao.unroll({0: unroll[0], 1: unroll[1], 2: unroll[2]})
+                    expr_opt.unroll({0: unroll[0], 1: unroll[1], 2: unroll[2]})
 
                 # 4) Register tiling
                 if slice_factor and v_type == AUTOVECT:
-                    ao.slice(slice_factor)
+                    expr_opt.slice(slice_factor)
 
                 # 5) Vectorization
                 if initialized:
-                    vect = AssemblyVectorizer(ao, intrinsics, compiler)
+                    vect = ExpressionVectorizer(expr_opt, intrinsics, compiler)
                     if ap:
                         # Data alignment
                         vect.alignment(decls)
                         # Padding
                         if not blas:
-                            vect.padding(decls, ao.nz_in_fors)
+                            vect.padding(decls, expr_opt.nz_in_fors)
                             self.ap = True
                     if v_type and v_type != AUTOVECT:
                         if intrinsics['inst_set'] == 'SSE':
@@ -246,8 +246,8 @@ class ASTKernel(object):
                         vect.outer_product(v_type, v_param)
 
                 # 6) Conversion into blas calls
-                if blas and not ao._has_zeros:
-                    ala = AssemblyLinearAlgebra(ao, decls)
+                if blas and not expr_opt._has_zeros:
+                    ala = LinearAlgebra(expr_opt, decls)
                     self.blas = ala.transform(blas)
 
             # Ensure kernel is always marked static inline
@@ -258,7 +258,7 @@ class ASTKernel(object):
                 self.fundecl.pred.insert(0, 'inline')
                 self.fundecl.pred.insert(0, 'static')
 
-            return asm
+            return expr_opts
 
         if opts.get('autotune'):
             if not (compiler and intrinsics):
@@ -282,34 +282,34 @@ class ASTKernel(object):
             # Generate basic kernel variants
             for params in autotune_configs:
                 opt, _params = params[0], params[1:]
-                asm = _generate_cpu_code(self, *_params)
-                if not asm:
-                    # Not a local assembly kernel, nothing to tune
+                expr_opts = _generate_cpu_code(self, *_params)
+                if not expr_opts:
+                    # No expressions, nothing to tune
                     tunable = False
                     break
-                ao = asm[0]
-                found_zeros = found_zeros or ao._has_zeros
+                expr_opt = expr_opts[0]
+                found_zeros = found_zeros or expr_opt._has_zeros
                 if opt in ['licm', 'split'] and not found_zeros:
                     # Heuristically apply a set of unroll factors on top of the transformation
-                    int_loop_sz = ao.int_loop.size() if ao.int_loop else 0
-                    asm_outer_sz = ao.asm_itspace[0][0].size() if len(ao.asm_itspace) >= 1 else 0
-                    asm_inner_sz = ao.asm_itspace[1][0].size() if len(ao.asm_itspace) >= 2 else 0
-                    loop_sizes = [int_loop_sz, asm_outer_sz, asm_inner_sz]
+                    int_loop_sz = expr_opt.int_loop.size() if expr_opt.int_loop else 0
+                    outer_sz = expr_opt.asm_itspace[0][0].size() if len(expr_opt.asm_itspace) >= 1 else 0
+                    inner_sz = expr_opt.asm_itspace[1][0].size() if len(expr_opt.asm_itspace) >= 2 else 0
+                    loop_sizes = [int_loop_sz, outer_sz, inner_sz]
                     for factor in unroll_factors(loop_sizes, unroll_ths):
                         autotune_configs_unroll.append(params[:7] + (factor,) + params[8:])
                 # Increase the stack size, if needed
-                increase_stack(asm)
+                increase_stack(expr_opts)
                 # Add the variant to the test cases the autotuner will have to run
                 variants.append((self.ast, _params))
                 self.ast = dcopy(original_ast)
             # On top of some of the basic kernel variants, apply unroll/unroll-and-jam
             for params in autotune_configs_unroll:
-                asm = _generate_cpu_code(self, *params[1:])
+                expr_opts = _generate_cpu_code(self, *params[1:])
                 variants.append((self.ast, params[1:]))
                 self.ast = dcopy(original_ast)
             if tunable:
                 # Determine the fastest kernel implementation
-                autotuner = Autotuner(variants, asm[0].asm_itspace, self.include_dirs,
+                autotuner = Autotuner(variants, expr_opts[0].asm_itspace, self.include_dirs,
                                       compiler, intrinsics, blas_interface)
                 fastest = autotuner.tune(resolution)
                 all_params = autotune_configs + autotune_configs_unroll
@@ -318,7 +318,8 @@ class ASTKernel(object):
                 if name != 'blas':
                     self.blas = False
             else:
-                # The kernel is not transformed since it was not a local assembly kernel
+                # The kernel does not get transformed since it does not contain any
+                # optimizable expression
                 params = (0, False, (None, None), True, None, False, None, False)
         elif opts.get('blas'):
             # Conversion into blas requires a specific set of transformations
@@ -333,10 +334,10 @@ class ASTKernel(object):
                       opts.get('permute'))
 
         # Generate a specific code version
-        asm_opt = _generate_cpu_code(self, *params)
+        expr_opts = _generate_cpu_code(self, *params)
 
         # Increase stack size if too much space is used on the stack
-        increase_stack(asm_opt)
+        increase_stack(expr_opts)
 
     def gencode(self):
         """Generate a string representation of the AST."""
