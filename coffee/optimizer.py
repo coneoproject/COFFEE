@@ -147,63 +147,6 @@ class ExpressionOptimizer(object):
             self.asm_expr = zls.reschedule()[-1]
             self.nz_in_fors = zls.nz_in_fors
 
-    def slice(self, slice_factor=None):
-        """Perform slicing of the innermost loop to enhance register reuse.
-        For example, given a loop:
-
-        .. code-block:: none
-
-            for i = 0 to N
-              f()
-
-        the following sequence of loops is generated:
-
-        .. code-block:: none
-
-            for i = 0 to k
-              f()
-            for i = k to 2k
-              f()
-            # ...
-            for i = (N-1)k to N
-              f()
-
-        The goal is to improve register re-use by relying on the backend
-        compiler unrolling and vector-promoting the sliced loops."""
-
-        if slice_factor == -1:
-            slice_factor = 20  # Defaut value
-
-        for stmt, stmt_info in self.asm_expr.items():
-            # First, find outer product loops in the nest
-            it_vars, parent, loops = stmt_info
-
-            # Build sliced loops
-            sliced_loops = []
-            n_loops = loops[1].cond.children[1].symbol / slice_factor
-            rem_loop_sz = loops[1].cond.children[1].symbol
-            init = 0
-            for i in range(n_loops):
-                loop = dcopy(loops[1])
-                loop.init.init = Symbol(init, ())
-                loop.cond.children[1] = Symbol(slice_factor * (i + 1), ())
-                init += slice_factor
-                sliced_loops.append(loop)
-
-            # Build remainder loop
-            if rem_loop_sz > 0:
-                init = slice_factor * n_loops
-                loop = dcopy(loops[1])
-                loop.init.init = Symbol(init, ())
-                loop.cond.children[1] = Symbol(rem_loop_sz, ())
-                sliced_loops.append(loop)
-
-            # Append sliced loops at the right point in the nest
-            par_block = loops[0].children[0]
-            pb = par_block.children
-            idx = pb.index(loops[1])
-            par_block.children = pb[:idx] + sliced_loops + pb[idx + 1:]
-
     def unroll(self, loops_factor):
         """Unroll loops in the loop nest.
 
