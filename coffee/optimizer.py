@@ -62,7 +62,6 @@ class ExpressionOptimizer(object):
         self.kernel_decls = kernel_decls
         # Track applied optimizations
         self._is_precomputed = False
-        self._has_zeros = False
         # Expressions evaluating the element matrix
         self.asm_expr = {}
         # Track nonzero regions accessed in the various loops
@@ -86,8 +85,8 @@ class ExpressionOptimizer(object):
         * Optimisations requested by the higher layers via pragmas"""
 
         def check_opts(node, parent, fors):
-            """Check if node is associated some pragma. If that is the case,
-            it saves this info so as to enable pyop2 optimising such node. """
+            """Check if node is associated with some pragmas. If that is the case,
+            it saves info about the node to speed the transformation process up."""
             if node.pragma:
                 opts = node.pragma[0].split(" ", 2)
                 if len(opts) < 3:
@@ -239,7 +238,6 @@ class ExpressionOptimizer(object):
                                     (self.kernel_decls, self.decls))
             self.asm_expr = zls.reschedule()[-1]
             self.nz_in_fors = zls.nz_in_fors
-            self._has_zeros = True
 
     def slice(self, slice_factor=None):
         """Perform slicing of the innermost loop to enhance register reuse.

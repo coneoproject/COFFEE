@@ -54,7 +54,7 @@ class LinearAlgebra(object):
         :arg kernel_decls: list of declarations used in the AST"""
 
         self.kernel_decls = kernel_decls
-        self.header = expr_optimizer.header
+        self.header = expr_opt.header
         self.int_loop = expr_opt.int_loop
         self.asm_expr = expr_opt.asm_expr
 

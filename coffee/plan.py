@@ -247,7 +247,7 @@ class ASTKernel(object):
                         vect.outer_product(v_type, v_param)
 
                 # 6) Conversion into blas calls
-                if blas and not expr_opt._has_zeros:
+                if blas and not expr_opt.nz_in_fors:
                     ala = LinearAlgebra(expr_opt, decls)
                     self.blas = ala.transform(blas)
 
@@ -289,7 +289,7 @@ class ASTKernel(object):
                     tunable = False
                     break
                 expr_opt = expr_opts[0]
-                found_zeros = found_zeros or expr_opt._has_zeros
+                found_zeros = found_zeros or expr_opt.nz_in_fors
                 if opt in ['licm', 'split'] and not found_zeros:
                     # Heuristically apply a set of unroll factors on top of the transformation
                     int_loop_sz = expr_opt.int_loop.size() if expr_opt.int_loop else 0
