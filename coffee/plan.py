@@ -67,13 +67,14 @@ class ASTKernel(object):
         self.ast = ast
         # Used in case of autotuning
         self.include_dirs = include_dirs
+
         # Track applied optimizations
         self.blas = False
         self.ap = False
 
         # Properties of the kernel operation:
         # True if the kernel contains sparse arrays
-        self._is_sparse = False
+        self._is_block_sparse = False
 
     def _visit_ast(self, node, parent=None, fors=None, decls=None):
         """Return lists of:
@@ -86,7 +87,7 @@ class ASTKernel(object):
 
         if isinstance(node, Decl):
             decls[node.sym.symbol] = (node, LOCAL_VAR)
-            self._is_sparse = self._is_sparse or node.get_nonzero_columns()
+            self._is_block_sparse = self._is_block_sparse or node.get_nonzero_columns()
             return (decls, fors)
         elif isinstance(node, For):
             fors.append((node, parent))
@@ -129,7 +130,7 @@ class ASTKernel(object):
         """
 
         decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-        expr_opts = [ExpressionOptimizer(l, pre_l, decls, self._is_sparse) for l, pre_l in fors]
+        expr_opts = [ExpressionOptimizer(l, pre_l, decls) for l, pre_l in fors]
         for expr_opt in expr_opts:
             itspace_vrs, accessed_vrs = expr_opt.extract_itspace()
 
@@ -206,11 +207,11 @@ class ASTKernel(object):
                 raise RuntimeError("COFFEE Error: outer-product vectorization needs no permute")
 
             decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-            expr_opts = [ExpressionOptimizer(l, pre_l, decls, self._is_sparse) for l, pre_l in fors]
+            expr_opts = [ExpressionOptimizer(l, pre_l, decls) for l, pre_l in fors]
             for expr_opt in expr_opts:
                 # 1) Expression Rewriting
                 if licm:
-                    expr_opt.rewrite(licm)
+                    expr_opt.rewrite(licm, self._is_block_sparse)
                     decls.update(expr_opt.decls)
 
                 # 2) Splitting

@@ -51,19 +51,15 @@ class ExpressionOptimizer(object):
 
     """Expression optimiser class."""
 
-    def __init__(self, loop_nest, header, kernel_decls, is_mixed):
+    def __init__(self, loop_nest, header, kernel_decls):
         """Initialize the ExpressionOptimizer.
 
         :arg loop_nest:    root loop node of an optimizable expression.
         :arg header:       parent of the root loop node
         :arg kernel_decls: list of declarations of the variables that are visible
-                           within ``loop_nest``.
-        :arg is_mixed:     true if the expression is characterized by block-sparse
-                           arrays."""
+                           within ``loop_nest``."""
         self.header = header
         self.kernel_decls = kernel_decls
-        # Properties of the expression
-        self._is_mixed = is_mixed
         # Track applied optimizations
         self._is_precomputed = False
         self._has_zeros = False
@@ -174,7 +170,7 @@ class ExpressionOptimizer(object):
 
         return (itspace_vrs, accessed_vrs)
 
-    def rewrite(self, level):
+    def rewrite(self, level, is_block_sparse):
         """Rewrite an expression to minimize floating point operations and to
         relieve register pressure. This involves several possible transformations:
 
@@ -198,6 +194,8 @@ class ExpressionOptimizer(object):
                     * level == 3: level 2 + avoid computing zero-columns
                     * level == 4: level 3 + precomputation of read-only expressions \
                                   out of the loop nest
+        :arg is_block_sparse: True if the expression is characterized by the
+                              presence of block-sparse arrays
         """
 
         if not self.asm_expr:
@@ -225,7 +223,7 @@ class ExpressionOptimizer(object):
 
         # Eliminate zero-valued columns if the kernel operation uses block-sparse
         # arrays (contiguous zero-valued columns are present)
-        if level == 3 and self._is_mixed:
+        if level == 3 and is_block_sparse:
             # Split the expression into separate loop nests, based on sum's
             # associativity. This exposes more opportunities for restructuring loops,
             # since different summands may have contiguous regions of zero-valued
