@@ -34,13 +34,15 @@
 """COFFEE's optimization plan constructor."""
 
 from base import *
-from utils import *
-from optimizer import ExpressionOptimizer
-from vectorizer import ExpressionVectorizer
+from utils import increase_stack, unroll_factors, flatten, bind
+from optimizer import LoopOptimizer
+from vectorizer import LoopVectorizer
 from linear_algebra import LinearAlgebra
 from autotuner import Autotuner
 
 from copy import deepcopy as dcopy
+import itertools
+import operator
 
 # Possibile optimizations
 AUTOVECT = 1        # Auto-vectorization
@@ -130,9 +132,9 @@ class ASTKernel(object):
         """
 
         decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-        expr_opts = [ExpressionOptimizer(l, pre_l, decls) for l, pre_l in fors]
-        for expr_opt in expr_opts:
-            itspace_vrs, accessed_vrs = expr_opt.extract_itspace()
+        loop_opts = [LoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
+        for loop_opt in loop_opts:
+            itspace_vrs, accessed_vrs = loop_opt.extract_itspace()
 
             for v in accessed_vrs:
                 # Change declaration of non-constant iteration space-dependent
@@ -207,34 +209,34 @@ class ASTKernel(object):
                 raise RuntimeError("COFFEE Error: outer-product vectorization needs no permute")
 
             decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-            expr_opts = [ExpressionOptimizer(l, pre_l, decls) for l, pre_l in fors]
-            for expr_opt in expr_opts:
+            loop_opts = [LoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
+            for loop_opt in loop_opts:
                 # 1) Expression Rewriting
                 if licm:
-                    expr_opt.rewrite(licm, self._is_block_sparse)
-                    decls.update(expr_opt.decls)
+                    loop_opt.rewrite(licm, self._is_block_sparse)
+                    decls.update(loop_opt.decls)
 
                 # 2) Splitting
                 if split:
-                    expr_opt.split(split)
+                    loop_opt.split(split)
 
                 # 3) Permute integration loop
                 if permute:
-                    expr_opt.permute()
+                    loop_opt.permute()
 
                 # 3) Unroll/Unroll-and-jam
                 if unroll:
-                    expr_opt.unroll({0: unroll[0], 1: unroll[1], 2: unroll[2]})
+                    loop_opt.unroll(dict(unroll))
 
                 # 4) Vectorization
                 if initialized:
-                    vect = ExpressionVectorizer(expr_opt, intrinsics, compiler)
+                    vect = LoopVectorizer(loop_opt, intrinsics, compiler)
                     if ap:
                         # Data alignment
                         vect.alignment(decls)
                         # Padding
                         if not blas:
-                            vect.padding(decls, expr_opt.nz_in_fors)
+                            vect.padding(decls, loop_opt.nz_in_fors)
                             self.ap = True
                     if v_type and v_type != AUTOVECT:
                         if intrinsics['inst_set'] == 'SSE':
@@ -243,8 +245,8 @@ class ASTKernel(object):
                         vect.outer_product(v_type, v_param)
 
                 # 5) Conversion into blas calls
-                if blas and not expr_opt.nz_in_fors:
-                    ala = LinearAlgebra(expr_opt, decls)
+                if blas and not loop_opt.nz_in_fors:
+                    ala = LinearAlgebra(loop_opt, decls)
                     self.blas = ala.transform(blas)
 
             # Ensure kernel is always marked static inline
@@ -255,7 +257,7 @@ class ASTKernel(object):
                 self.fundecl.pred.insert(0, 'inline')
                 self.fundecl.pred.insert(0, 'static')
 
-            return expr_opts
+            return loop_opts
 
         if opts.get('autotune'):
             if not (compiler and intrinsics):
@@ -272,44 +274,51 @@ class ASTKernel(object):
                 autotune_configs.append(('blas', 4, (None, None), True, 1,
                                          blas_interface['name'], None, False))
             variants = []
-            autotune_configs_unroll = []
+            autotune_configs_uf = []
             found_zeros = False
             tunable = True
             original_ast = dcopy(self.ast)
-            # Generate basic kernel variants
             for params in autotune_configs:
+                # Generate basic kernel variants
                 opt, _params = params[0], params[1:]
-                expr_opts = _generate_cpu_code(self, *_params)
-                if not expr_opts:
+                loop_opts = _generate_cpu_code(self, *_params)
+                if not loop_opts:
                     # No expressions, nothing to tune
                     tunable = False
                     break
-                expr_opt = expr_opts[0]
-                found_zeros = found_zeros or expr_opt.nz_in_fors
-                if opt in ['licm', 'split'] and not found_zeros:
-                    # Heuristically apply a set of unroll factors on top of the transformation
-                    int_loop_sz = expr_opt.int_loop.size() if expr_opt.int_loop else 0
-                    outer_sz = expr_opt.asm_itspace[0][0].size() if len(expr_opt.asm_itspace) >= 1 else 0
-                    inner_sz = expr_opt.asm_itspace[1][0].size() if len(expr_opt.asm_itspace) >= 2 else 0
-                    loop_sizes = [int_loop_sz, outer_sz, inner_sz]
-                    for factor in unroll_factors(loop_sizes, unroll_ths):
-                        autotune_configs_unroll.append(params[:6] + (factor,) + params[7:])
                 # Increase the stack size, if needed
-                increase_stack(expr_opts)
-                # Add the variant to the test cases the autotuner will have to run
+                increase_stack(loop_opts)
+                # Add the base variant to the autotuning process
                 variants.append((self.ast, _params))
                 self.ast = dcopy(original_ast)
+
+                # Calculate variants characterized by different unroll factors,
+                # determined heuristically
+                loop_opt = loop_opts[0]
+                found_zeros = found_zeros or loop_opt.nz_in_fors
+                if opt in ['licm', 'split'] and not found_zeros:
+                    expr_loops = loop_opt.expr_loops
+                    if not expr_loops:
+                        continue
+                    loops_uf = unroll_factors(flatten(expr_loops))
+                    all_uf = [bind(k, v) for k, v in loops_uf.items()]
+                    all_uf = [uf for uf in list(itertools.product(*all_uf))
+                              if reduce(operator.mul, zip(*uf)[1]) <= unroll_ths]
+                    for uf in all_uf:
+                        autotune_configs_uf.append(params[:6] + (uf,) + params[7:])
+
             # On top of some of the basic kernel variants, apply unroll/unroll-and-jam
-            for params in autotune_configs_unroll:
-                expr_opts = _generate_cpu_code(self, *params[1:])
+            for params in autotune_configs_uf:
+                loop_opts = _generate_cpu_code(self, *params[1:])
                 variants.append((self.ast, params[1:]))
                 self.ast = dcopy(original_ast)
+
             if tunable:
                 # Determine the fastest kernel implementation
-                autotuner = Autotuner(variants, expr_opts[0].asm_itspace, self.include_dirs,
+                autotuner = Autotuner(variants, loop_opts[0].asm_itspace, self.include_dirs,
                                       compiler, intrinsics, blas_interface)
                 fastest = autotuner.tune(resolution)
-                all_params = autotune_configs + autotune_configs_unroll
+                all_params = autotune_configs + autotune_configs_uf
                 name, params = all_params[fastest][0], all_params[fastest][1:]
                 # Discard values set while autotuning
                 if name != 'blas':
@@ -331,10 +340,10 @@ class ASTKernel(object):
                       opts.get('permute'))
 
         # Generate a specific code version
-        expr_opts = _generate_cpu_code(self, *params)
+        loop_opts = _generate_cpu_code(self, *params)
 
         # Increase stack size if too much space is used on the stack
-        increase_stack(expr_opts)
+        increase_stack(loop_opts)
 
     def gencode(self):
         """Generate a string representation of the AST."""

@@ -43,18 +43,19 @@ from copy import deepcopy as dcopy
 import networkx as nx
 
 from base import *
+from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
 import plan
 
 
-class ExpressionOptimizer(object):
+class LoopOptimizer(object):
 
-    """Expression optimiser class."""
+    """Loop optimizer class."""
 
     def __init__(self, loop_nest, header, kernel_decls):
-        """Initialize the ExpressionOptimizer.
+        """Initialize the LoopOptimizer.
 
-        :arg loop_nest:    root loop node of an optimizable expression.
+        :arg loop_nest:    root loop node o a loop nest.
         :arg header:       parent of the root loop node
         :arg kernel_decls: list of declarations of the variables that are visible
                            within ``loop_nest``."""
@@ -76,8 +77,9 @@ class ExpressionOptimizer(object):
         _, self.decls, self.sym, self.asm_expr = self._visit()
 
     def rewrite(self, level, is_block_sparse):
-        """Rewrite an expression to minimize floating point operations and to
-        relieve register pressure. This involves several possible transformations:
+        """Rewrite a compute-intensive expression found in the loop nest so as to
+        minimize floating point operations and to relieve register pressure.
+        This involves several possible transformations:
 
         1. Generalized loop-invariant code motion
         2. Factorization of common loop-dependent terms
@@ -107,8 +109,8 @@ class ExpressionOptimizer(object):
             return
 
         parent = (self.header, self.kernel_decls)
-        for expr in self.asm_expr.items():
-            ew = ExpressionRewriter(expr, self.int_loop, self.sym, self.decls,
+        for stmt_info in self.asm_expr.items():
+            ew = ExpressionRewriter(stmt_info, self.int_loop, self.sym, self.decls,
                                     parent, self.hoisted, self.expr_graph)
             # Perform expression rewriting
             if level > 0:
@@ -123,7 +125,7 @@ class ExpressionOptimizer(object):
                 ew.simplify()
             # Precompute expressions
             if level == 4:
-                self._precompute(expr)
+                self._precompute(stmt_info)
                 self._is_precomputed = True
 
         # Eliminate zero-valued columns if the kernel operation uses block-sparse
@@ -145,20 +147,12 @@ class ExpressionOptimizer(object):
             self.asm_expr = zls.reschedule()[-1]
             self.nz_in_fors = zls.nz_in_fors
 
-    def unroll(self, loops_factor):
-        """Unroll loops in the loop nest.
+    def unroll(self, loop_uf):
+        """Unroll loops enclosing expressions as specified by ``loop_uf``.
 
-        :arg loops_factor: dictionary from loops to unroll (factor, increment).
-            Loops are specified as integers:
+        :arg loop_uf: dictionary from iteration spaces to unroll factors."""
 
-            * 0 = integration loop,
-            * 1 = test functions loop,
-            * 2 = trial functions loop.
-
-            A factor of 0 denotes that the corresponding loop is not present.
-        """
-
-        def update_stmt(node, var, factor):
+        def update_expr(node, var, factor):
             """Add an offset ``factor`` to every iteration variable ``var`` in
             ``node``."""
             if isinstance(node, Symbol):
@@ -169,53 +163,26 @@ class ExpressionOptimizer(object):
                 node.offset = tuple(new_ofs)
             else:
                 for n in node.children:
-                    update_stmt(n, var, factor)
+                    update_expr(n, var, factor)
 
-        def unroll_loop(asm_expr, it_var, factor):
-            """Unroll all expressions in ``asm_expr`` along the iteration variable
-            ``it_var`` a total of ``factor`` times."""
+        unrolled_loops = set()
+        for itspace, uf in loop_uf.items():
             new_asm_expr = {}
-            unroll_loops = set()
-            for stmt, stmt_info in asm_expr.items():
-                it_vars, parent, loops = stmt_info
-                new_stmts = []
-                # Determine the loop along which to unroll
-                if self.int_loop and self.int_loop.it_var() == it_var:
-                    loop = self.int_loop
-                elif loops[0].it_var() == it_var:
-                    loop = loops[0]
-                else:
-                    loop = loops[1]
-                unroll_loops.add(loop)
-                # Unroll individual statements
-                for i in range(factor):
+            for stmt, expr_info in self.asm_expr.items():
+                loop = [l for l in expr_info.perfect_loops if l.it_var() == itspace]
+                if not loop:
+                    # Unroll only loops in a perfect loop nest
+                    continue
+                loop = loop[0]  # Only one loop possibly found
+                for i in range(uf-1):
                     new_stmt = dcopy(stmt)
-                    update_stmt(new_stmt, loop.it_var(), (i+1))
-                    parent.children.append(new_stmt)
-                    new_stmts.append(new_stmt)
-                new_asm_expr.update(dict(zip(new_stmts,
-                                             [stmt_info for i in range(len(new_stmts))])))
-            # Update the increment of each unrolled loop
-            for l in unroll_loops:
-                l.incr.children[1].symbol += factor
-            return new_asm_expr
-
-        int_factor = loops_factor[0]
-        asm_outer_factor = loops_factor[1]
-        asm_inner_factor = loops_factor[2]
-
-        # Unroll-and-jam integration loop
-        if int_factor > 1 and self._is_precomputed:
-            self.asm_expr.update(unroll_loop(self.asm_expr, self.int_loop.it_var(),
-                                             int_factor-1))
-        # Unroll-and-jam test functions loop
-        if asm_outer_factor > 1:
-            self.asm_expr.update(unroll_loop(self.asm_expr, self.asm_itspace[0][0].it_var(),
-                                             asm_outer_factor-1))
-        # Unroll trial functions loop
-        if asm_inner_factor > 1:
-            self.asm_expr.update(unroll_loop(self.asm_expr, self.asm_itspace[1][0].it_var(),
-                                             asm_inner_factor-1))
+                    update_expr(new_stmt, itspace, i+1)
+                    expr_info.parent.children.append(new_stmt)
+                    new_asm_expr.update({new_stmt: expr_info})
+                if loop not in unrolled_loops:
+                    loop.incr.children[1].symbol += uf-1
+                    unrolled_loops.add(loop)
+            self.asm_expr.update(new_asm_expr)
 
     def permute(self):
         """Permute the outermost loop with the innermost loop in the loop nest.
@@ -327,9 +294,9 @@ class ExpressionOptimizer(object):
         self.asm_expr = new_asm_expr
 
     def extract_itspace(self):
-        """Remove the fully-parallel loops enclosing the expression. No data
-        dependency analysis is performed; rather, these are the loops that are
-        marked with ``pragma pyop2 itspace``."""
+        """Remove the fully-parallel loops of the loop nest. No data dependency
+        analysis is performed; rather, these are the loops that are marked with
+        ``pragma pyop2 itspace``."""
 
         itspace_vrs = set()
         for node, parent in reversed(self._visit()[0]):
@@ -357,17 +324,7 @@ class ExpressionOptimizer(object):
     def expr_loops(self):
         """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
         loops that expressions depend on."""
-        return [expr_info[2] for expr_info in self.asm_expr.values()]
-
-    @property
-    def indep_loops(self):
-        """Return ``[loop1, loop2, ...]``, where each entry is a loop node along
-        which expressions do not iterate."""
-        all_loops = zip(*self._visit()[0])[0]
-        expr_loops = [l for el in self.expr_loops for l in el]
-        from utils import any_in
-        return [l for l in all_loops if any_in(expr_loops, l.children[0].children)
-                and l not in expr_loops]
+        return [expr_info.loops for expr_info in self.asm_expr.values()]
 
     def _visit(self):
         """Explore the loop nest and collect various info like:
@@ -382,16 +339,16 @@ class ExpressionOptimizer(object):
             if node.pragma:
                 opts = node.pragma[0].split(" ", 2)
                 if len(opts) < 3:
-                    return {}
+                    return
                 if opts[1] == "pyop2":
                     if opts[2] == "integration":
                         # Found integration loop
                         self.int_loop = node
-                        return {}
+                        return
                     if opts[2] == "itspace":
                         # Found high-level optimisation
                         self.asm_itspace.append((node, parent))
-                        return {}
+                        return
                     delim = opts[2].find('(')
                     opt_name = opts[2][:delim].replace(" ", "")
                     opt_par = opts[2][delim:].replace(" ", "")
@@ -400,13 +357,13 @@ class ExpressionOptimizer(object):
                         # Store outer product iteration variables, parent, loops
                         it_vars = [opt_par[1], opt_par[3]]
                         fors, fors_parents = zip(*fors)
-                        loops = tuple([l for l in fors if l.it_var() in it_vars])
-                        return {node: (it_vars, parent, loops)}
+                        fast_fors = tuple([l for l in fors if l.it_var() in it_vars])
+                        slow_fors = tuple([l for l in fors if l.it_var() not in it_vars])
+                        return MetaExpr(parent, (fast_fors, slow_fors))
                     else:
                         raise RuntimeError("Unrecognised opt %s - skipping it", opt_name)
                 else:
                     raise RuntimeError("Unrecognised pragma found '%s'", node.pragma[0])
-            return {}
 
         def inspect(node, parent, fors, decls, symbols, exprs):
             if isinstance(node, (Block, Root)):
@@ -416,7 +373,10 @@ class ExpressionOptimizer(object):
             elif isinstance(node, For):
                 check_opts(node, parent, fors)
                 fors.append((node, parent))
-                return inspect(node.children[0], node, fors, decls, symbols, exprs)
+                fors, decls, symbols, expres = inspect(node.children[0], node, fors,
+                                                       decls, symbols, exprs)
+                fors.remove((node, parent))
+                return (fors, decls, symbols, exprs)
             elif isinstance(node, Par):
                 return inspect(node.children[0], node, fors, decls, symbols, exprs)
             elif isinstance(node, Decl):
@@ -430,7 +390,9 @@ class ExpressionOptimizer(object):
                     inspect(child, node, fors, decls, symbols, exprs)
                 return (fors, decls, symbols, exprs)
             elif isinstance(node, Perfect):
-                exprs.update(check_opts(node, parent, fors))
+                expr = check_opts(node, parent, fors)
+                if expr:
+                    exprs[node] = expr
                 for child in node.children:
                     inspect(child, node, fors, decls, symbols, exprs)
                 return (fors, decls, symbols, exprs)
@@ -439,11 +401,12 @@ class ExpressionOptimizer(object):
 
         return inspect(self.header, None, [], {}, set(), {})
 
-    def _precompute(self, expr):
+    def _precompute(self, stmt_info):
         """Precompute all statements out of the loop nest, which implies scalar
         expansion and code hoisting. This makes the loop nest perfect.
 
-        For example:
+        For example: ::
+
         for i
           for r
             A[r] += f(i, ...)
@@ -451,7 +414,8 @@ class ExpressionOptimizer(object):
             for k
               LT[j][k] += g(A[r], ...)
 
-        becomes
+        becomes: ::
+
         for i
           for r
             A[i][r] += f(...)
@@ -459,6 +423,7 @@ class ExpressionOptimizer(object):
           for j
             for k
               LT[j][k] += g(A[i][r], ...)
+
         """
 
         def update_syms(node, precomputed):
@@ -514,8 +479,8 @@ class ExpressionOptimizer(object):
         if not self.int_loop:
             return
 
-        expr, expr_info = expr
-        asm_outer_loop = expr_info[2][0]
+        stmt, expr_info = stmt_info
+        asm_outer_loop = expr_info.fast_loops[0]
 
         # Precomputation
         precomputed_block = []
@@ -557,7 +522,7 @@ class ExpressionOptimizer(object):
         self.header.children = root[:ofs] + new_outer_block + root[ofs:]
 
         # Update the AST by vector-expanding the pre-computed accessed variables
-        update_syms(expr.children[1], precomputed_syms)
+        update_syms(stmt.children[1], precomputed_syms)
 
 
 class ExpressionRewriter(object):
@@ -568,10 +533,11 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, expr, int_loop, syms, decls, parent, hoisted, expr_graph):
+    def __init__(self, stmt_info, int_loop, syms, decls, parent, hoisted, expr_graph):
         """Initialize the ExpressionRewriter.
 
-        :arg expr:       provide generic information related to an expression,
+        :arg stmt_info:  an AST node statement containing an expression and meta
+                         information (MetaExpr) related to the expression itself.
                          including the iteration space it depends on.
         :arg int_loop:   the loop along which integration is performed.
         :arg syms:       list of AST symbols used to evaluate the local element
@@ -582,7 +548,7 @@ class ExpressionRewriter(object):
         :arg hoisted:    dictionary that tracks hoisted expressions
         :arg expr_graph: expression graph that tracks symbol dependencies
         """
-        self.expr, self.expr_info = expr
+        self.stmt, self.expr_info = stmt_info
         self.int_loop = int_loop
         self.syms = syms
         self.decls = decls
@@ -719,10 +685,10 @@ class ExpressionRewriter(object):
         # Extract read-only sub-expressions that do not depend on at least
         # one loop in the loop nest
         inv_dep = {}
-        typ = self.parent_decls[self.expr.children[0].symbol][0].typ
+        typ = self.parent_decls[self.stmt.children[0].symbol][0].typ
         while True:
             expr_dep = defaultdict(list)
-            extract(self.expr.children[1], expr_dep)
+            extract(self.stmt.children[1], expr_dep)
 
             # While end condition
             if self._licm and not extract.has_extracted:
@@ -734,7 +700,7 @@ class ExpressionRewriter(object):
                 # 0) Determine the loops that should wrap invariant statements
                 # and where such loops should be placed in the loop nest
                 place = self.int_loop.children[0] if self.int_loop else self.parent
-                out_asm_loop, in_asm_loop = self.expr_info[2]
+                out_asm_loop, in_asm_loop = self.expr_info.fast_loops
                 ofs = lambda: place.children.index(out_asm_loop)
                 if dep and out_asm_loop.it_var() == dep[-1]:
                     wl = out_asm_loop
@@ -766,7 +732,7 @@ class ExpressionRewriter(object):
 
                 # 5) Replace invariant sub-trees with the proper tmp variable
                 n_replaced = dict(zip([str(s) for s in for_sym], [0]*len(for_sym)))
-                replace(self.expr.children[1], dict(zip([str(i) for i in expr], for_sym)),
+                replace(self.stmt.children[1], dict(zip([str(i) for i in expr], for_sym)),
                         n_replaced)
 
                 # 6) Track hoisted symbols and symbols dependencies
@@ -818,7 +784,7 @@ class ExpressionRewriter(object):
                     count(c, counter)
 
         counter = {}
-        count(self.expr.children[1], counter)
+        count(self.stmt.children[1], counter)
         return counter
 
     def expand(self):
@@ -844,7 +810,7 @@ class ExpressionRewriter(object):
         # The heuristics here is that the expansion occurs along the iteration
         # variable which appears in more unique arrays. This will allow factorization
         # to be more effective.
-        asm_out, asm_in = (self.expr_info[0][0], self.expr_info[0][1])
+        asm_out, asm_in = self.expr_info.fast_itvars
         it_var_occs = {asm_out: 0, asm_in: 0}
         for s in self.count_occurrences().keys():
             if s[1] and s[1][0] in it_var_occs:
@@ -852,7 +818,7 @@ class ExpressionRewriter(object):
 
         exp_var = asm_out if it_var_occs[asm_out] < it_var_occs[asm_in] else asm_in
         ee = ExpressionExpander(self.hoisted, self.expr_graph, self.parent)
-        ee.expand(self.expr.children[1], self.expr, it_var_occs, exp_var)
+        ee.expand(self.stmt.children[1], self.stmt, it_var_occs, exp_var)
         self.decls.update(ee.expanded_decls)
         self.syms.update(ee.expanded_syms)
         self._expanded = True
@@ -910,7 +876,7 @@ class ExpressionRewriter(object):
             raise RuntimeError("Distribute error: expansion required first.")
 
         to_distr = defaultdict(list)
-        find_prod(self.expr.children[1], self.count_occurrences(True), to_distr)
+        find_prod(self.stmt.children[1], self.count_occurrences(True), to_distr)
 
         # Create the new expression
         new_prods = []
@@ -918,7 +884,7 @@ class ExpressionRewriter(object):
             dist, target = zip(*d)
             target = Par(create_sum(target)) if len(target) > 1 else create_sum(target)
             new_prods.append(Par(Prod(dist[0], target)))
-        self.expr.children[1] = Par(create_sum(new_prods))
+        self.stmt.children[1] = Par(create_sum(new_prods))
 
     def simplify(self):
         """Scan the hoisted terms one by one and eliminate duplicate sub-expressions.

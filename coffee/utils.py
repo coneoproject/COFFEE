@@ -33,16 +33,20 @@
 
 """Utility functions for the transformation of ASTs."""
 
+try:
+    from collections import OrderedDict
+# OrderedDict was added in Python 2.7. Earlier versions can use ordereddict
+# from PyPI
+except ImportError:
+    from ordereddict import OrderedDict
 import resource
 import operator
-import itertools
-
-from base import Symbol
-
 from warnings import warn as warning
 
+from base import *
 
-def increase_stack(expr_opts):
+
+def increase_stack(loop_opts):
     """"Increase the stack size it the total space occupied by the kernel's local
     arrays is too big."""
     # Assume the size of a C type double is 8 bytes
@@ -51,8 +55,8 @@ def increase_stack(expr_opts):
     stack_size = 1.7*1024*1024
 
     size = 0
-    for expr_opt in expr_opts:
-        decls = expr_opt.decls.values()
+    for loop_opt in loop_opts:
+        decls = loop_opt.decls.values()
         if decls:
             size += sum([reduce(operator.mul, d.sym.rank) for d in zip(*decls)[0]
                          if d.sym.rank])
@@ -68,27 +72,31 @@ def increase_stack(expr_opts):
             warning("In case of failure, lower COFFEE's licm level to 1.")
 
 
-def unroll_factors(sizes, ths):
-    """Return a list of unroll factors to run, given loop sizes in ``sizes``.
-    The return value is a list of tuples, where each element in a tuple
-    represents the unroll factor for the corresponding loop in the nest.
+def unroll_factors(loops):
+    """Return a dictionary, in which each entry maps an iteration space,
+    identified by the iteration variable of a loop, to a suitable unroll factor.
+    Heuristically, 1) inner loops are not unrolled to give the backend compiler
+    a chance of auto-vectorizing them; 2) loops sizes must be a multiple of the
+    unroll factor.
 
-    For example, if there are three loops ``i``, ``j``, and ``k``, a tuple
-    ``(2, 1, 1)`` in the returned list indicates that the outermost loop ``i``
-    should be unrolled by a factor two (i.e. two iterations), while loops
-    ``j`` and ``k`` should not be unrolled.
-
-    :arg ths: unrolling threshold that cannot be exceed by the overall unroll
-              factor
+    :arg:loops: list of for loops for which a suitable unroll factor has to be
+                determined.
     """
-    i_loop, j_loop, k_loop = sizes
-    # Determine individual unroll factors
-    i_factors = [i+1 for i in range(i_loop) if i_loop % (i+1) == 0] or [0]
-    j_factors = [i+1 for i in range(j_loop) if j_loop % (i+1) == 0] or [0]
-    k_factors = [1]
-    # Return the cartesian product of all possible unroll factors not exceeding the threshold
-    unroll_factors = list(itertools.product(i_factors, j_factors, k_factors))
-    return [x for x in unroll_factors if reduce(operator.mul, x) <= ths]
+
+    loops_unroll = OrderedDict()
+
+    # First, determine all inner loops
+    _inner_loops = [l for l in loops if l in inner_loops(l)]
+
+    # Then, determine possible unroll factors for all loops
+    for l in loops:
+        itspace = l.it_var()
+        if l in _inner_loops:
+            loops_unroll[itspace] = [1]
+        else:
+            loops_unroll[itspace] = [i+1 for i in range(l.size()) if l.size() % (i+1) == 0]
+
+    return loops_unroll
 
 
 ################################################################
@@ -108,6 +116,48 @@ def ast_update_ofs(node, ofs):
     else:
         for n in node.children:
             ast_update_ofs(n, ofs)
+
+
+def inner_loops(node):
+    """Find inner loops in the subtree rooted in node."""
+
+    def find_iloops(node, loops):
+        if isinstance(node, Perfect):
+            return False
+        elif isinstance(node, (Block, Root)):
+            return any([find_iloops(s, loops) for s in node.children])
+        elif isinstance(node, For):
+            found = find_iloops(node.children[0], loops)
+            if not found:
+                loops.append(node)
+            return True
+
+    loops = []
+    find_iloops(node, loops)
+    return loops
+
+
+def is_perfect_loop(loop):
+    """Return True if ``loop`` is part of a perfect loop nest, False otherwise."""
+
+    def check_perfectness(node, found_block=False):
+        if isinstance(node, Perfect):
+            return True
+        elif isinstance(node, For):
+            if found_block:
+                return False
+            return check_perfectness(node.children[0])
+        elif isinstance(node, Block):
+            stmts = node.children
+            if len(stmts) == 1:
+                return check_perfectness(stmts[0])
+            # Need to check this is the last level of the loop nest, otherwise
+            # it can't be a perfect loop nest
+            return all([check_perfectness(n, True) for n in stmts])
+
+    if not isinstance(loop, For):
+        return False
+    return check_perfectness(loop)
 
 
 #######################################################################
@@ -158,3 +208,5 @@ def itspace_merge(itspaces):
 
 
 any_in = lambda a, b: any(i in b for i in a)
+flatten = lambda list: [i for l in list for i in l]
+bind = lambda a, b: [(a, v) for v in b]

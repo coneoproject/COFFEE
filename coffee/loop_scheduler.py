@@ -44,6 +44,7 @@ import itertools
 from copy import deepcopy as dcopy
 
 from base import *
+from expression import MetaExpr
 from utils import ast_update_ofs, itspace_size_ofs, itspace_merge
 
 
@@ -255,72 +256,75 @@ class ExprLoopFissioner(LoopScheduler):
         else:
             raise RuntimeError("Split error: found unknown node: %s" % str(node))
 
-    def _sum_fission(self, expr, copy_loops):
+    def _sum_fission(self, stmt_info, copy_loops):
         """Split an expression after ``cut`` operands. This results in two
         sub-expressions that are placed in different, although identical
         loop nests if ``copy_loops`` is true; they are placed in the same
         original loop nest otherwise. Return the two split expressions as a
         2-tuple, in which the second element is potentially further splittable."""
-        expr_root, expr_info = expr
-        it_vars, parent, loops = expr_info
+        stmt, expr_info = stmt_info
+        parent = expr_info.parent
+        loops = expr_info.fast_loops
         # Copy the original expression twice, and then split the two copies, that
         # we refer to as ``left`` and ``right``, meaning that the left copy will
         # be transformed in the sub-expression from the origin up to the cut point,
         # and analoguously for right.
         # For example, consider the expression a*b + c*d; the cut point is the sum
         # operator. Therefore, the left part is a*b, whereas the right part is c*d
-        expr_root_left = dcopy(expr_root)
-        expr_root_right = dcopy(expr_root)
-        expr_left = Par(expr_root_left.children[1])
-        expr_right = Par(expr_root_right.children[1])
+        stmt_left = dcopy(stmt)
+        stmt_right = dcopy(stmt)
+        expr_left = Par(stmt_left.children[1])
+        expr_right = Par(stmt_right.children[1])
         sleft = self._split_sum(expr_left.children[0], (expr_left, 0), True, None, 0)
         sright = self._split_sum(expr_right.children[0], (expr_right, 0), False, None, 0)
 
         if sleft and sright:
-            index = parent.children.index(expr_root)
+            index = parent.children.index(stmt)
             # Append the left-split expression. Re-use a loop nest
-            parent.children[index] = expr_root_left
+            parent.children[index] = stmt_left
             # Append the right-split (remainder) expression.
             if copy_loops:
                 # Create a new loop nest
                 new_loop = dcopy(loops[0])
                 new_inner_loop = new_loop.children[0].children[0]
                 new_inner_loop_block = new_inner_loop.children[0]
-                new_inner_loop_block.children[0] = expr_root_right
-                expr_right_loops = [new_loop, new_inner_loop]
+                new_inner_loop_block.children[0] = stmt_right
+                expr_right_loops = (new_loop, new_inner_loop)
                 self.root.children.append(new_loop)
             else:
-                parent.children.insert(index, expr_root_right)
+                parent.children.insert(index, stmt_right)
                 new_inner_loop_block, expr_right_loops = (parent, loops)
             # Attach info to the two split sub-expressions
-            split = (expr_root_left, (it_vars, parent, loops))
-            splittable = (expr_root_right, (it_vars, new_inner_loop_block,
-                                            expr_right_loops))
+            split = (stmt_left, MetaExpr(parent, (expr_info.fast_loops,
+                                                  expr_info.slow_loops)))
+            new_loops = (expr_right_loops, expr_info.slow_loops)
+            splittable = (stmt_right, MetaExpr(new_inner_loop_block, new_loops))
             return (split, splittable)
-        return ((expr_root, expr_info), ())
+        return ((stmt, expr_info), ())
 
-    def expr_fission(self, expr, copy_loops):
+    def expr_fission(self, stmt_info, copy_loops):
         """Split an expression containing ``x`` summands into ``x/cut`` chunks.
         Each chunk is placed in a separate loop nest if ``copy_loops`` is true,
-        in the same loop nest otherwise. Return a dictionary of all of the split
-        chunks, in which each entry has the same format of ``expr``.
+        in the same loop nest otherwise. In the former case, the split occurs
+        in the largest perfect loop nest wrapping the expression in ``stmt_info``.
+        Return a dictionary of all of the split chunks, in which each entry has
+        the same format of ``stmt_info``.
 
-        :arg expr:  the expression that needs to be split. This is given as
-                    a tuple of two elements: the former is the expression
-                    root node; the latter includes info about the expression,
-                    particularly iteration variables of the enclosing loops,
-                    the enclosing loops themselves, and the parent block.
+        :arg stmt_info:  the expression that needs to be split. This is given as
+                         a tuple of two elements: the former is the expression
+                         root node; the latter includes info about the expression,
+                         particularly iteration variables of the enclosing loops,
+                         the enclosing loops themselves, and the parent block.
         :arg copy_loops: true if the split expressions should be placed in two
                          separate, adjacent loop nests (iterating, of course,
                          along the same iteration space); false, otherwise."""
 
-        split_exprs = {}
-        splittable_expr = expr
-        while splittable_expr:
-            split_expr, splittable_expr = self._sum_fission(splittable_expr,
-                                                            copy_loops)
-            split_exprs[split_expr[0]] = split_expr[1]
-        return split_exprs
+        split_stmts = {}
+        splittable_stmt = stmt_info
+        while splittable_stmt:
+            split_stmt, splittable_stmt = self._sum_fission(splittable_stmt, copy_loops)
+            split_stmts[split_stmt[0]] = split_stmt[1]
+        return split_stmts
 
 
 class ZeroLoopScheduler(LoopScheduler):

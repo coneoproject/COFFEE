@@ -38,16 +38,16 @@ from copy import deepcopy as dcopy
 from collections import defaultdict
 
 from base import *
-from utils import ast_update_ofs, itspace_merge
+from utils import ast_update_ofs, itspace_merge, inner_loops
 import plan as ap
 
 
-class ExpressionVectorizer(object):
+class LoopVectorizer(object):
 
     """ Expression vectorizer class."""
 
-    def __init__(self, expr_opt, intrinsics, compiler):
-        self.expr_opt = expr_opt
+    def __init__(self, loop_opt, intrinsics, compiler):
+        self.loop_opt = loop_opt
         self.intr = intrinsics
         self.comp = compiler
         self.padded = []
@@ -68,7 +68,7 @@ class ExpressionVectorizer(object):
         pragmas to inner loops to inform the backend compiler about this
         property."""
 
-        iloops = inner_loops(self.expr_opt.header)
+        iloops = inner_loops(self.loop_opt.header)
         adjusted_loops = []
         # 1) Bound adjustment
         # Bound adjustment consists of modifying the start point and the
@@ -143,7 +143,7 @@ class ExpressionVectorizer(object):
                 l.pragma.append(self.comp["decl_aligned_for"])
 
         # 3) Padding
-        used_syms = [s.symbol for s in self.expr_opt.sym]
+        used_syms = [s.symbol for s in self.loop_opt.sym]
         acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
         for d, s in acc_decls:
             if d.sym.rank:
@@ -165,20 +165,23 @@ class ExpressionVectorizer(object):
           unroll-and-jam factor. Note that factor is just a suggestion to the
           compiler, which can freely decide to use a higher or lower value."""
 
-        if not self.expr_opt.asm_expr:
+        if not self.loop_opt.asm_expr:
             return
 
-        for stmt, stmt_info in self.expr_opt.asm_expr.items():
+        for stmt, expr_info in self.loop_opt.asm_expr.items():
             # First, find outer product loops in the nest
-            it_vars, parent, loops = stmt_info
+            parent = expr_info.parent
+            loops = expr_info.fast_loops
 
             # Check if outer-product vectorization is actually doable
             vect_len = self.intr["dp_reg"]
             rows = loops[0].size()
             if rows < vect_len:
                 continue
+            if len(loops) != 2:
+                continue
 
-            op = OuterProduct(stmt, loops, self.intr, self.expr_opt)
+            op = OuterProduct(stmt, loops, self.intr, self.loop_opt)
 
             # Vectorisation
             unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
@@ -213,7 +216,7 @@ class ExpressionVectorizer(object):
                 loop_peel[0].incr.children[1] = c_sym(1)
                 loop_peel[1].incr.children[1] = c_sym(1)
                 # Append peeling loop after the main loop
-                self.expr_opt.root.children.append(loop_peel[0])
+                self.loop_opt.root.children.append(loop_peel[0])
 
             # Insert the vectorized code at the right point in the loop nest
             blk = parent.children
@@ -222,7 +225,7 @@ class ExpressionVectorizer(object):
 
             # Append the layout code after the loop nest
             if layout:
-                parent = self.expr_opt.header.children.append(layout)
+                parent = self.loop_opt.header.children.append(layout)
 
 
 class OuterProduct():
@@ -516,22 +519,3 @@ def vect_rounddown(x):
     """Return x rounded down to the vector length. """
     word_len = ap.intrinsics.get("dp_reg") or 1
     return x - (x % word_len)
-
-
-def inner_loops(node):
-    """Find inner loops in the subtree rooted in node."""
-
-    def find_iloops(node, loops):
-        if isinstance(node, Perfect):
-            return False
-        elif isinstance(node, (Block, Root)):
-            return any([find_iloops(s, loops) for s in node.children])
-        elif isinstance(node, For):
-            found = find_iloops(node.children[0], loops)
-            if not found:
-                loops.append(node)
-            return True
-
-    loops = []
-    find_iloops(node, loops)
-    return loops
