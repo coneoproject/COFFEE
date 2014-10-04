@@ -315,8 +315,8 @@ class ASTKernel(object):
 
             if tunable:
                 # Determine the fastest kernel implementation
-                autotuner = Autotuner(variants, loop_opts[0].asm_itspace, self.include_dirs,
-                                      compiler, intrinsics, blas_interface)
+                autotuner = Autotuner(variants, self.include_dirs, compiler,
+                                      intrinsics, blas_interface)
                 fastest = autotuner.tune(resolution)
                 all_params = autotune_configs + autotune_configs_uf
                 name, params = all_params[fastest][0], all_params[fastest][1:]

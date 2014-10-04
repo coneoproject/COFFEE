@@ -67,8 +67,6 @@ class LoopOptimizer(object):
         self.nz_in_fors = {}
         # Integration loop (if any)
         self.int_loop = None
-        # Fully parallel iteration space in the assembly loop nest
-        self.asm_itspace = []
         # Expression graph tracking data dependencies
         self.expr_graph = ExpressionGraph()
         # Dictionary contaning various information about hoisted expressions
@@ -344,10 +342,6 @@ class LoopOptimizer(object):
                     if opts[2] == "integration":
                         # Found integration loop
                         self.int_loop = node
-                        return
-                    if opts[2] == "itspace":
-                        # Found high-level optimisation
-                        self.asm_itspace.append((node, parent))
                         return
                     delim = opts[2].find('(')
                     opt_name = opts[2][:delim].replace(" ", "")
