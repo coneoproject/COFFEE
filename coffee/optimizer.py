@@ -354,10 +354,6 @@ class LoopOptimizer(object):
                         fast_fors = tuple([l for l in fors if l.it_var() in it_vars])
                         slow_fors = tuple([l for l in fors if l.it_var() not in it_vars])
                         return MetaExpr(parent, (fast_fors, slow_fors))
-                    else:
-                        raise RuntimeError("Unrecognised opt %s - skipping it", opt_name)
-                else:
-                    raise RuntimeError("Unrecognised pragma found '%s'", node.pragma[0])
 
         def inspect(node, parent, fors, decls, symbols, exprs):
             if isinstance(node, (Block, Root)):
