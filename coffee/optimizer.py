@@ -43,6 +43,7 @@ from copy import deepcopy as dcopy
 import networkx as nx
 
 from base import *
+from utils import visit
 from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
 import plan
@@ -52,13 +53,14 @@ class LoopOptimizer(object):
 
     """Loop optimizer class."""
 
-    def __init__(self, loop_nest, header, kernel_decls):
+    def __init__(self, loop, header, kernel_decls):
         """Initialize the LoopOptimizer.
 
-        :arg loop_nest:    root loop node o a loop nest.
+        :arg loop:         root loop node o a loop nest.
         :arg header:       parent of the root loop node
         :arg kernel_decls: list of declarations of the variables that are visible
-                           within ``loop_nest``."""
+                           within ``loop``."""
+        self.loop = loop
         self.header = header
         self.kernel_decls = kernel_decls
         # Track applied optimizations
@@ -66,13 +68,19 @@ class LoopOptimizer(object):
         # Track nonzero regions accessed in the various loops
         self.nz_in_fors = {}
         # Integration loop (if any)
-        self.int_loop = None
+        self.int_loop = loop if "#pragma pyop2 integration" in loop.pragma else None
         # Expression graph tracking data dependencies
         self.expr_graph = ExpressionGraph()
         # Dictionary contaning various information about hoisted expressions
         self.hoisted = OrderedDict()
+
         # Inspect the loop nest and collect info
-        _, self.decls, self.sym, self.asm_expr = self._visit()
+        _, decls, sym, asm_expr = visit(self.loop, self.header)
+        self.decls, self.sym, self.asm_expr = ({}, sym, {})
+        for decl_str, decl in decls.items():
+            self.decls[decl_str] = (decl, plan.LOCAL_VAR)
+        for stmt, expr_info in asm_expr.items():
+            self.asm_expr[stmt] = MetaExpr(*expr_info)
 
     def rewrite(self, level, is_block_sparse):
         """Rewrite a compute-intensive expression found in the loop nest so as to
@@ -297,7 +305,7 @@ class LoopOptimizer(object):
         ``pragma pyop2 itspace``."""
 
         itspace_vrs = set()
-        for node, parent in reversed(self._visit()[0]):
+        for node, parent in reversed(visit(self.loop, self.header)[0]):
             if '#pragma pyop2 itspace' not in node.pragma:
                 continue
             parent = parent.children
@@ -323,73 +331,6 @@ class LoopOptimizer(object):
         """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
         loops that expressions depend on."""
         return [expr_info.loops for expr_info in self.asm_expr.values()]
-
-    def _visit(self):
-        """Explore the loop nest and collect various info like:
-
-        * Loops
-        * Declarations and Symbols
-        * Optimisations requested by the higher layers via pragmas"""
-
-        def check_opts(node, parent, fors):
-            """Check if node is associated with some pragmas. If that is the case,
-            it saves info about the node to speed the transformation process up."""
-            if node.pragma:
-                opts = node.pragma[0].split(" ", 2)
-                if len(opts) < 3:
-                    return
-                if opts[1] == "pyop2":
-                    if opts[2] == "integration":
-                        # Found integration loop
-                        self.int_loop = node
-                        return
-                    delim = opts[2].find('(')
-                    opt_name = opts[2][:delim].replace(" ", "")
-                    opt_par = opts[2][delim:].replace(" ", "")
-                    if opt_name == "assembly":
-                        # Found high-level optimisation
-                        # Store outer product iteration variables, parent, loops
-                        it_vars = [opt_par[1], opt_par[3]]
-                        fors, fors_parents = zip(*fors)
-                        fast_fors = tuple([l for l in fors if l.it_var() in it_vars])
-                        slow_fors = tuple([l for l in fors if l.it_var() not in it_vars])
-                        return MetaExpr(parent, (fast_fors, slow_fors))
-
-        def inspect(node, parent, fors, decls, symbols, exprs):
-            if isinstance(node, (Block, Root)):
-                for n in node.children:
-                    inspect(n, node, fors, decls, symbols, exprs)
-                return (fors, decls, symbols, exprs)
-            elif isinstance(node, For):
-                check_opts(node, parent, fors)
-                fors.append((node, parent))
-                fors, decls, symbols, expres = inspect(node.children[0], node, fors,
-                                                       decls, symbols, exprs)
-                fors.remove((node, parent))
-                return (fors, decls, symbols, exprs)
-            elif isinstance(node, Par):
-                return inspect(node.children[0], node, fors, decls, symbols, exprs)
-            elif isinstance(node, Decl):
-                decls[node.sym.symbol] = (node, plan.LOCAL_VAR)
-                return (fors, decls, symbols, exprs)
-            elif isinstance(node, Symbol):
-                symbols.add(node)
-                return (fors, decls, symbols, exprs)
-            elif isinstance(node, Expr):
-                for child in node.children:
-                    inspect(child, node, fors, decls, symbols, exprs)
-                return (fors, decls, symbols, exprs)
-            elif isinstance(node, Perfect):
-                expr = check_opts(node, parent, fors)
-                if expr:
-                    exprs[node] = expr
-                for child in node.children:
-                    inspect(child, node, fors, decls, symbols, exprs)
-                return (fors, decls, symbols, exprs)
-            else:
-                return (fors, decls, symbols, exprs)
-
-        return inspect(self.header, None, [], {}, set(), {})
 
     def _precompute(self, stmt_info):
         """Precompute all statements out of the loop nest, which implies scalar

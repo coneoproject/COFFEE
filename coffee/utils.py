@@ -118,6 +118,78 @@ def ast_update_ofs(node, ofs):
             ast_update_ofs(n, ofs)
 
 
+###########################################################
+# Functions to visit and to query properties of AST nodes #
+###########################################################
+
+
+
+def visit(node, parent):
+    """Explore the loop nest and collect various info like:
+
+    * Loops;
+    * Declarations and Symbols;
+    * Optimisations requested by the higher layers via pragmas.
+
+    :arg node:   AST root node of the visit
+    :arg parent: parent node of ``node``
+    """
+
+    def check_opts(node, parent, fors):
+        """Check if node is associated with some pragmas. If that is the case,
+        it saves info about the node to speed the transformation process up."""
+        if node.pragma:
+            opts = node.pragma[0].split(" ", 2)
+            if len(opts) < 3:
+                return
+            if opts[1] == "pyop2":
+                if opts[2] == "integration":
+                    return
+                delim = opts[2].find('(')
+                opt_name = opts[2][:delim].replace(" ", "")
+                opt_par = opts[2][delim:].replace(" ", "")
+                if opt_name == "assembly":
+                    # Found high-level optimisation
+                    # Store outer product iteration variables, parent, loops
+                    it_vars = [opt_par[1], opt_par[3]]
+                    fors, fors_parents = zip(*fors)
+                    fast_fors = tuple([l for l in fors if l.it_var() in it_vars])
+                    slow_fors = tuple([l for l in fors if l.it_var() not in it_vars])
+                    return (parent, (fast_fors, slow_fors))
+
+    def inspect(node, parent, fors, decls, symbols, exprs):
+        if isinstance(node, (Block, Root)):
+            for n in node.children:
+                inspect(n, node, fors, decls, symbols, exprs)
+            return (fors, decls, symbols, exprs)
+        elif isinstance(node, For):
+            check_opts(node, parent, fors)
+            fors.append((node, parent))
+            return inspect(node.children[0], node, fors, decls, symbols, exprs)
+        elif isinstance(node, Par):
+            return inspect(node.children[0], node, fors, decls, symbols, exprs)
+        elif isinstance(node, Decl):
+            decls[node.sym.symbol] = node
+            return (fors, decls, symbols, exprs)
+        elif isinstance(node, Symbol):
+            symbols.add(node)
+            return (fors, decls, symbols, exprs)
+        elif isinstance(node, Expr):
+            for child in node.children:
+                inspect(child, node, fors, decls, symbols, exprs)
+            return (fors, decls, symbols, exprs)
+        elif isinstance(node, Perfect):
+            expr = check_opts(node, parent, fors)
+            if expr:
+                exprs[node] = expr
+            for child in node.children:
+                inspect(child, node, fors, decls, symbols, exprs)
+            return (fors, decls, symbols, exprs)
+        else:
+            return (fors, decls, symbols, exprs)
+
+    return inspect(node, parent, [], {}, set(), {})
+
 def inner_loops(node):
     """Find inner loops in the subtree rooted in node."""
 
