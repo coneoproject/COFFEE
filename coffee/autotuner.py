@@ -359,7 +359,8 @@ See %s for more info about the error""" % logfile)
         non_transf_ast = self.variants[0][0]
         fun_decl = non_transf_ast.children[1]
         # Local tensor size
-        lt_rows, lt_cols = fun_decl.args[0].sym.rank
+        tensor_rank = fun_decl.args[0].sym.rank
+        lt_rows, lt_cols = tensor_rank[0], tensor_rank[-1]
         # Coordinates size
         coords_size = self._retrieve_coords_size(str(non_transf_ast))
         # Coefficients size
