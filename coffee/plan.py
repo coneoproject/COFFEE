@@ -35,7 +35,7 @@
 
 from base import *
 from utils import increase_stack, unroll_factors, flatten, bind
-from optimizer import LoopOptimizer
+from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer
 from linear_algebra import LinearAlgebra
 from autotuner import Autotuner
@@ -132,9 +132,9 @@ class ASTKernel(object):
         """
 
         decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-        loop_opts = [LoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
+        loop_opts = [GPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
         for loop_opt in loop_opts:
-            itspace_vrs, accessed_vrs = loop_opt.extract_itspace()
+            itspace_vrs, accessed_vrs = loop_opt.extract()
 
             for v in accessed_vrs:
                 # Change declaration of non-constant iteration space-dependent
@@ -209,7 +209,7 @@ class ASTKernel(object):
                 raise RuntimeError("COFFEE Error: outer-product vectorization needs no permute")
 
             decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-            loop_opts = [LoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
+            loop_opts = [CPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
             for loop_opt in loop_opts:
                 # 1) Expression Rewriting
                 if licm:
