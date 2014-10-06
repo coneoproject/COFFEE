@@ -43,7 +43,7 @@ from copy import deepcopy as dcopy
 import networkx as nx
 
 from base import *
-from utils import visit
+from utils import visit, is_perfect_loop, flatten, ast_update_rank
 from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
 import plan
@@ -129,10 +129,6 @@ class LoopOptimizer(object):
                 lm = PerfectSSALoopMerger(self.expr_graph, self.root)
                 lm.merge()
                 ew.simplify()
-            # Precompute expressions
-            if level == 4:
-                self._precompute(stmt_info)
-                self._is_precomputed = True
 
         # Eliminate zero-valued columns if the kernel operation uses block-sparse
         # arrays (contiguous zero-valued columns are present)
@@ -153,6 +149,11 @@ class LoopOptimizer(object):
             self.asm_expr = zls.reschedule()[-1]
             self.nz_in_fors = zls.nz_in_fors
 
+        # Precompute expressions
+        if level == 4:
+            self._precompute(1)
+            self._is_precomputed = True
+
     @property
     def root(self):
         """Return the root node of the assembly loop nest. It can be either the
@@ -166,9 +167,17 @@ class LoopOptimizer(object):
         loops that expressions depend on."""
         return [expr_info.loops for expr_info in self.asm_expr.values()]
 
-    def _precompute(self, stmt_info):
-        """Precompute all statements out of the loop nest, which implies scalar
-        expansion and code hoisting. This makes the loop nest perfect.
+    @property
+    def expr_fast_loops(self):
+        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
+        loops along which expressions iterate fastest."""
+        return [expr_info.fast_loops for expr_info in self.asm_expr.values()]
+
+    def _precompute(self, mode=0):
+        """Precompute statements out of ``self.loop``, which implies scalar
+        expansion and code hoisting. If ``mode == 0``, all statements in the loop
+        nest rooted in ``self.loop`` are precomputed, which makes it perfect. If
+        ``mode == 1``, loops due to code hoisting are excluded from precomputation.
 
         For example: ::
 
@@ -191,14 +200,6 @@ class LoopOptimizer(object):
 
         """
 
-        def update_syms(node, precomputed):
-            if isinstance(node, Symbol):
-                if node.symbol in precomputed:
-                    node.rank = precomputed[node.symbol] + node.rank
-            else:
-                for n in node.children:
-                    update_syms(n, precomputed)
-
         def precompute_stmt(node, precomputed, new_outer_block):
             """Recursively precompute, and vector-expand if already precomputed,
             all terms rooted in node."""
@@ -207,14 +208,17 @@ class LoopOptimizer(object):
                 # Vector-expand the symbol if already pre-computed
                 if node.symbol in precomputed:
                     node.rank = precomputed[node.symbol] + node.rank
+            elif isinstance(node, FlatBlock):
+                # Do nothing
+                new_outer_block.append(node)
             elif isinstance(node, Expr):
                 for n in node.children:
                     precompute_stmt(n, precomputed, new_outer_block)
             elif isinstance(node, (Assign, Incr)):
                 # Precompute the LHS of the assignment
                 symbol = node.children[0]
-                precomputed[symbol.symbol] = (self.int_loop.it_var(),)
-                new_rank = (self.int_loop.it_var(),) + symbol.rank
+                precomputed[symbol.symbol] = (self.loop.it_var(),)
+                new_rank = (self.loop.it_var(),) + symbol.rank
                 symbol.rank = new_rank
                 # Vector-expand the RHS
                 precompute_stmt(node.children[1], precomputed, new_outer_block)
@@ -229,7 +233,7 @@ class LoopOptimizer(object):
                     precompute_stmt(new_assign, precomputed, new_outer_block)
                     node.init = EmptyStatement()
                 # Vector-expand the declaration of the precomputed symbol
-                node.sym.rank = (self.int_loop.size(),) + node.sym.rank
+                node.sym.rank = (self.loop.size(),) + node.sym.rank
             elif isinstance(node, For):
                 # Precompute and/or Vector-expand inner statements
                 new_children = []
@@ -238,56 +242,60 @@ class LoopOptimizer(object):
                 node.children[0].children = new_children
                 new_outer_block.append(node)
             else:
-                raise RuntimeError("Precompute error: found unexpteced node: %s" % str(node))
+                raise RuntimeError("Precompute error: unexpteced node: %s" % str(node))
 
-        # The integration loop must be present for precomputation to be meaningful
-        if not self.int_loop:
+        def create_prec_for(stmts):
+            """Create a for loop having the same iteration space as  ``self.loop``
+            enclosing the statements in  ``stmts``."""
+            wrap = Block(stmts, open_scope=True)
+            precompute_for = For(dcopy(self.loop.init), dcopy(self.loop.cond),
+                                 dcopy(self.loop.incr), wrap, dcopy(self.loop.pragma))
+            return precompute_for
+
+        # Check if the outermost loop is not perfect, in which case precomputation
+        # is triggered
+        if is_perfect_loop(self.loop):
             return
 
-        stmt, expr_info = stmt_info
-        asm_outer_loop = expr_info.fast_loops[0]
-
         # Precomputation
-        precomputed_block = []
-        precomputed_syms = {}
-        for i in self.int_loop.children[0].children:
-            if i == asm_outer_loop:
+        no_prec = set()
+        if mode == 1:
+            no_prec = set([l[1] for l in self.hoisted.values() if l[2]])
+            no_prec = no_prec.union([l[2] for l in self.hoisted.values() if l[2]])
+        to_remove, precomputed_block, precomputed_syms = ([], [], {})
+        for i in self.loop.children[0].children:
+            if i in flatten(self.expr_fast_loops):
                 break
-            elif isinstance(i, FlatBlock):
-                continue
-            else:
+            elif i not in no_prec:
                 precompute_stmt(i, precomputed_syms, precomputed_block)
+                to_remove.append(i)
+        # Remove precomputed statements
+        for i in to_remove:
+            self.loop.children[0].children.remove(i)
 
         # Wrap hoisted for/assignments/increments within a loop
         new_outer_block = []
         searching_stmt = []
         for i in precomputed_block:
             if searching_stmt and not isinstance(i, (Assign, Incr)):
-                wrap = Block(searching_stmt, open_scope=True)
-                precompute_for = For(dcopy(self.int_loop.init), dcopy(self.int_loop.cond),
-                                     dcopy(self.int_loop.incr), wrap, dcopy(self.int_loop.pragma))
-                new_outer_block.append(precompute_for)
+                new_outer_block.append(create_prec_for(searching_stmt))
                 searching_stmt = []
             if isinstance(i, For):
-                wrap = Block([i], open_scope=True)
-                precompute_for = For(dcopy(self.int_loop.init), dcopy(self.int_loop.cond),
-                                     dcopy(self.int_loop.incr), wrap, dcopy(self.int_loop.pragma))
-                new_outer_block.append(precompute_for)
+                new_outer_block.append(create_prec_for([i]))
             elif isinstance(i, (Assign, Incr)):
                 searching_stmt.append(i)
             else:
                 new_outer_block.append(i)
-
-        # Delete precomputed stmts from original loop nest
-        self.int_loop.children[0].children = [asm_outer_loop]
+        if searching_stmt:
+            new_outer_block.append(create_prec_for(searching_stmt))
 
         # Update the AST adding the newly precomputed blocks
         root = self.header.children
-        ofs = root.index(self.int_loop)
+        ofs = root.index(self.loop)
         self.header.children = root[:ofs] + new_outer_block + root[ofs:]
 
-        # Update the AST by vector-expanding the pre-computed accessed variables
-        update_syms(stmt.children[1], precomputed_syms)
+        # Update the AST by scalar-expanding the pre-computed accessed variables
+        ast_update_rank(self.loop, precomputed_syms)
 
 
 class CPULoopOptimizer(LoopOptimizer):
@@ -359,7 +367,8 @@ class CPULoopOptimizer(LoopOptimizer):
                 for n in node.children:
                     transpose_layout(n, transposed, to_transpose)
 
-        if not self.int_loop or not self._is_precomputed:
+        # Check if the outermost loop is perfect, otherwise avoid permutation
+        if not is_perfect_loop(self.loop):
             return
 
         new_asm_expr = {}
@@ -698,14 +707,16 @@ class ExpressionRewriter(object):
             if wl:
                 new_for = [dcopy(wl)]
                 new_for[0].children[0] = Block(inv_for, open_scope=True)
-                inv_for = new_for
+                inv_for = inv_code = new_for
+            else:
+                inv_code = [None]
             # Append the new node at the right level in the loop nest
             new_block = var_decl + inv_for + [FlatBlock("\n")] + place.children[ofs():]
             place.children = place.children[:ofs()] + new_block
             # Update information about hoisted symbols
             for i in var_decl:
                 old_sym_info = self.hoisted[i.sym.symbol]
-                old_sym_info = old_sym_info[0:2] + (inv_for[0],) + (place.children,)
+                old_sym_info = old_sym_info[0:2] + (inv_code[0],) + (place.children,)
                 self.hoisted[i.sym.symbol] = old_sym_info
 
     def count_occurrences(self, str_key=False):

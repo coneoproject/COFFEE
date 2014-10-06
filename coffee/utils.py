@@ -118,10 +118,23 @@ def ast_update_ofs(node, ofs):
             ast_update_ofs(n, ofs)
 
 
+def ast_update_rank(node, new_rank):
+    """Given a dictionary ``new_rank`` s.t. ``{'sym': new_dim}``, update the
+    ranks of the symbols rooted in ``node`` by adding them the dimension
+    ``new_dim``."""
+    if isinstance(node, FlatBlock):
+        return
+    elif isinstance(node, Symbol):
+        if node.symbol in new_rank:
+            node.rank = new_rank[node.symbol] + node.rank
+    else:
+        for n in node.children:
+            ast_update_rank(n, new_rank)
+
+
 ###########################################################
 # Functions to visit and to query properties of AST nodes #
 ###########################################################
-
 
 
 def visit(node, parent):
@@ -189,6 +202,7 @@ def visit(node, parent):
             return (fors, decls, symbols, exprs)
 
     return inspect(node, parent, [], {}, set(), {})
+
 
 def inner_loops(node):
     """Find inner loops in the subtree rooted in node."""

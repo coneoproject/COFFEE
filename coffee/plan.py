@@ -240,7 +240,7 @@ class ASTKernel(object):
                             self.ap = True
                     if v_type and v_type != AUTOVECT:
                         if intrinsics['inst_set'] == 'SSE':
-                            raise RuntimeError("COFFEE Error: SSE vectorization not supported")
+                            raise RuntimeError("SSE vectorization not supported")
                         # Outer-product vectorization
                         vect.outer_product(v_type, v_param)
 
@@ -261,7 +261,7 @@ class ASTKernel(object):
 
         if opts.get('autotune'):
             if not (compiler and intrinsics):
-                raise RuntimeError("COFFEE Error: must properly initialize COFFEE for autotuning")
+                raise RuntimeError("Must initialize COFFEE prior to autotuning")
             # Set granularity of autotuning
             resolution = autotune_resolution
             unroll_ths = autotune_unroll_ths

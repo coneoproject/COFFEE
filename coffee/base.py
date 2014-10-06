@@ -358,7 +358,7 @@ class EmptyStatement(Statement, Perfect):
         return ""
 
 
-class FlatBlock(Statement):
+class FlatBlock(Statement, Perfect):
     """Treat a chunk of code as a single statement, i.e. a C string"""
 
     def __init__(self, code, pragma=None):
