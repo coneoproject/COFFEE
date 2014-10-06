@@ -174,7 +174,7 @@ class ASTKernel(object):
         autotune_resolution = 100000000
         # Kernel variants tested when autotuning is enabled
         autotune_minimal = [('licm', 1, (None, None), True, None, False, None, False),
-                            ('split', 3, (None, None), True, 1, False, None, False),
+                            ('split', 2, (None, None), True, 1, False, None, False),
                             ('vect', 2, (V_OP_UAJ, 1), True, None, False, None, False)]
         autotune_all = [('base', 0, (None, None), False, None, False, None, False),
                         ('base', 1, (None, None), True, None, False, None, False),
