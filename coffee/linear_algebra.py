@@ -124,8 +124,7 @@ class LinearAlgebra(object):
         found_mmm = False
 
         # 1) Split potential MMM into different perfect loop nests
-        to_remove, to_transpose = ([], [])
-        to_transform = OrderedDict()
+        to_transform, to_transpose = (OrderedDict(), [])
         for middle_loop in outer_loop.children[0].children:
             if not isinstance(middle_loop, For):
                 continue
@@ -158,7 +157,6 @@ class LinearAlgebra(object):
             if found:
                 new_outer = dcopy(outer_loop)
                 new_outer.children[0].children = [middle_loop]
-                to_remove.append(middle_loop)
                 self.header.children.insert(ofs, new_outer)
                 loop_itvars = (outer_loop.it_var(), middle_loop.it_var(), inner_loop[0].it_var())
                 loop_sizes = (outer_loop.size(), middle_loop.size(), inner_loop[0].size())
@@ -166,10 +164,7 @@ class LinearAlgebra(object):
                 to_transform[new_outer] = (body[0].children[0], rhs, loop_info)
                 found_mmm = True
         # Clean up
-        for l in to_remove:
-            outer_loop.children[0].children.remove(l)
-        if not outer_loop.children[0].children:
-            self.header.children.remove(outer_loop)
+        self.header.children.remove(outer_loop)
 
         # 2) Delegate to external library
         if library in ['atlas', 'mkl']:
