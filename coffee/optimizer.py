@@ -76,7 +76,7 @@ class LoopOptimizer(object):
 
         # Inspect the loop nest and collect info
         info = visit(self.loop, self.header)
-        self.decls, self.sym, self.asm_expr = ({}, info['symbols'], {})
+        self.decls, self.asm_expr = ({}, {})
         for decl_str, decl in info['decls'].items():
             self.decls[decl_str] = (decl, plan.LOCAL_VAR)
         for stmt, expr_info in info['exprs'].items():
@@ -114,10 +114,10 @@ class LoopOptimizer(object):
         if not self.asm_expr:
             return
 
-        parent = (self.header, self.kernel_decls)
+        kernel_info = (self.root, self.kernel_decls)
         for stmt_info in self.asm_expr.items():
-            ew = ExpressionRewriter(stmt_info, self.int_loop, self.sym, self.decls,
-                                    parent, self.hoisted, self.expr_graph)
+            ew = ExpressionRewriter(stmt_info, self.decls, kernel_info,
+                                    self.hoisted, self.expr_graph)
             # Perform expression rewriting
             if level > 0:
                 ew.licm()
@@ -443,8 +443,12 @@ class GPULoopOptimizer(LoopOptimizer):
         analysis is performed; rather, these are the loops that are marked with
         ``pragma pyop2 itspace``."""
 
+        info = visit(self.loop, self.header)
+        fors = info['fors']
+        syms = info['symbols']
+
         itspace_vrs = set()
-        for node, parent in reversed(visit(self.loop, self.header)['fors']):
+        for node, parent in reversed(fors):
             if '#pragma pyop2 itspace' not in node.pragma:
                 continue
             parent = parent.children
@@ -454,7 +458,7 @@ class GPULoopOptimizer(LoopOptimizer):
             itspace_vrs.add(node.it_var())
 
         from utils import any_in
-        accessed_vrs = [s for s in self.sym if any_in(s.rank, itspace_vrs)]
+        accessed_vrs = [s for s in syms if any_in(s.rank, itspace_vrs)]
 
         return (itspace_vrs, accessed_vrs)
 
@@ -467,26 +471,21 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt_info, int_loop, syms, decls, parent, hoisted, expr_graph):
+    def __init__(self, stmt_info, decls, kernel_info, hoisted, expr_graph):
         """Initialize the ExpressionRewriter.
 
-        :arg stmt_info:  an AST node statement containing an expression and meta
-                         information (MetaExpr) related to the expression itself.
-                         including the iteration space it depends on.
-        :arg int_loop:   the loop along which integration is performed.
-        :arg syms:       list of AST symbols used to evaluate the local element
-                         matrix.
-        :arg decls:      list of AST declarations of the various symbols in ``syms``.
-        :arg parent:     the parent AST node of the loop nest sorrounding the
-                         expression.
-        :arg hoisted:    dictionary that tracks hoisted expressions
-        :arg expr_graph: expression graph that tracks symbol dependencies
+        :arg stmt_info:   an AST node statement containing an expression and meta
+                          information (MetaExpr) related to the expression itself.
+                          including the iteration space it depends on.
+        :arg decls:       list of AST declarations of the various symbols in ``syms``.
+        :arg kernel_info: contains information about the AST nodes sorrounding the
+                          expression.
+        :arg hoisted:     dictionary that tracks hoisted expressions
+        :arg expr_graph:  expression graph that tracks symbol dependencies
         """
         self.stmt, self.expr_info = stmt_info
-        self.int_loop = int_loop
-        self.syms = syms
         self.decls = decls
-        self.parent, self.parent_decls = parent
+        self.header, self.kernel_decls = kernel_info
         self.hoisted = hoisted
         self.expr_graph = expr_graph
 
@@ -619,7 +618,7 @@ class ExpressionRewriter(object):
         # Extract read-only sub-expressions that do not depend on at least
         # one loop in the loop nest
         inv_dep = {}
-        typ = self.parent_decls[self.stmt.children[0].symbol][0].typ
+        typ = self.kernel_decls[self.stmt.children[0].symbol][0].typ
         while True:
             expr_dep = defaultdict(list)
             extract(self.stmt.children[1], expr_dep)
@@ -633,7 +632,7 @@ class ExpressionRewriter(object):
             for dep, expr in sorted(expr_dep.items()):
                 # 0) Determine the loops that should wrap invariant statements
                 # and where such loops should be placed in the loop nest
-                place = self.int_loop.children[0] if self.int_loop else self.parent
+                place = self.header
                 out_asm_loop, in_asm_loop = self.expr_info.fast_loops
                 ofs = lambda: place.children.index(out_asm_loop)
                 if dep and out_asm_loop.it_var() == dep[-1]:
@@ -658,11 +657,9 @@ class ExpressionRewriter(object):
                 _expr = [Par(e) if not isinstance(e, Par) else e for e in expr]
                 inv_for = [Assign(_s, e) for _s, e in zip(for_sym, _expr)]
 
-                # 4) Update the lists of symbols accessed and of decls
-                self.syms.update([d.sym for d in var_decl])
-                lv = plan.LOCAL_VAR
+                # 4) Update the lists of decls
                 self.decls.update(dict(zip([d.sym.symbol for d in var_decl],
-                                           [(v, lv) for v in var_decl])))
+                                           [(v, plan.LOCAL_VAR) for v in var_decl])))
 
                 # 5) Replace invariant sub-trees with the proper tmp variable
                 n_replaced = dict(zip([str(s) for s in for_sym], [0]*len(for_sym)))
@@ -753,10 +750,9 @@ class ExpressionRewriter(object):
                 it_var_occs[s[1][0]] += 1
 
         exp_var = asm_out if it_var_occs[asm_out] < it_var_occs[asm_in] else asm_in
-        ee = ExpressionExpander(self.hoisted, self.expr_graph, self.parent)
+        ee = ExpressionExpander(self.hoisted, self.expr_graph)
         ee.expand(self.stmt.children[1], self.stmt, it_var_occs, exp_var)
         self.decls.update(ee.expanded_decls)
-        self.syms.update(ee.expanded_syms)
         self._expanded = True
 
     def distribute(self):
@@ -868,10 +864,9 @@ class ExpressionExpander(object):
     CONST = -1
     ITVAR = -2
 
-    def __init__(self, var_info, expr_graph, expr):
+    def __init__(self, var_info, expr_graph):
         self.var_info = var_info
         self.expr_graph = expr_graph
-        self.parent = expr
         self.expanded_decls = {}
         self.found_consts = {}
         self.expanded_syms = []

@@ -38,7 +38,7 @@ from copy import deepcopy as dcopy
 from collections import defaultdict
 
 from base import *
-from utils import ast_update_ofs, itspace_merge, inner_loops
+from utils import ast_update_ofs, itspace_merge, inner_loops, visit
 import plan as ap
 
 
@@ -143,7 +143,8 @@ class LoopVectorizer(object):
                 l.pragma.append(self.comp["decl_aligned_for"])
 
         # 3) Padding
-        used_syms = [s.symbol for s in self.loop_opt.sym]
+        symbols = visit(self.loop_opt.loop, self.loop_opt.header)['symbols']
+        used_syms = [s.symbol for s in symbols]
         acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
         for d, s in acc_decls:
             if d.sym.rank:
