@@ -194,19 +194,19 @@ class ASTKernel(object):
 
             # Combining certain optimizations is meaningless/forbidden.
             if unroll and blas:
-                raise RuntimeError("COFFEE Error: cannot unroll and then convert to BLAS")
+                raise RuntimeError("Cannot unroll and then convert to BLAS")
             if permute and blas:
-                raise RuntimeError("COFFEE Error: cannot permute and then convert to BLAS")
+                raise RuntimeError("Cannot permute and then convert to BLAS")
             if permute and licm != 4:
-                raise RuntimeError("COFFEE Error: cannot permute without full expression rewriter")
+                raise RuntimeError("Cannot permute without full expression rewriter")
             if licm == 3 and split:
-                raise RuntimeError("COFFEE Error: split is forbidden when avoiding zero-columns")
+                raise RuntimeError("Split forbidden when avoiding zero-columns")
             if licm == 3 and v_type and v_type != AUTOVECT:
-                raise RuntimeError("COFFEE Error: zeros removal only supports auto-vectorization")
+                raise RuntimeError("Zeros removal only supports auto-vectorization")
             if unroll and v_type and v_type != AUTOVECT:
-                raise RuntimeError("COFFEE Error: outer-product vectorization needs no unroll")
+                raise RuntimeError("Outer-product vectorization needs no unroll")
             if permute and v_type and v_type != AUTOVECT:
-                raise RuntimeError("COFFEE Error: outer-product vectorization needs no permute")
+                raise RuntimeError("Outer-product vectorization needs no permute")
 
             decls, fors = self._visit_ast(self.ast, fors=[], decls={})
             loop_opts = [CPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
