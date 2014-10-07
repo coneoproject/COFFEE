@@ -243,7 +243,7 @@ class ASTKernel(object):
 
                 # 3) Permute outer loop
                 if permute:
-                    loop_opt.permute()
+                    loop_opt.permute(True)
 
                 # 3) Unroll/Unroll-and-jam
                 if unroll:

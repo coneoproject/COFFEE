@@ -43,7 +43,8 @@ from copy import deepcopy as dcopy
 import networkx as nx
 
 from base import *
-from utils import visit, is_perfect_loop, flatten, ast_update_rank
+from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
+from utils import set_itspace
 from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
 import plan
@@ -336,7 +337,7 @@ class CPULoopOptimizer(LoopOptimizer):
                     unrolled_loops.add(loop)
             self.asm_expr.update(new_asm_expr)
 
-    def permute(self):
+    def permute(self, transpose=False):
         """Permute the outermost loop with the innermost loop in the loop nest.
         This transformation is legal if ``_precompute`` was invoked. Storage layout of
         all 2-dimensional arrays involved in the element matrix computation is
@@ -368,39 +369,17 @@ class CPULoopOptimizer(LoopOptimizer):
         if not is_perfect_loop(self.loop):
             return
 
-        new_asm_expr = {}
-        new_outer_loop = None
-        new_inner_loops = []
-        permuted = set()
-        transposed = set()
-        for stmt, stmt_info in self.asm_expr.items():
-            it_vars, parent, loops = stmt_info
-            inner_loop = loops[-1]
-            # Permute loops
-            if inner_loop in permuted:
-                continue
-            else:
-                permuted.add(inner_loop)
-            new_outer_loop = new_outer_loop or dcopy(inner_loop)
-            inner_loop.init = dcopy(self.int_loop.init)
-            inner_loop.cond = dcopy(self.int_loop.cond)
-            inner_loop.incr = dcopy(self.int_loop.incr)
-            inner_loop.pragma = dcopy(self.int_loop.pragma)
-            new_asm_loops = (new_outer_loop,) if len(loops) == 1 else \
-                (new_outer_loop, loops[0])
-            new_asm_expr[stmt] = (it_vars, parent, new_asm_loops)
-            new_inner_loops.append(new_asm_loops[-1])
-            new_outer_loop.children[0].children = new_inner_loops
-            # Track symbols whose storage layout should be transposed for unit-stridness
-            transpose_layout(stmt.children[1], transposed, set())
-        blk = self.header.children
-        blk.insert(blk.index(self.int_loop), new_outer_loop)
-        blk.remove(self.int_loop)
-        # Update expressions and integration loop
-        self.asm_expr = new_asm_expr
-        self.int_loop = inner_loop
-        # Transpose the storage layout of all symbols involved
-        transpose_layout(self.header, set(), transposed)
+        # Get the innermost loop and swap it with the outermost
+        inner_loop = inner_loops(self.loop)[0]
+
+        tmp = dcopy(inner_loop)
+        set_itspace(inner_loop, self.loop)
+        set_itspace(self.loop, tmp)
+
+        to_transpose = set()
+        if transpose:
+            transpose_layout(inner_loop, to_transpose, set())
+            transpose_layout(self.header, set(), to_transpose)
 
     def split(self, cut=1):
         """Split expressions into multiple chunks exploiting sum's associativity.

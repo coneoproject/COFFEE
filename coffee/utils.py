@@ -42,6 +42,7 @@ except ImportError:
 import resource
 import operator
 from warnings import warn as warning
+from copy import deepcopy as dcopy
 
 from base import *
 
@@ -296,3 +297,12 @@ def itspace_merge(itspaces):
 any_in = lambda a, b: any(i in b for i in a)
 flatten = lambda list: [i for l in list for i in l]
 bind = lambda a, b: [(a, v) for v in b]
+
+
+def set_itspace(loop_a, loop_b):
+    """Copy the iteration space of ``loop_b`` into ``loop_a``, while preserving
+    the body."""
+    loop_a.init = dcopy(loop_b.init)
+    loop_a.cond = dcopy(loop_b.cond)
+    loop_a.incr = dcopy(loop_b.incr)
+    loop_a.pragma = dcopy(loop_b.pragma)
