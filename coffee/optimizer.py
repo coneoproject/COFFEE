@@ -149,31 +149,7 @@ class LoopOptimizer(object):
             self.asm_expr = zls.reschedule()[-1]
             self.nz_in_fors = zls.nz_in_fors
 
-        # Precompute expressions
-        if level == 4:
-            self._precompute(1)
-            self._is_precomputed = True
-
-    @property
-    def root(self):
-        """Return the root node of the assembly loop nest. It can be either the
-        loop over quadrature points or, if absent, a generic point in the
-        assembly routine."""
-        return self.int_loop.children[0] if self.int_loop else self.header
-
-    @property
-    def expr_loops(self):
-        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
-        loops that expressions depend on."""
-        return [expr_info.loops for expr_info in self.asm_expr.values()]
-
-    @property
-    def expr_fast_loops(self):
-        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
-        loops along which expressions iterate fastest."""
-        return [expr_info.fast_loops for expr_info in self.asm_expr.values()]
-
-    def _precompute(self, mode=0):
+    def precompute(self, mode=0):
         """Precompute statements out of ``self.loop``, which implies scalar
         expansion and code hoisting. If ``mode == 0``, all statements in the loop
         nest rooted in ``self.loop`` are precomputed, which makes it perfect. If
@@ -296,6 +272,27 @@ class LoopOptimizer(object):
 
         # Update the AST by scalar-expanding the pre-computed accessed variables
         ast_update_rank(self.loop, precomputed_syms)
+
+        self._is_precomputed = True
+
+    @property
+    def root(self):
+        """Return the root node of the assembly loop nest. It can be either the
+        loop over quadrature points or, if absent, a generic point in the
+        assembly routine."""
+        return self.int_loop.children[0] if self.int_loop else self.header
+
+    @property
+    def expr_loops(self):
+        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
+        loops that expressions depend on."""
+        return [expr_info.loops for expr_info in self.asm_expr.values()]
+
+    @property
+    def expr_fast_loops(self):
+        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
+        loops along which expressions iterate fastest."""
+        return [expr_info.fast_loops for expr_info in self.asm_expr.values()]
 
 
 class CPULoopOptimizer(LoopOptimizer):

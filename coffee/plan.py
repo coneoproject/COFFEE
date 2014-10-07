@@ -172,36 +172,53 @@ class ASTKernel(object):
         autotune_unroll_ths = 10
         # The higher, the more precise and costly is autotuning
         autotune_resolution = 100000000
+        # Kernel variant when blas transformation is selected
+        blas_config = {'rewrite': 2, 'align_pad': True, 'split': 1, 'precompute': 2}
         # Kernel variants tested when autotuning is enabled
-        autotune_minimal = [('licm', 1, (None, None), True, None, False, None, False),
-                            ('split', 2, (None, None), True, 1, False, None, False),
-                            ('vect', 2, (V_OP_UAJ, 1), True, None, False, None, False)]
-        autotune_all = [('base', 0, (None, None), False, None, False, None, False),
-                        ('base', 1, (None, None), True, None, False, None, False),
-                        ('licm', 2, (None, None), True, None, False, None, False),
-                        ('licm', 3, (None, None), True, None, False, None, False),
-                        ('split', 2, (None, None), True, 1, False, None, False),
-                        ('split', 2, (None, None), True, 2, False, None, False),
-                        ('split', 2, (None, None), True, 4, False, None, False),
-                        ('vect', 2, (V_OP_UAJ, 1), True, None, False, None, False),
-                        ('vect', 2, (V_OP_UAJ, 2), True, None, False, None, False),
-                        ('vect', 2, (V_OP_UAJ, 3), True, None, False, None, False)]
+        autotune_min = [('rewrite', {'rewrite': 1, 'align_pad': True}),
+                        ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
+                        ('vect', {'rewrite': 2, 'align_pad': True,
+                                  'vectorize': (V_OP_UAJ, 1)})]
+        autotune_all = [('base', {}),
+                        ('base', {'rewrite': 1, 'align_pad': True}),
+                        ('rewrite', {'rewrite': 2, 'align_pad': True}),
+                        ('rewrite', {'rewrite': 2, 'align_pad': True,
+                                     'precompute': True}),
+                        ('rewrite', {'rewrite': 3, 'align_pad': True}),
+                        ('rewrite', {'rewrite': 3, 'align_pad': True,
+                                     'precompute': True}),
+                        ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
+                        ('split', {'rewrite': 2, 'align_pad': True, 'split': 4}),
+                        ('vect', {'rewrite': 2, 'align_pad': True,
+                                  'vectorize': (V_OP_UAJ, 1)}),
+                        ('vect', {'rewrite': 2, 'align_pad': True,
+                                  'vectorize': (V_OP_UAJ, 2)}),
+                        ('vect', {'rewrite': 2, 'align_pad': True,
+                                  'vectorize': (V_OP_UAJ, 3)})]
 
-        def _generate_cpu_code(self, licm, vect, ap, split, blas, unroll, permute):
+        def _generate_cpu_code(self, **kwargs):
             """Generate kernel code according to the various optimization options."""
 
-            v_type, v_param = vect
+            rewrite = kwargs.get('rewrite')
+            vectorize = kwargs.get('vectorize')
+            v_type, v_param = vectorize if vectorize else (None, None)
+            ap = kwargs.get('align_pad')
+            split = kwargs.get('split')
+            blas = kwargs.get('blas')
+            unroll = kwargs.get('unroll')
+            permute = kwargs.get('permute')
+            precompute = kwargs.get('precompute')
 
             # Combining certain optimizations is meaningless/forbidden.
             if unroll and blas:
                 raise RuntimeError("Cannot unroll and then convert to BLAS")
             if permute and blas:
                 raise RuntimeError("Cannot permute and then convert to BLAS")
-            if permute and licm != 4:
-                raise RuntimeError("Cannot permute without full expression rewriter")
-            if licm == 3 and split:
+            if permute and not precompute:
+                raise RuntimeError("Cannot permute without precomputation")
+            if rewrite == 3 and split:
                 raise RuntimeError("Split forbidden when avoiding zero-columns")
-            if licm == 3 and v_type and v_type != AUTOVECT:
+            if rewrite == 3 and v_type and v_type != AUTOVECT:
                 raise RuntimeError("Zeros removal only supports auto-vectorization")
             if unroll and v_type and v_type != AUTOVECT:
                 raise RuntimeError("Outer-product vectorization needs no unroll")
@@ -212,15 +229,19 @@ class ASTKernel(object):
             loop_opts = [CPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
             for loop_opt in loop_opts:
                 # 1) Expression Rewriting
-                if licm:
-                    loop_opt.rewrite(licm, self._is_block_sparse)
+                if rewrite:
+                    loop_opt.rewrite(rewrite, self._is_block_sparse)
                     decls.update(loop_opt.decls)
 
                 # 2) Splitting
                 if split:
                     loop_opt.split(split)
 
-                # 3) Permute integration loop
+                # 3) Precomputation
+                if precompute:
+                    loop_opt.precompute(precompute)
+
+                # 3) Permute outer loop
                 if permute:
                     loop_opt.permute()
 
@@ -268,20 +289,19 @@ class ASTKernel(object):
             autotune_configs = autotune_all
             if opts['autotune'] == 'minimal':
                 resolution = 1
-                autotune_configs = autotune_minimal
+                autotune_configs = autotune_min
                 unroll_ths = 4
             elif blas_interface:
-                autotune_configs.append(('blas', 4, (None, None), True, 1,
-                                         blas_interface['name'], None, False))
+                library = ('blas', blas_interface['name'])
+                autotune_configs.append(('blas', dict(blas_config.items() + [library])))
             variants = []
             autotune_configs_uf = []
             found_zeros = False
             tunable = True
             original_ast = dcopy(self.ast)
-            for params in autotune_configs:
+            for opt, params in autotune_configs:
                 # Generate basic kernel variants
-                opt, _params = params[0], params[1:]
-                loop_opts = _generate_cpu_code(self, *_params)
+                loop_opts = _generate_cpu_code(self, **params)
                 if not loop_opts:
                     # No expressions, nothing to tune
                     tunable = False
@@ -289,7 +309,7 @@ class ASTKernel(object):
                 # Increase the stack size, if needed
                 increase_stack(loop_opts)
                 # Add the base variant to the autotuning process
-                variants.append((self.ast, _params))
+                variants.append((self.ast, params))
                 self.ast = dcopy(original_ast)
 
                 # Calculate variants characterized by different unroll factors,
@@ -305,12 +325,13 @@ class ASTKernel(object):
                     all_uf = [uf for uf in list(itertools.product(*all_uf))
                               if reduce(operator.mul, zip(*uf)[1]) <= unroll_ths]
                     for uf in all_uf:
-                        autotune_configs_uf.append(params[:6] + (uf,) + params[7:])
+                        params_uf = dict(params.items() + [('unroll', uf)])
+                        autotune_configs_uf.append((opt, params_uf))
 
             # On top of some of the basic kernel variants, apply unroll/unroll-and-jam
-            for params in autotune_configs_uf:
-                loop_opts = _generate_cpu_code(self, *params[1:])
-                variants.append((self.ast, params[1:]))
+            for _, params in autotune_configs_uf:
+                loop_opts = _generate_cpu_code(self, **params)
+                variants.append((self.ast, params))
                 self.ast = dcopy(original_ast)
 
             if tunable:
@@ -319,28 +340,25 @@ class ASTKernel(object):
                                       intrinsics, blas_interface)
                 fastest = autotuner.tune(resolution)
                 all_params = autotune_configs + autotune_configs_uf
-                name, params = all_params[fastest][0], all_params[fastest][1:]
+                name, params = all_params[fastest]
                 # Discard values set while autotuning
                 if name != 'blas':
                     self.blas = False
             else:
                 # The kernel does not get transformed since it does not contain any
                 # optimizable expression
-                params = (0, (None, None), True, None, False, None, False)
+                params = {}
         elif opts.get('blas'):
             # Conversion into blas requires a specific set of transformations
             # in order to identify and extract matrix multiplies.
             if not blas_interface:
-                raise RuntimeError("COFFEE Error: must set PYOP2_BLAS to convert into BLAS calls")
-            params = (4, (None, None), True, 1, opts['blas'], None, False)
+                raise RuntimeError("Must set PYOP2_BLAS to convert into BLAS calls")
+            params = dict(blas_config.items() + [('blas', blas_interface['name'])])
         else:
-            # Fetch user-provided options/hints on how to transform the kernel
-            params = (opts.get('licm'), opts.get('vect') or (None, None), opts.get('ap'),
-                      opts.get('split'), opts.get('blas'), opts.get('unroll'),
-                      opts.get('permute'))
+            params = opts
 
         # Generate a specific code version
-        loop_opts = _generate_cpu_code(self, *params)
+        loop_opts = _generate_cpu_code(self, **params)
 
         # Increase stack size if too much space is used on the stack
         increase_stack(loop_opts)
