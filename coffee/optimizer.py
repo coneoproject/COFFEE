@@ -64,8 +64,6 @@ class LoopOptimizer(object):
         self.loop = loop
         self.header = header
         self.kernel_decls = kernel_decls
-        # Track applied optimizations
-        self._is_precomputed = False
         # Track nonzero regions accessed in the various loops
         self.nz_in_fors = {}
         # Integration loop (if any)
@@ -273,8 +271,6 @@ class LoopOptimizer(object):
 
         # Update the AST by scalar-expanding the pre-computed accessed variables
         ast_update_rank(self.loop, precomputed_syms)
-
-        self._is_precomputed = True
 
     @property
     def root(self):
