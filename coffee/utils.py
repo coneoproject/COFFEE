@@ -139,15 +139,26 @@ def ast_update_rank(node, new_rank):
 
 
 def visit(node, parent):
-    """Explore the loop nest and collect various info like:
+    """Explore the AST rooted in ``node`` and collect various info, including:
 
-    * Loops;
-    * Declarations and Symbols;
-    * Optimisations requested by the higher layers via pragmas.
+    * Loop nests encountered - a list of tuples, each tuple representing a loop nest
+    * Declarations - a dictionary {variable name (str): declaration (ast node)}
+    * Symbols - a dictionary {symbol (ast node): iter space (tuple of loop indices)}
+    * Expressions - mathematical expressions to optimize (decorated with a pragma)
+    * Maximum depth - an integer representing the depth of the most depth loop nest
 
     :arg node:   AST root node of the visit
     :arg parent: parent node of ``node``
     """
+
+    info = {
+        'fors': [],
+        'decls': {},
+        'symbols': {},
+        'exprs': {},
+        'max_depth': 0
+    }
+    _inner_loops = inner_loops(node)
 
     def check_opts(node, parent, fors):
         """Check if node is associated with some pragmas. If that is the case,
@@ -171,45 +182,49 @@ def visit(node, parent):
                     slow_fors = tuple([l for l in fors if l.it_var() not in it_vars])
                     return (parent, (fast_fors, slow_fors))
 
-    def inspect(node, parent, **kwargs):
-        if isinstance(node, (Block, Root)):
+    def inspect(node, parent, mode=""):
+        if isinstance(node, EmptyStatement):
+            pass
+        elif isinstance(node, (Block, Root)):
             for n in node.children:
-                inspect(n, node, **kwargs)
+                inspect(n, node)
         elif isinstance(node, For):
-            kwargs['fors'].append((node, parent))
-            kwargs['cur_depth'] += 1
-            if kwargs['cur_depth'] > kwargs['max_depth']:
-                kwargs['max_depth'] = kwargs['cur_depth']
-            inspect(node.children[0], node, **kwargs)
-            kwargs['cur_depth'] -= 1
+            info['cur_nest'].append((node, parent))
+            inspect(node.children[0], node)
+            if node in _inner_loops:
+                info['fors'].append(info['cur_nest'])
+            info['cur_nest'] = info['cur_nest'][:-1]
         elif isinstance(node, Par):
-            inspect(node.children[0], node, **kwargs)
+            inspect(node.children[0], node)
         elif isinstance(node, Decl):
-            kwargs['decls'][node.sym.symbol] = node
+            info['decls'][node.sym.symbol] = node
         elif isinstance(node, Symbol):
-            kwargs['symbols'].add(node)
+            if mode in ['written']:
+                info['symbols_written'][node.symbol] = info['cur_nest']
+            dep_itspace = node.loop_dep
+            if node.symbol in info['symbols_written']:
+                dep_loops = info['symbols_written'][node.symbol]
+                dep_itspace = tuple(l[0].it_var() for l in dep_loops)
+            info['symbols'][node] = dep_itspace
         elif isinstance(node, Expr):
             for child in node.children:
-                inspect(child, node, **kwargs)
+                inspect(child, node)
         elif isinstance(node, Perfect):
-            expr = check_opts(node, parent, kwargs['fors'])
+            expr = check_opts(node, parent, info['cur_nest'])
             if expr:
-                kwargs['exprs'][node] = expr
-            for child in node.children:
-                inspect(child, node, **kwargs)
+                info['exprs'][node] = expr
+            inspect(node.children[0], node, "written")
+            for child in node.children[1:]:
+                inspect(child, node)
         else:
             pass
 
-    info = {
-        'fors': [],
-        'decls': {},
-        'symbols': set(),
-        'exprs': {},
-        'cur_depth': 0,
-        'max_depth': 0
-    }
-    inspect(node, parent, **info)
-    info.pop('cur_depth')
+    info['cur_nest'] = []
+    info['symbols_written'] = {}
+    inspect(node, parent)
+    info['max_depth'] = max(len(l) for l in info['fors'])
+    info.pop('cur_nest')
+    info.pop('symbols_written')
     return info
 
 
