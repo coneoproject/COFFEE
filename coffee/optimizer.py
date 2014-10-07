@@ -47,6 +47,7 @@ from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
 from utils import set_itspace
 from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
+from linear_algebra import LinearAlgebra
 import plan
 
 
@@ -74,11 +75,11 @@ class LoopOptimizer(object):
         self.hoisted = OrderedDict()
 
         # Inspect the loop nest and collect info
-        _, decls, sym, asm_expr = visit(self.loop, self.header)
-        self.decls, self.sym, self.asm_expr = ({}, sym, {})
-        for decl_str, decl in decls.items():
+        info = visit(self.loop, self.header)
+        self.decls, self.sym, self.asm_expr = ({}, info['symbols'], {})
+        for decl_str, decl in info['decls'].items():
             self.decls[decl_str] = (decl, plan.LOCAL_VAR)
-        for stmt, expr_info in asm_expr.items():
+        for stmt, expr_info in info['exprs'].items():
             self.asm_expr[stmt] = MetaExpr(*expr_info)
 
     def rewrite(self, level, is_block_sparse):
@@ -421,6 +422,17 @@ class CPULoopOptimizer(LoopOptimizer):
             new_asm_expr.update(elf.expr_fission(splittable, True))
         self.asm_expr = new_asm_expr
 
+    def blas(self, library):
+        """Convert an expression into sequences of calls to external dense linear
+        algebra libraries. Currently, MKL, ATLAS, and EIGEN are supported."""
+
+        # First, check that the loop nest has depth 3, otherwise it's useless
+        if visit(self.loop, self.header)['max_depth'] != 3:
+            return
+
+        linear_algebra = LinearAlgebra(self.loop, self.header, self.kernel_decls)
+        return linear_algebra.transform(library)
+
 
 class GPULoopOptimizer(LoopOptimizer):
 
@@ -432,7 +444,7 @@ class GPULoopOptimizer(LoopOptimizer):
         ``pragma pyop2 itspace``."""
 
         itspace_vrs = set()
-        for node, parent in reversed(visit(self.loop, self.header)[0]):
+        for node, parent in reversed(visit(self.loop, self.header)['fors']):
             if '#pragma pyop2 itspace' not in node.pragma:
                 continue
             parent = parent.children

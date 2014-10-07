@@ -37,7 +37,6 @@ from base import *
 from utils import increase_stack, unroll_factors, flatten, bind
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer
-from linear_algebra import LinearAlgebra
 from autotuner import Autotuner
 
 from copy import deepcopy as dcopy
@@ -218,6 +217,8 @@ class ASTKernel(object):
                 raise RuntimeError("Cannot permute without precomputation")
             if rewrite == 3 and split:
                 raise RuntimeError("Split forbidden when avoiding zero-columns")
+            if rewrite == 3 and blas:
+                raise RuntimeError("BLAS forbidden when avoiding zero-columns")
             if rewrite == 3 and v_type and v_type != AUTOVECT:
                 raise RuntimeError("Zeros removal only supports auto-vectorization")
             if unroll and v_type and v_type != AUTOVECT:
@@ -266,9 +267,8 @@ class ASTKernel(object):
                         vect.outer_product(v_type, v_param)
 
                 # 5) Conversion into blas calls
-                if blas and not loop_opt.nz_in_fors:
-                    ala = LinearAlgebra(loop_opt, decls)
-                    self.blas = ala.transform(blas)
+                if blas:
+                    self.blas = loop_opt.blas(blas)
 
             # Ensure kernel is always marked static inline
             if hasattr(self, 'fundecl'):

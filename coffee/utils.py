@@ -171,38 +171,46 @@ def visit(node, parent):
                     slow_fors = tuple([l for l in fors if l.it_var() not in it_vars])
                     return (parent, (fast_fors, slow_fors))
 
-    def inspect(node, parent, fors, decls, symbols, exprs):
+    def inspect(node, parent, **kwargs):
         if isinstance(node, (Block, Root)):
             for n in node.children:
-                inspect(n, node, fors, decls, symbols, exprs)
-            return (fors, decls, symbols, exprs)
+                inspect(n, node, **kwargs)
         elif isinstance(node, For):
-            check_opts(node, parent, fors)
-            fors.append((node, parent))
-            return inspect(node.children[0], node, fors, decls, symbols, exprs)
+            kwargs['fors'].append((node, parent))
+            kwargs['cur_depth'] += 1
+            if kwargs['cur_depth'] > kwargs['max_depth']:
+                kwargs['max_depth'] = kwargs['cur_depth']
+            inspect(node.children[0], node, **kwargs)
+            kwargs['cur_depth'] -= 1
         elif isinstance(node, Par):
-            return inspect(node.children[0], node, fors, decls, symbols, exprs)
+            inspect(node.children[0], node, **kwargs)
         elif isinstance(node, Decl):
-            decls[node.sym.symbol] = node
-            return (fors, decls, symbols, exprs)
+            kwargs['decls'][node.sym.symbol] = node
         elif isinstance(node, Symbol):
-            symbols.add(node)
-            return (fors, decls, symbols, exprs)
+            kwargs['symbols'].add(node)
         elif isinstance(node, Expr):
             for child in node.children:
-                inspect(child, node, fors, decls, symbols, exprs)
-            return (fors, decls, symbols, exprs)
+                inspect(child, node, **kwargs)
         elif isinstance(node, Perfect):
-            expr = check_opts(node, parent, fors)
+            expr = check_opts(node, parent, kwargs['fors'])
             if expr:
-                exprs[node] = expr
+                kwargs['exprs'][node] = expr
             for child in node.children:
-                inspect(child, node, fors, decls, symbols, exprs)
-            return (fors, decls, symbols, exprs)
+                inspect(child, node, **kwargs)
         else:
-            return (fors, decls, symbols, exprs)
+            pass
 
-    return inspect(node, parent, [], {}, set(), {})
+    info = {
+        'fors': [],
+        'decls': {},
+        'symbols': set(),
+        'exprs': {},
+        'cur_depth': 0,
+        'max_depth': 0
+    }
+    inspect(node, parent, **info)
+    info.pop('cur_depth')
+    return info
 
 
 def inner_loops(node):

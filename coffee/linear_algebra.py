@@ -44,19 +44,17 @@ from base import *
 
 class LinearAlgebra(object):
 
-    """Convert an expression into sequences of calls to external dense linear
-    algebra libraries. Currently, MKL, ATLAS, and EIGEN are supported."""
+    def __init__(self, outer_loop, header, kernel_decls):
+        """Initialize a LinearAlgebra object.
 
-    def __init__(self, expr_opt, kernel_decls):
-        """Initialize an AssemblyLinearAlgebra object.
-
-        :arg expr_opt:     an AssemblyOptimizer object of the AST
+        :arg outer_loop:   AST root loop node from which the search for potential
+                           linear algebra operations starts
+        :arg header:       parent of ``outer_loop``
         :arg kernel_decls: list of declarations used in the AST"""
 
         self.kernel_decls = kernel_decls
-        self.header = expr_opt.header
-        self.int_loop = expr_opt.int_loop
-        self.asm_expr = expr_opt.asm_expr
+        self.header = header
+        self.outer_loop = outer_loop
 
     def transform(self, library):
         """Transform perfect loop nests representing matrix-matrix multiplies into
@@ -115,17 +113,12 @@ class LinearAlgebra(object):
                 return ()
             return ()
 
-        # There must be at least three loops to extract a MMM
-        if not (self.int_loop and self.asm_expr):
-            return
-
-        outer_loop = self.int_loop
-        ofs = self.header.children.index(outer_loop)
+        ofs = self.header.children.index(self.outer_loop)
         found_mmm = False
 
         # 1) Split potential MMM into different perfect loop nests
         to_transform, to_transpose = (OrderedDict(), [])
-        for middle_loop in outer_loop.children[0].children:
+        for middle_loop in self.outer_loop.children[0].children:
             if not isinstance(middle_loop, For):
                 continue
             found = False
@@ -155,16 +148,18 @@ class LinearAlgebra(object):
                 to_transpose.append(rhs[1].symbol)
                 rhs = (rhs[1], rhs[0])
             if found:
-                new_outer = dcopy(outer_loop)
+                new_outer = dcopy(self.outer_loop)
                 new_outer.children[0].children = [middle_loop]
                 self.header.children.insert(ofs, new_outer)
-                loop_itvars = (outer_loop.it_var(), middle_loop.it_var(), inner_loop[0].it_var())
-                loop_sizes = (outer_loop.size(), middle_loop.size(), inner_loop[0].size())
+                loop_itvars = (self.outer_loop.it_var(), middle_loop.it_var(),
+                               inner_loop[0].it_var())
+                loop_sizes = (self.outer_loop.size(), middle_loop.size(),
+                              inner_loop[0].size())
                 loop_info = OrderedDict(zip(loop_itvars, loop_sizes))
                 to_transform[new_outer] = (body[0].children[0], rhs, loop_info)
                 found_mmm = True
         # Clean up
-        self.header.children.remove(outer_loop)
+        self.header.children.remove(self.outer_loop)
 
         # 2) Delegate to external library
         if library in ['atlas', 'mkl']:
