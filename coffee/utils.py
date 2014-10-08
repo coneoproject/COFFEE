@@ -175,12 +175,7 @@ def visit(node, parent):
                 opt_par = opts[2][delim:].replace(" ", "")
                 if opt_name == "assembly":
                     # Found high-level optimisation
-                    # Store outer product iteration variables, parent, loops
-                    it_vars = [opt_par[1], opt_par[3]]
-                    fors, fors_parents = zip(*fors)
-                    fast_fors = tuple([l for l in fors if l.it_var() in it_vars])
-                    slow_fors = tuple([l for l in fors if l.it_var() not in it_vars])
-                    return (parent, (fast_fors, slow_fors))
+                    return (parent, zip(*fors)[0], (opt_par[1], opt_par[3]))
 
     def inspect(node, parent, mode=""):
         if isinstance(node, EmptyStatement):

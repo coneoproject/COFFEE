@@ -38,40 +38,38 @@ class MetaExpr(object):
 
     """Information container for a compute-intensive expression."""
 
-    def __init__(self, parent, loops):
+    def __init__(self, parent, loops, fast_dims):
         """Initialize the MetaExpr.
 
         :arg parent: the parent block node in which the expression is embedded.
-        :arg loops:  a 2-tuple of tuples. The first entry is the tuple of all loops
-                     whose iteration variables represent are fastest varyind dimensions
-                     in the arrays in ``stmt``. The second entry is the tuple of all
-                     loops whose iteration variables represent slower dimensions in
-                     the arrays in ``stmt``. For example, in the expression
-                     ``A[i][j]*B[i][k]``, ``loops = ((for_j, for_k), (for_i))``.
+        :arg loops:  the ordered tuple of loops the expression depends on.
+        :arg fast_dims: the iteration variables along which the expression
+                        iterates fastest.
         """
         self._parent = parent
-        self._fast_loops, self._slow_loops = loops
+        self._loops = loops
+        self._fast_dims = fast_dims
 
     @property
     def loops(self):
-        return self._fast_loops + self._slow_loops
+        return self._loops
 
     @property
     def fast_itvars(self):
-        return tuple([l.it_var() for l in self._fast_loops])
+        return self._fast_dims
 
     @property
     def fast_loops(self):
-        return self._fast_loops
+        return tuple([l for l in self._loops if l.it_var() in self._fast_dims])
 
     @property
     def slow_loops(self):
-        return self._slow_loops
+        return tuple([l for l in self._loops if l.it_var() not in self._fast_dims])
 
     @property
     def perfect_loops(self):
         """Return the loops in a perfect loop nest for the expression."""
-        return [l for l in self.loops if is_perfect_loop(l)]
+        return [l for l in self._loops if is_perfect_loop(l)]
 
     @property
     def parent(self):
