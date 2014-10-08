@@ -44,7 +44,7 @@ import networkx as nx
 
 from base import *
 from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
-from utils import set_itspace
+from utils import set_itspace, loops_as_dict, od_find_next
 from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
@@ -114,7 +114,7 @@ class LoopOptimizer(object):
         if not self.asm_expr:
             return
 
-        kernel_info = (self.root, self.kernel_decls)
+        kernel_info = (self.header, self.kernel_decls)
         for stmt_info in self.asm_expr.items():
             ew = ExpressionRewriter(stmt_info, self.decls, kernel_info,
                                     self.hoisted, self.expr_graph)
@@ -520,7 +520,7 @@ class ExpressionRewriter(object):
                 extract.has_extracted = extract.has_extracted or _extract
 
             if isinstance(node, Symbol):
-                return (node.loop_dep, extract.INV, 1)
+                return (extract.symbols[node], extract.INV, 1)
             if isinstance(node, Par):
                 return (extract(node.children[0], expr_dep, length))
 
@@ -529,6 +529,10 @@ class ExpressionRewriter(object):
             dep_l, info_l, len_l = extract(left, expr_dep, length)
             dep_r, info_r, len_r = extract(right, expr_dep, length)
             node_len = len_l + len_r
+
+            # Filter out false dependencies
+            dep_l = tuple(d for d in dep_l if d in extract.real_deps)
+            dep_r = tuple(d for d in dep_r if d in extract.real_deps)
 
             if info_l == extract.KSE and info_r == extract.KSE:
                 if dep_l != dep_r:
@@ -540,22 +544,32 @@ class ExpressionRewriter(object):
                     # E.g. (A[i]*alpha)+(B[i]*beta)
                     return (dep_l, extract.KSE, node_len)
             elif info_l == extract.KSE and info_r == extract.INV:
+                # E.g. (A[i] + B[i])*C[j]
                 hoist(left, dep_l, expr_dep)
-                hoist(right, dep_r, expr_dep, (dep_r and len_r == 1) or len_r > 1)
+                hoist(right, dep_r, expr_dep, not self._licm or len_r > 1)
                 return ((), extract.HOI, node_len)
             elif info_l == extract.INV and info_r == extract.KSE:
+                # E.g. A[i]*(B[j]) + C[j])
                 hoist(right, dep_r, expr_dep)
-                hoist(left, dep_l, expr_dep, (dep_l and len_l == 1) or len_l > 1)
+                hoist(left, dep_l, expr_dep, not self._licm or len_l > 1)
                 return ((), extract.HOI, node_len)
             elif info_l == extract.INV and info_r == extract.INV:
                 if not dep_l and not dep_r:
                     # E.g. alpha*beta
                     return ((), extract.INV, node_len)
                 elif dep_l and dep_r and dep_l != dep_r:
-                    # E.g. A[i]*B[j]
-                    hoist(left, dep_l, expr_dep, not self._licm or len_l > 1)
-                    hoist(right, dep_r, expr_dep, not self._licm or len_r > 1)
-                    return ((), extract.HOI, node_len)
+                    if set(dep_l).issubset(set(dep_r)):
+                        # E.g. A[i]*B[i,j]
+                        return (dep_r, extract.KSE, node_len)
+                    elif set(dep_r).issubset(set(dep_l)):
+                        # E.g. A[i,j]*B[i]
+                        return (dep_l, extract.KSE, node_len)
+                    else:
+                        # dep_l != dep_r:
+                        # E.g. A[i]*B[j]
+                        hoist(left, dep_l, expr_dep, not self._licm or len_l > 1)
+                        hoist(right, dep_r, expr_dep, not self._licm or len_r > 1)
+                        return ((), extract.HOI, node_len)
                 elif dep_l and dep_r and dep_l == dep_r:
                     # E.g. A[i] + B[i]
                     return (dep_l, extract.INV, node_len)
@@ -580,11 +594,6 @@ class ExpressionRewriter(object):
             else:
                 raise RuntimeError("Fatal error while finding hoistable terms")
 
-        extract.INV = 0  # Invariant term(s)
-        extract.KSE = 1  # Keep searching invariant sub-expressions
-        extract.HOI = 2  # Stop searching, done hoisting
-        extract.has_extracted = False
-
         def replace(node, syms_dict, n_replaced):
             if isinstance(node, Symbol):
                 if str(Par(node)) in syms_dict:
@@ -606,14 +615,26 @@ class ExpressionRewriter(object):
             if replace(left, syms_dict, n_replaced):
                 left = Par(left) if isinstance(left, Symbol) else left
                 replacing = syms_dict[str(left)]
-                node.children[0] = dcopy(replacing)
+                node.children[0] = replacing
                 n_replaced[str(replacing)] += 1
             if replace(right, syms_dict, n_replaced):
                 right = Par(right) if isinstance(right, Symbol) else right
                 replacing = syms_dict[str(right)]
-                node.children[1] = dcopy(replacing)
+                node.children[1] = replacing
                 n_replaced[str(replacing)] += 1
             return False
+
+        expr_loops = self.expr_info.loops
+        dict_expr_loops = loops_as_dict(expr_loops)
+        real_deps = dict_expr_loops.keys()
+
+        # Set global parameters of the extract recursive function
+        extract.symbols = visit(self.header, None)['symbols']
+        extract.has_extracted = False
+        extract.real_deps = real_deps
+        extract.INV = 0  # Invariant term(s)
+        extract.KSE = 1  # Keep searching invariant sub-expressions
+        extract.HOI = 2  # Stop searching, done hoisting
 
         # Extract read-only sub-expressions that do not depend on at least
         # one loop in the loop nest
@@ -629,18 +650,31 @@ class ExpressionRewriter(object):
             extract.has_extracted = False
             self._licm += 1
 
-            for dep, expr in sorted(expr_dep.items()):
-                # 0) Determine the loops that should wrap invariant statements
-                # and where such loops should be placed in the loop nest
-                place = self.header
-                out_asm_loop, in_asm_loop = self.expr_info.fast_loops
-                ofs = lambda: place.children.index(out_asm_loop)
-                if dep and out_asm_loop.it_var() == dep[-1]:
-                    wl = out_asm_loop
-                elif dep and in_asm_loop.it_var() == dep[-1]:
-                    wl = in_asm_loop
+            for all_deps, expr in sorted(expr_dep.items()):
+                # -1) Filter dependencies that do not pertain to the expression
+                dep = tuple(d for d in all_deps if d in real_deps)
+
+                # 0) The invariant statements go in the closest outer loop to
+                # dep[-1] which they depend on, and are wrapped by a loop wl
+                # iterating along the same iteration space as dep[-1].
+                # If there's no such an outer loop, they fall in the header,
+                # provided they are within a perfect loop nest (otherwise,
+                # dependencies may be broken)
+                outermost_loop = expr_loops[0]
+                is_outermost_perfect = is_perfect_loop(outermost_loop)
+                if len(dep) == 0:
+                    place, wl = self.header, None
+                    next_loop = outermost_loop
+                elif len(dep) == 1 and is_outermost_perfect:
+                    place, wl = self.header, dict_expr_loops[dep[0]]
+                    next_loop = outermost_loop
+                elif len(dep) == 1 and not is_outermost_perfect:
+                    place, wl = dict_expr_loops[dep[0]].children[0], None
+                    next_loop = od_find_next(dict_expr_loops, dep[0])
                 else:
-                    wl = None
+                    dep_block = dict_expr_loops[dep[-2]].children[0]
+                    place, wl = dep_block, dict_expr_loops[dep[-1]]
+                    next_loop = od_find_next(dict_expr_loops, dep[-2])
 
                 # 1) Remove identical sub-expressions
                 expr = dict([(str(e), e) for e in expr]).values()
@@ -654,8 +688,9 @@ class ExpressionRewriter(object):
                 for_sym = [Symbol(_s.sym.symbol, for_dep) for _s in var_decl]
 
                 # 3) Create the new for loop containing invariant terms
-                _expr = [Par(e) if not isinstance(e, Par) else e for e in expr]
-                inv_for = [Assign(_s, e) for _s, e in zip(for_sym, _expr)]
+                _expr = [Par(dcopy(e)) if not isinstance(e, Par)
+                         else dcopy(e) for e in expr]
+                inv_for = [Assign(_s, e) for _s, e in zip(dcopy(for_sym), _expr)]
 
                 # 4) Update the lists of decls
                 self.decls.update(dict(zip([d.sym.symbol for d in var_decl],
@@ -671,19 +706,22 @@ class ExpressionRewriter(object):
                 self.hoisted.update(zip([s.symbol for s in for_sym], sym_info))
                 for s, e in zip(for_sym, expr):
                     self.expr_graph.add_dependency(s, e, n_replaced[str(s)] > 1)
+                    extract.symbols[s] = dep
 
                 # 7a) Update expressions hoisted along a known dimension (same dep)
-                if for_dep in inv_dep:
-                    _var_decl, _inv_for = inv_dep[for_dep][0:2]
+                inv_info = (for_dep, place, next_loop, wl)
+                if inv_info in inv_dep:
+                    _var_decl, _inv_for = inv_dep[inv_info]
                     _var_decl.extend(var_decl)
                     _inv_for.extend(inv_for)
                     continue
 
                 # 7b) Keep track of hoisted stuff
-                inv_dep[for_dep] = (var_decl, inv_for, place, ofs, wl)
+                inv_dep[inv_info] = (var_decl, inv_for)
 
-        for dep, dep_info in sorted(inv_dep.items()):
-            var_decl, inv_for, place, ofs, wl = dep_info
+        for inv_info, dep_info in sorted(inv_dep.items()):
+            var_decl, inv_for = dep_info
+            _,place, next_loop, wl = inv_info
             # Create the hoisted code
             if wl:
                 new_for = [dcopy(wl)]
@@ -692,8 +730,9 @@ class ExpressionRewriter(object):
             else:
                 inv_code = [None]
             # Append the new node at the right level in the loop nest
-            new_block = var_decl + inv_for + [FlatBlock("\n")] + place.children[ofs():]
-            place.children = place.children[:ofs()] + new_block
+            ofs = place.children.index(next_loop)
+            new_block = var_decl + inv_for + [FlatBlock("\n")] + place.children[ofs:]
+            place.children = place.children[:ofs] + new_block
             # Update information about hoisted symbols
             for i in var_decl:
                 old_sym_info = self.hoisted[i.sym.symbol]

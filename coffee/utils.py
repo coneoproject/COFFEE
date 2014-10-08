@@ -316,6 +316,8 @@ any_in = lambda a, b: any(i in b for i in a)
 flatten = lambda list: [i for l in list for i in l]
 bind = lambda a, b: [(a, v) for v in b]
 
+od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
+
 
 def set_itspace(loop_a, loop_b):
     """Copy the iteration space of ``loop_b`` into ``loop_a``, while preserving
@@ -324,3 +326,8 @@ def set_itspace(loop_a, loop_b):
     loop_a.cond = dcopy(loop_b.cond)
     loop_a.incr = dcopy(loop_b.incr)
     loop_a.pragma = dcopy(loop_b.pragma)
+
+
+def loops_as_dict(loops):
+    loops_it_vars = [l.it_var() for l in loops]
+    return OrderedDict(zip(loops_it_vars, loops))
