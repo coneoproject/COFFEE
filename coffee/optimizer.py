@@ -44,7 +44,7 @@ import networkx as nx
 
 from base import *
 from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
-from utils import set_itspace, loops_as_dict, od_find_next
+from utils import ast_replace, set_itspace, loops_as_dict, od_find_next
 from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
@@ -594,36 +594,6 @@ class ExpressionRewriter(object):
             else:
                 raise RuntimeError("Fatal error while finding hoistable terms")
 
-        def replace(node, syms_dict, n_replaced):
-            if isinstance(node, Symbol):
-                if str(Par(node)) in syms_dict:
-                    return True
-                else:
-                    return False
-            if isinstance(node, Par):
-                if str(node) in syms_dict:
-                    return True
-                else:
-                    return replace(node.children[0], syms_dict, n_replaced)
-            # Found invariant sub-expression
-            if str(node) in syms_dict:
-                return True
-
-            # Traverse the expression tree and replace
-            left = node.children[0]
-            right = node.children[1]
-            if replace(left, syms_dict, n_replaced):
-                left = Par(left) if isinstance(left, Symbol) else left
-                replacing = syms_dict[str(left)]
-                node.children[0] = replacing
-                n_replaced[str(replacing)] += 1
-            if replace(right, syms_dict, n_replaced):
-                right = Par(right) if isinstance(right, Symbol) else right
-                replacing = syms_dict[str(right)]
-                node.children[1] = replacing
-                n_replaced[str(replacing)] += 1
-            return False
-
         expr_loops = self.expr_info.loops
         dict_expr_loops = loops_as_dict(expr_loops)
         real_deps = dict_expr_loops.keys()
@@ -698,8 +668,8 @@ class ExpressionRewriter(object):
 
                 # 5) Replace invariant sub-trees with the proper tmp variable
                 n_replaced = dict(zip([str(s) for s in for_sym], [0]*len(for_sym)))
-                replace(self.stmt.children[1], dict(zip([str(i) for i in expr], for_sym)),
-                        n_replaced)
+                ast_replace(self.stmt.children[1], dict(zip([str(i) for i in expr],
+                                                        for_sym)), n_replaced)
 
                 # 6) Track hoisted symbols and symbols dependencies
                 sym_info = [(i, j, inv_for) for i, j in zip(_expr, var_decl)]

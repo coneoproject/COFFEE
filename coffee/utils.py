@@ -100,9 +100,38 @@ def unroll_factors(loops):
     return loops_unroll
 
 
-################################################################
-# Functions to manipulate and to query properties of AST nodes #
-################################################################
+#####################################
+# Functions to manipulate AST nodes #
+#####################################
+
+
+def ast_replace(node, syms_dict, n_replaced, copy=False):
+    """Given a dictionary ``syms_dict`` s.t. ``{'syms': to_replace}``, replace the
+    various ``syms`` rooted in ``node`` with ``to_replace``. If ``copy`` is True,
+    a deep copy of the replacing symbol is created."""
+
+    if isinstance(node, Symbol):
+        return syms_dict.get(str(Par(node)))
+
+    str_node = str(node)
+    if isinstance(node, Par):
+        if str_node in syms_dict:
+            return syms_dict[str_node]
+        else:
+            return ast_replace(node.children[0], syms_dict, n_replaced, copy)
+    if str_node in syms_dict:
+        return syms_dict[str_node]
+
+    # Traverse the expression tree and replace
+    to_replace = {}
+    for i, n in enumerate(node.children):
+        replacing = ast_replace(n, syms_dict, n_replaced, copy)
+        if replacing:
+            to_replace[i] = replacing if not copy else dcopy(replacing)
+            if n_replaced:
+                n_replaced[str(replacing)] += 1
+    for i, r in to_replace.items():
+        node.children[i] = r
 
 
 def ast_update_ofs(node, ofs):
