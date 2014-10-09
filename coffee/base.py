@@ -531,7 +531,10 @@ class For(Statement):
         self.incr = incr
 
     def it_var(self):
-        return self.init.sym.symbol
+        if isinstance(self.init, Decl):
+            return self.init.sym.symbol
+        elif isinstance(self.init, Assign):
+            return self.init.children[0]
 
     def start(self):
         return self.init.init.symbol
