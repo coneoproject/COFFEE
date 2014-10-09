@@ -105,7 +105,7 @@ def unroll_factors(loops):
 #####################################
 
 
-def ast_replace(node, syms_dict, n_replaced, copy=False):
+def ast_replace(node, syms_dict, n_replaced={}, copy=False):
     """Given a dictionary ``syms_dict`` s.t. ``{'syms': to_replace}``, replace the
     various ``syms`` rooted in ``node`` with ``to_replace``. If ``copy`` is True,
     a deep copy of the replacing symbol is created."""

@@ -873,8 +873,8 @@ class ExpressionExpander(object):
     CONST = -1
     ITVAR = -2
 
-    def __init__(self, var_info, expr_graph):
-        self.var_info = var_info
+    def __init__(self, hoisted, expr_graph):
+        self.hoisted = hoisted
         self.expr_graph = expr_graph
         self.expanded_decls = {}
         self.found_consts = {}
@@ -886,7 +886,7 @@ class ExpressionExpander(object):
         be expanded occurs multiple times in the expression, or it depends on
         other hoisted symbols that will also be expanded, create a new symbol."""
 
-        old_expr, var_decl, inv_for, place = self.var_info[sym.symbol]
+        old_expr, var_decl, inv_for, place = self.hoisted[sym.symbol]
 
         # The expanding expression is first assigned to a temporary value in order
         # to minimize code size and, possibly, work around compiler's inefficiencies
@@ -898,7 +898,8 @@ class ExpressionExpander(object):
             const_sym = Symbol("const%d" % len(self.found_consts), ())
             new_const_decl = Decl("double", dcopy(const_sym), const)
             # Keep track of the expansion
-            self.expanded_decls[new_const_decl.sym.symbol] = (new_const_decl, plan.LOCAL_VAR)
+            self.expanded_decls[new_const_decl.sym.symbol] = (new_const_decl,
+                                                              plan.LOCAL_VAR)
             self.expanded_syms.append(new_const_decl.sym)
             self.found_consts[const_str] = const_sym
             self.expr_graph.add_dependency(const_sym, const, False)
@@ -914,8 +915,9 @@ class ExpressionExpander(object):
 
         # Create a new symbol, expression, and declaration
         new_expr = Par(Prod(dcopy(sym), const))
+        sym = dcopy(sym)
         sym.symbol += "_EXP%d" % len(self.expanded_syms)
-        new_node = Assign(dcopy(sym), new_expr)
+        new_node = Assign(sym, new_expr)
         new_var_decl = dcopy(var_decl)
         new_var_decl.sym.symbol = sym.symbol
         # Append new expression and declaration
@@ -924,8 +926,9 @@ class ExpressionExpander(object):
         self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, plan.LOCAL_VAR)
         self.expanded_syms.append(new_var_decl.sym)
         # Update tracked information
-        self.var_info[sym.symbol] = (new_expr, new_var_decl, inv_for, place)
+        self.hoisted[sym.symbol] = (new_expr, new_var_decl, inv_for, place)
         self.expr_graph.add_dependency(sym, new_expr, 0)
+        return sym
 
     def expand(self, node, parent, it_vars, exp_var):
         """Perform the expansion of the expression rooted in ``node``. Terms are
@@ -955,12 +958,16 @@ class ExpressionExpander(object):
                 const = l_node[0] if l_type == self.CONST else r_node[0]
                 expandable, exp_node = (l_node, node.children[0]) \
                     if l_type == self.ITVAR else (r_node, node.children[1])
+                to_replace = {}
                 for sym in expandable:
                     # Perform the expansion
-                    if sym.symbol not in self.var_info:
+                    if sym.symbol not in self.hoisted:
                         raise RuntimeError("Expansion error: no symbol: %s" % sym.symbol)
-                    old_expr, var_decl, inv_for, place = self.var_info[sym.symbol]
-                    self._do_expand(sym, const)
+                    old_expr, var_decl, inv_for, place = self.hoisted[sym.symbol]
+                    replacing = self._do_expand(sym, const)
+                    if replacing:
+                        to_replace[str(Par(sym))] = replacing
+                ast_replace(node, to_replace, copy=True)
                 # Update the parent node, since an expression has been expanded
                 if parent.children[0] == node:
                     parent.children[0] = exp_node
