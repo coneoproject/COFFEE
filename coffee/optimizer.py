@@ -39,8 +39,6 @@ except ImportError:
     from ordereddict import OrderedDict
 from copy import deepcopy as dcopy
 
-import networkx as nx
-
 from base import *
 from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
 from utils import set_itspace
@@ -48,6 +46,7 @@ from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
+from ast_analyzer import ExpressionGraph
 import plan
 
 
@@ -461,45 +460,3 @@ class GPULoopOptimizer(LoopOptimizer):
         accessed_vrs = [s for s in syms if any_in(s.rank, itspace_vrs)]
 
         return (itspace_vrs, accessed_vrs)
-
-
-class ExpressionGraph(object):
-
-    """Track read-after-write dependencies between symbols."""
-
-    def __init__(self):
-        self.deps = nx.DiGraph()
-
-    def add_dependency(self, sym, expr, self_loop):
-        """Extract symbols from ``expr`` and create a read-after-write dependency
-        with ``sym``. If ``sym`` already has a dependency, then ``sym`` has a
-        self dependency on itself."""
-
-        def extract_syms(sym, node, deps):
-            if isinstance(node, Symbol):
-                deps.add_edge(sym, node.symbol)
-            else:
-                for n in node.children:
-                    extract_syms(sym, n, deps)
-
-        sym = sym.symbol
-        # Add self-dependency
-        if self_loop:
-            self.deps.add_edge(sym, sym)
-        extract_syms(sym, expr, self.deps)
-
-    def has_dep(self, sym, target_sym=None):
-        """If ``target_sym`` is not provided, return True if ``sym`` has a
-        read-after-write dependency with some other symbols. This is the case if
-        ``sym`` has either a self dependency or at least one input edge, meaning
-        that other symbols depend on it.
-        Otherwise, if ``target_sym`` is not None, return True if ``sym`` has a
-        read-after-write dependency on it, i.e. if there is an edge from
-        ``target_sym`` to ``sym``."""
-
-        sym = sym.symbol
-        if not target_sym:
-            return sym in self.deps and zip(*self.deps.in_edges(sym))
-        else:
-            target_sym = target_sym.symbol
-            return sym in self.deps and self.deps.has_edge(sym, target_sym)
