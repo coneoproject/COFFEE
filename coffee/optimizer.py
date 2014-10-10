@@ -46,7 +46,7 @@ from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
-from ast_analyzer import ExpressionGraph
+from ast_analyzer import ExpressionGraph, StmtTracker
 import plan
 
 
@@ -71,7 +71,7 @@ class LoopOptimizer(object):
         # Expression graph tracking data dependencies
         self.expr_graph = ExpressionGraph()
         # Dictionary contaning various information about hoisted expressions
-        self.hoisted = OrderedDict()
+        self.hoisted = StmtTracker()
 
         # Inspect the loop nest and collect info
         info = visit(self.loop, self.header)

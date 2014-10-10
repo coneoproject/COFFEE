@@ -31,9 +31,21 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+try:
+    from collections import OrderedDict
+# OrderedDict was added in Python 2.7. Earlier versions can use ordereddict
+# from PyPI
+except ImportError:
+    from ordereddict import OrderedDict
+
 import networkx as nx
 
 from base import *
+
+
+class StmtTracker(OrderedDict):
+
+    """Track the location of generic statements in an abstract syntax tree."""
 
 
 class ExpressionGraph(object):
