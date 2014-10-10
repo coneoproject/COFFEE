@@ -66,225 +66,22 @@ class ExpressionRewriter(object):
         self.hoisted = hoisted
         self.expr_graph = expr_graph
 
+        # Expression Manipulators used by the Expression Rewriter
+        typ = self.kernel_decls[self.stmt.children[0].symbol][0].typ
+        self.expr_hoister = ExpressionHoister(self.stmt,
+                                              self.expr_info,
+                                              self.header,
+                                              typ,
+                                              self.decls,
+                                              self.hoisted,
+                                              self.expr_graph)
+
         # Properties of the transformed expression
-        self._licm = 0
         self._expanded = False
 
     def licm(self):
-        """Perform loop-invariant code motion.
-
-        Invariant expressions found in the loop nest are moved "after" the
-        outermost independent loop and "after" the fastest varying dimension
-        loop. Here, "after" means that if the loop nest has two loops ``i``
-        and ``j``, and ``j`` is in the body of ``i``, then ``i`` comes after
-        ``j`` (i.e. the loop nest has to be read from right to left).
-
-        For example, if a sub-expression ``E`` depends on ``[i, j]`` and the
-        loop nest has three loops ``[i, j, k]``, then ``E`` is hoisted out from
-        the body of ``k`` to the body of ``i``). All hoisted expressions are
-        then wrapped within a suitable loop in order to exploit compiler
-        autovectorization. Note that this applies to constant sub-expressions
-        as well, in which case hoisting after the outermost loop takes place."""
-
-        def extract(node, expr_dep, length=0):
-            """Extract invariant sub-expressions from the original expression.
-            Hoistable sub-expressions are stored in expr_dep."""
-
-            def hoist(node, dep, expr_dep, _extract=True):
-                if _extract:
-                    node = Par(node) if isinstance(node, Symbol) else node
-                    expr_dep[dep].append(node)
-                extract.has_extracted = extract.has_extracted or _extract
-
-            if isinstance(node, Symbol):
-                return (extract.symbols[node], extract.INV, 1)
-            if isinstance(node, Par):
-                return (extract(node.children[0], expr_dep, length))
-
-            # Traverse the expression tree
-            left, right = node.children
-            dep_l, info_l, len_l = extract(left, expr_dep, length)
-            dep_r, info_r, len_r = extract(right, expr_dep, length)
-            node_len = len_l + len_r
-
-            # Filter out false dependencies
-            dep_l = tuple(d for d in dep_l if d in extract.real_deps)
-            dep_r = tuple(d for d in dep_r if d in extract.real_deps)
-
-            if info_l == extract.KSE and info_r == extract.KSE:
-                if dep_l != dep_r:
-                    # E.g. (A[i]*alpha + D[i])*(B[j]*beta + C[j])
-                    hoist(left, dep_l, expr_dep)
-                    hoist(right, dep_r, expr_dep)
-                    return ((), extract.HOI, node_len)
-                else:
-                    # E.g. (A[i]*alpha)+(B[i]*beta)
-                    return (dep_l, extract.KSE, node_len)
-            elif info_l == extract.KSE and info_r == extract.INV:
-                # E.g. (A[i] + B[i])*C[j]
-                hoist(left, dep_l, expr_dep)
-                hoist(right, dep_r, expr_dep, not self._licm or len_r > 1)
-                return ((), extract.HOI, node_len)
-            elif info_l == extract.INV and info_r == extract.KSE:
-                # E.g. A[i]*(B[j]) + C[j])
-                hoist(right, dep_r, expr_dep)
-                hoist(left, dep_l, expr_dep, not self._licm or len_l > 1)
-                return ((), extract.HOI, node_len)
-            elif info_l == extract.INV and info_r == extract.INV:
-                if not dep_l and not dep_r:
-                    # E.g. alpha*beta
-                    return ((), extract.INV, node_len)
-                elif dep_l and dep_r and dep_l != dep_r:
-                    if set(dep_l).issubset(set(dep_r)):
-                        # E.g. A[i]*B[i,j]
-                        return (dep_r, extract.KSE, node_len)
-                    elif set(dep_r).issubset(set(dep_l)):
-                        # E.g. A[i,j]*B[i]
-                        return (dep_l, extract.KSE, node_len)
-                    else:
-                        # dep_l != dep_r:
-                        # E.g. A[i]*B[j]
-                        hoist(left, dep_l, expr_dep, not self._licm or len_l > 1)
-                        hoist(right, dep_r, expr_dep, not self._licm or len_r > 1)
-                        return ((), extract.HOI, node_len)
-                elif dep_l and dep_r and dep_l == dep_r:
-                    # E.g. A[i] + B[i]
-                    return (dep_l, extract.INV, node_len)
-                elif dep_l and not dep_r:
-                    # E.g. A[i]*alpha
-                    hoist(right, dep_r, expr_dep, len_r > 1)
-                    return (dep_l, extract.KSE, node_len)
-                elif dep_r and not dep_l:
-                    # E.g. alpha*A[i]
-                    hoist(left, dep_l, expr_dep, len_l > 1)
-                    return (dep_r, extract.KSE, node_len)
-                else:
-                    raise RuntimeError("Error while hoisting invariant terms")
-            elif info_l == extract.HOI and info_r == extract.KSE:
-                hoist(right, dep_r, expr_dep, len_r > 2)
-                return ((), extract.HOI, node_len)
-            elif info_l == extract.KSE and info_r == extract.HOI:
-                hoist(left, dep_l, expr_dep, len_l > 2)
-                return ((), extract.HOI, node_len)
-            elif info_l == extract.HOI or info_r == extract.HOI:
-                return ((), extract.HOI, node_len)
-            else:
-                raise RuntimeError("Fatal error while finding hoistable terms")
-
-        expr_loops = self.expr_info.loops
-        dict_expr_loops = loops_as_dict(expr_loops)
-        real_deps = dict_expr_loops.keys()
-
-        # Set global parameters of the extract recursive function
-        extract.symbols = visit(self.header, None)['symbols']
-        extract.has_extracted = False
-        extract.real_deps = real_deps
-        extract.INV = 0  # Invariant term(s)
-        extract.KSE = 1  # Keep searching invariant sub-expressions
-        extract.HOI = 2  # Stop searching, done hoisting
-
-        # Extract read-only sub-expressions that do not depend on at least
-        # one loop in the loop nest
-        inv_dep = {}
-        typ = self.kernel_decls[self.stmt.children[0].symbol][0].typ
-        while True:
-            expr_dep = defaultdict(list)
-            extract(self.stmt.children[1], expr_dep)
-
-            # While end condition
-            if self._licm and not extract.has_extracted:
-                break
-            extract.has_extracted = False
-            self._licm += 1
-
-            for all_deps, expr in sorted(expr_dep.items()):
-                # -1) Filter dependencies that do not pertain to the expression
-                dep = tuple(d for d in all_deps if d in real_deps)
-
-                # 0) The invariant statements go in the closest outer loop to
-                # dep[-1] which they depend on, and are wrapped by a loop wl
-                # iterating along the same iteration space as dep[-1].
-                # If there's no such an outer loop, they fall in the header,
-                # provided they are within a perfect loop nest (otherwise,
-                # dependencies may be broken)
-                outermost_loop = expr_loops[0]
-                is_outermost_perfect = is_perfect_loop(outermost_loop)
-                if len(dep) == 0:
-                    place, wl = self.header, None
-                    next_loop = outermost_loop
-                elif len(dep) == 1 and is_outermost_perfect:
-                    place, wl = self.header, dict_expr_loops[dep[0]]
-                    next_loop = outermost_loop
-                elif len(dep) == 1 and not is_outermost_perfect:
-                    place, wl = dict_expr_loops[dep[0]].children[0], None
-                    next_loop = od_find_next(dict_expr_loops, dep[0])
-                else:
-                    dep_block = dict_expr_loops[dep[-2]].children[0]
-                    place, wl = dep_block, dict_expr_loops[dep[-1]]
-                    next_loop = od_find_next(dict_expr_loops, dep[-2])
-
-                # 1) Remove identical sub-expressions
-                expr = dict([(str(e), e) for e in expr]).values()
-
-                # 2) Create the new invariant sub-expressions and temporaries
-                sym_rank, for_dep = (tuple([wl.size()]), tuple([wl.it_var()])) \
-                    if wl else ((), ())
-                syms = [Symbol("LI_%s_%d_%s" % ("".join(dep).upper() if dep else "C",
-                        self._licm, i), sym_rank) for i in range(len(expr))]
-                var_decl = [Decl(typ, _s) for _s in syms]
-                for_sym = [Symbol(_s.sym.symbol, for_dep) for _s in var_decl]
-
-                # 3) Create the new for loop containing invariant terms
-                _expr = [Par(dcopy(e)) if not isinstance(e, Par)
-                         else dcopy(e) for e in expr]
-                inv_for = [Assign(_s, e) for _s, e in zip(dcopy(for_sym), _expr)]
-
-                # 4) Update the lists of decls
-                self.decls.update(dict(zip([d.sym.symbol for d in var_decl],
-                                           [(v, plan.LOCAL_VAR) for v in var_decl])))
-
-                # 5) Replace invariant sub-trees with the proper tmp variable
-                n_replaced = dict(zip([str(s) for s in for_sym], [0]*len(for_sym)))
-                ast_replace(self.stmt.children[1], dict(zip([str(i) for i in expr],
-                                                        for_sym)), n_replaced)
-
-                # 6) Track hoisted symbols and symbols dependencies
-                sym_info = [(i, j, inv_for) for i, j in zip(_expr, var_decl)]
-                self.hoisted.update(zip([s.symbol for s in for_sym], sym_info))
-                for s, e in zip(for_sym, expr):
-                    self.expr_graph.add_dependency(s, e, n_replaced[str(s)] > 1)
-                    extract.symbols[s] = dep
-
-                # 7a) Update expressions hoisted along a known dimension (same dep)
-                inv_info = (for_dep, place, next_loop, wl)
-                if inv_info in inv_dep:
-                    _var_decl, _inv_for = inv_dep[inv_info]
-                    _var_decl.extend(var_decl)
-                    _inv_for.extend(inv_for)
-                    continue
-
-                # 7b) Keep track of hoisted stuff
-                inv_dep[inv_info] = (var_decl, inv_for)
-
-        for inv_info, dep_info in sorted(inv_dep.items()):
-            var_decl, inv_for = dep_info
-            _, place, next_loop, wl = inv_info
-            # Create the hoisted code
-            if wl:
-                new_for = [dcopy(wl)]
-                new_for[0].children[0] = Block(inv_for, open_scope=True)
-                inv_for = inv_code = new_for
-            else:
-                inv_code = [None]
-            # Append the new node at the right level in the loop nest
-            ofs = place.children.index(next_loop)
-            new_block = var_decl + inv_for + [FlatBlock("\n")] + place.children[ofs:]
-            place.children = place.children[:ofs] + new_block
-            # Update information about hoisted symbols
-            for i in var_decl:
-                old_sym_info = self.hoisted[i.sym.symbol]
-                old_sym_info = old_sym_info[0:2] + (inv_code[0],) + (place.children,)
-                self.hoisted[i.sym.symbol] = old_sym_info
+        """Perform loop-invariant code motion."""
+        self.expr_hoister.licm()
 
     def count_occurrences(self, str_key=False):
         """For each variable in the expression, count how many times
@@ -434,6 +231,255 @@ class ExpressionRewriter(object):
             replace_expr(expr.children[0], expr, 0, inv_for.it_var(), hoisted_expr)
             # Track the (potentially modified) hoisted expression
             hoisted_expr[str(expr)] = sym
+
+
+class ExpressionHoister(object):
+    """Perform loop-invariant code motion (licm).
+
+    Invariant expressions found in the loop nest are moved "after" the
+    outermost independent loop and "after" the fastest varying dimension
+    loop. Here, "after" means that if the loop nest has two loops ``i``
+    and ``j``, and ``j`` is in the body of ``i``, then ``i`` comes after
+    ``j`` (i.e. the loop nest has to be read from right to left).
+
+    For example, if a sub-expression ``E`` depends on ``[i, j]`` and the
+    loop nest has three loops ``[i, j, k]``, then ``E`` is hoisted out from
+    the body of ``k`` to the body of ``i``). All hoisted expressions are
+    then wrapped within a suitable loop in order to exploit compiler
+    autovectorization. Note that this applies to constant sub-expressions
+    as well, in which case hoisting after the outermost loop takes place."""
+
+    # Global counting the total number of expressions for which licm was licm
+    # was performed
+    GLOBAL_LICM_COUNTER = 0
+
+    def __init__(self, stmt, expr_info, header, typ, decls, hoisted, expr_graph):
+        """Initialize the ExpressionHoister."""
+        self.stmt = stmt
+        self.expr_info = expr_info
+        self.header = header
+        self.typ = typ
+        self.decls = decls
+        self.hoisted = hoisted
+        self.expr_graph = expr_graph
+
+        # Count how many iterations of hoisting were performed. This is used to
+        # create sensible variable names
+        self.glb_counter = ExpressionHoister.GLOBAL_LICM_COUNTER
+        self.counter = 0
+
+        # Constants used by the extract method to charaterize sub-expressions
+        self.INV = 0  # Invariant term, hoistable if part of an invariant expression
+        self.KSE = 1  # Invariant expression, potentially part of larger invariant
+        self.HOI = 2  # Variant expression, hoisted, can't hoist anymore
+
+        # Variables used for communication between the extract and licm methods
+        self.extracted = False  # True if managed to hoist at least one sub-expr
+        self.symbols = {}
+        self.real_deps = []
+
+    def _extract_exprs(self, node, expr_dep, length=0):
+        """Extract invariant sub-expressions from the original expression.
+        Hoistable sub-expressions are stored in expr_dep."""
+
+        def hoist(node, dep, expr_dep, _extract=True):
+            if _extract:
+                node = Par(node) if isinstance(node, Symbol) else node
+                expr_dep[dep].append(node)
+            self.extracted = self.extracted or _extract
+
+        if isinstance(node, Symbol):
+            return (self.symbols[node], self.INV, 1)
+        if isinstance(node, Par):
+            return (self._extract_exprs(node.children[0], expr_dep, length))
+
+        # Traverse the expression tree
+        left, right = node.children
+        dep_l, info_l, len_l = self._extract_exprs(left, expr_dep, length)
+        dep_r, info_r, len_r = self._extract_exprs(right, expr_dep, length)
+        node_len = len_l + len_r
+
+        # Filter out false dependencies
+        dep_l = tuple(d for d in dep_l if d in self.real_deps)
+        dep_r = tuple(d for d in dep_r if d in self.real_deps)
+
+        if info_l == self.KSE and info_r == self.KSE:
+            if dep_l != dep_r:
+                # E.g. (A[i]*alpha + D[i])*(B[j]*beta + C[j])
+                hoist(left, dep_l, expr_dep)
+                hoist(right, dep_r, expr_dep)
+                return ((), self.HOI, node_len)
+            else:
+                # E.g. (A[i]*alpha)+(B[i]*beta)
+                return (dep_l, self.KSE, node_len)
+        elif info_l == self.KSE and info_r == self.INV:
+            # E.g. (A[i] + B[i])*C[j]
+            hoist(left, dep_l, expr_dep)
+            hoist(right, dep_r, expr_dep, not self.counter or len_r > 1)
+            return ((), self.HOI, node_len)
+        elif info_l == self.INV and info_r == self.KSE:
+            # E.g. A[i]*(B[j]) + C[j])
+            hoist(right, dep_r, expr_dep)
+            hoist(left, dep_l, expr_dep, not self.counter or len_l > 1)
+            return ((), self.HOI, node_len)
+        elif info_l == self.INV and info_r == self.INV:
+            if not dep_l and not dep_r:
+                # E.g. alpha*beta
+                return ((), self.INV, node_len)
+            elif dep_l and dep_r and dep_l != dep_r:
+                if set(dep_l).issubset(set(dep_r)):
+                    # E.g. A[i]*B[i,j]
+                    return (dep_r, self.KSE, node_len)
+                elif set(dep_r).issubset(set(dep_l)):
+                    # E.g. A[i,j]*B[i]
+                    return (dep_l, self.KSE, node_len)
+                else:
+                    # dep_l != dep_r:
+                    # E.g. A[i]*B[j]
+                    hoist(left, dep_l, expr_dep, not self.counter or len_l > 1)
+                    hoist(right, dep_r, expr_dep, not self.counter or len_r > 1)
+                    return ((), self.HOI, node_len)
+            elif dep_l and dep_r and dep_l == dep_r:
+                # E.g. A[i] + B[i]
+                return (dep_l, self.INV, node_len)
+            elif dep_l and not dep_r:
+                # E.g. A[i]*alpha
+                hoist(right, dep_r, expr_dep, len_r > 1)
+                return (dep_l, self.KSE, node_len)
+            elif dep_r and not dep_l:
+                # E.g. alpha*A[i]
+                hoist(left, dep_l, expr_dep, len_l > 1)
+                return (dep_r, self.KSE, node_len)
+            else:
+                raise RuntimeError("Error while hoisting invariant terms")
+        elif info_l == self.HOI and info_r == self.KSE:
+            hoist(right, dep_r, expr_dep, len_r > 2)
+            return ((), self.HOI, node_len)
+        elif info_l == self.KSE and info_r == self.HOI:
+            hoist(left, dep_l, expr_dep, len_l > 2)
+            return ((), self.HOI, node_len)
+        elif info_l == self.HOI or info_r == self.HOI:
+            return ((), self.HOI, node_len)
+        else:
+            raise RuntimeError("Fatal error while finding hoistable terms")
+
+    def licm(self):
+        """Perform loop-invariant code motion for the expression passed in at
+        object construction time."""
+
+        expr_loops = self.expr_info.loops
+        dict_expr_loops = loops_as_dict(expr_loops)
+        real_deps = dict_expr_loops.keys()
+
+        # (Re)set global parameters of the extract recursive function
+        self.symbols = visit(self.header, None)['symbols']
+        self.real_deps = real_deps
+        self.extracted = False
+
+        # Extract read-only sub-expressions that do not depend on at least
+        # one loop in the loop nest
+        inv_dep = {}
+        while True:
+            expr_dep = defaultdict(list)
+            self._extract_exprs(self.stmt.children[1], expr_dep)
+
+            # While end condition
+            if self.counter and not self.extracted:
+                break
+            self.extracted = False
+            self.counter += 1
+
+            for all_deps, expr in sorted(expr_dep.items()):
+                # -1) Filter dependencies that do not pertain to the expression
+                dep = tuple(d for d in all_deps if d in real_deps)
+
+                # 0) The invariant statements go in the closest outer loop to
+                # dep[-1] which they depend on, and are wrapped by a loop wl
+                # iterating along the same iteration space as dep[-1].
+                # If there's no such an outer loop, they fall in the header,
+                # provided they are within a perfect loop nest (otherwise,
+                # dependencies may be broken)
+                outermost_loop = expr_loops[0]
+                is_outermost_perfect = is_perfect_loop(outermost_loop)
+                if len(dep) == 0:
+                    place, wl = self.header, None
+                    next_loop = outermost_loop
+                elif len(dep) == 1 and is_outermost_perfect:
+                    place, wl = self.header, dict_expr_loops[dep[0]]
+                    next_loop = outermost_loop
+                elif len(dep) == 1 and not is_outermost_perfect:
+                    place, wl = dict_expr_loops[dep[0]].children[0], None
+                    next_loop = od_find_next(dict_expr_loops, dep[0])
+                else:
+                    dep_block = dict_expr_loops[dep[-2]].children[0]
+                    place, wl = dep_block, dict_expr_loops[dep[-1]]
+                    next_loop = od_find_next(dict_expr_loops, dep[-2])
+
+                # 1) Remove identical sub-expressions
+                expr = dict([(str(e), e) for e in expr]).values()
+
+                # 2) Create the new invariant sub-expressions and temporaries
+                sym_rank, for_dep = (tuple([wl.size()]), tuple([wl.it_var()])) \
+                    if wl else ((), ())
+                syms = [Symbol("LI_%s_%d_%s" % ("".join(dep).upper() if dep else "C",
+                        self.counter, i), sym_rank) for i in range(len(expr))]
+                var_decl = [Decl(self.typ, _s) for _s in syms]
+                for_sym = [Symbol(_s.sym.symbol, for_dep) for _s in var_decl]
+
+                # 3) Create the new for loop containing invariant terms
+                _expr = [Par(dcopy(e)) if not isinstance(e, Par)
+                         else dcopy(e) for e in expr]
+                inv_for = [Assign(_s, e) for _s, e in zip(dcopy(for_sym), _expr)]
+
+                # 4) Update the lists of decls
+                self.decls.update(dict(zip([d.sym.symbol for d in var_decl],
+                                           [(v, plan.LOCAL_VAR) for v in var_decl])))
+
+                # 5) Replace invariant sub-trees with the proper tmp variable
+                n_replaced = dict(zip([str(s) for s in for_sym], [0]*len(for_sym)))
+                ast_replace(self.stmt.children[1], dict(zip([str(i) for i in expr],
+                                                        for_sym)), n_replaced)
+
+                # 6) Track hoisted symbols and symbols dependencies
+                sym_info = [(i, j, inv_for) for i, j in zip(_expr, var_decl)]
+                self.hoisted.update(zip([s.symbol for s in for_sym], sym_info))
+                for s, e in zip(for_sym, expr):
+                    self.expr_graph.add_dependency(s, e, n_replaced[str(s)] > 1)
+                    self.symbols[s] = dep
+
+                # 7a) Update expressions hoisted along a known dimension (same dep)
+                inv_info = (for_dep, place, next_loop, wl)
+                if inv_info in inv_dep:
+                    _var_decl, _inv_for = inv_dep[inv_info]
+                    _var_decl.extend(var_decl)
+                    _inv_for.extend(inv_for)
+                    continue
+
+                # 7b) Keep track of hoisted stuff
+                inv_dep[inv_info] = (var_decl, inv_for)
+
+        for inv_info, dep_info in sorted(inv_dep.items()):
+            var_decl, inv_for = dep_info
+            _, place, next_loop, wl = inv_info
+            # Create the hoisted code
+            if wl:
+                new_for = [dcopy(wl)]
+                new_for[0].children[0] = Block(inv_for, open_scope=True)
+                inv_for = inv_code = new_for
+            else:
+                inv_code = [None]
+            # Append the new node at the right level in the loop nest
+            ofs = place.children.index(next_loop)
+            new_block = var_decl + inv_for + [FlatBlock("\n")] + place.children[ofs:]
+            place.children = place.children[:ofs] + new_block
+            # Update information about hoisted symbols
+            for i in var_decl:
+                old_sym_info = self.hoisted[i.sym.symbol]
+                old_sym_info = old_sym_info[0:2] + (inv_code[0],) + (place.children,)
+                self.hoisted[i.sym.symbol] = old_sym_info
+
+        # Increase the global counter for subsequent calls to licm
+        ExpressionHoister.GLOBAL_LICM_COUNTER += 1
 
 
 class ExpressionExpander(object):
