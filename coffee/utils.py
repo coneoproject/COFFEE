@@ -294,6 +294,32 @@ def is_perfect_loop(loop):
     return check_perfectness(loop)
 
 
+def count_occurrences(node, str_key=False):
+    """For each variable ``node``, count how many times it appears as involved
+    in some arithmetic operations. For example, for the expression: ::
+
+        ``a*(5+c) + b*(a+4)``
+
+    return ::
+
+        ``{a: 2, b: 1, c: 1}``"""
+
+    def count(node, counter):
+        if isinstance(node, Symbol):
+            node = str(node) if str_key else (node.symbol, node.rank)
+            if node in counter:
+                counter[node] += 1
+            else:
+                counter[node] = 1
+        else:
+            for c in node.children:
+                count(c, counter)
+
+    counter = {}
+    count(node, counter)
+    return counter
+
+
 #######################################################################
 # Functions to manipulate iteration spaces in various representations #
 #######################################################################

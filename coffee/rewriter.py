@@ -35,7 +35,7 @@ from collections import defaultdict
 from copy import deepcopy as dcopy
 
 from base import *
-from utils import visit, is_perfect_loop
+from utils import visit, is_perfect_loop, count_occurrences
 from utils import ast_replace, loops_as_dict, od_find_next
 import plan
 
@@ -83,26 +83,6 @@ class ExpressionRewriter(object):
         """Perform loop-invariant code motion."""
         self.expr_hoister.licm()
 
-    def count_occurrences(self, str_key=False):
-        """For each variable in the expression, count how many times
-        it appears as involved in some operations. For example, for the
-        expression ``a*(5+c) + b*(a+4)``, return ``{a: 2, b: 1, c: 1}``."""
-
-        def count(node, counter):
-            if isinstance(node, Symbol):
-                node = str(node) if str_key else (node.symbol, node.rank)
-                if node in counter:
-                    counter[node] += 1
-                else:
-                    counter[node] = 1
-            else:
-                for c in node.children:
-                    count(c, counter)
-
-        counter = {}
-        count(self.stmt.children[1], counter)
-        return counter
-
     def expand(self):
         """Expand expressions such that: ::
 
@@ -128,7 +108,7 @@ class ExpressionRewriter(object):
         # to be more effective.
         asm_out, asm_in = self.expr_info.fast_itvars
         it_var_occs = {asm_out: 0, asm_in: 0}
-        for s in self.count_occurrences().keys():
+        for s in count_occurrences(self.stmt.children[1]).keys():
             if s[1] and s[1][0] in it_var_occs:
                 it_var_occs[s[1][0]] += 1
 
@@ -191,7 +171,8 @@ class ExpressionRewriter(object):
             raise RuntimeError("Distribute error: expansion required first.")
 
         to_distr = defaultdict(list)
-        find_prod(self.stmt.children[1], self.count_occurrences(True), to_distr)
+        occurrences = count_occurrences(self.stmt.children[1], True)
+        find_prod(self.stmt.children[1], occurrences, to_distr)
 
         # Create the new expression
         new_prods = []
