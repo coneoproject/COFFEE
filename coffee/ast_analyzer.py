@@ -45,7 +45,53 @@ from base import *
 
 class StmtTracker(OrderedDict):
 
-    """Track the location of generic statements in an abstract syntax tree."""
+    """Track the location of generic statements in an abstract syntax tree.
+
+    Each key in the dictionary is a string representing a symbol. As such,
+    StmtTracker can be used only in SSA scopes. Each entry in the dictionary
+    is tuple containing information about the symbol: ::
+
+        (expression, declaration, closest_for, place)
+
+    whose semantics is, respectively, as follows:
+
+        * The AST root node of the right-hand side of the statement whose
+          left-hand side is ``sym``
+        * The AST node of the symbol declaration
+        * The AST node of the closest loop enclosing the statement
+        * The parent block of the loop
+    """
+
+    def update_stmt(self, sym, **kwargs):
+        """Given the symbol ``sym``, it updates information related to it as
+        specified in ``kwargs``. ``kwargs`` is based on the following special
+        keys:
+
+            * "expr": change the expression
+            * "decl": change the declaration
+            * "loop": change the closest loop
+            * "place": change the parent block of the loop
+        """
+        up_expr = kwargs.get('expr')
+        up_decl = kwargs.get('decl')
+        up_loop = kwargs.get('loop')
+        up_place = kwargs.get('place')
+
+        if up_expr:
+            self[sym] = (up_expr,) + self[sym][1:4]
+        if up_decl:
+            self[sym] = self[sym][:1] + (up_decl,) + self[sym][2:4]
+        if up_loop:
+            self[sym] = self[sym][:2] + (up_loop,) + self[sym][3:4]
+        if up_place:
+            self[sym] = self[sym][:3] + (up_decl,)
+
+    def update_loop(self, loop_a, loop_b):
+        """Replace all occurrences of ``loop_a`` with ``loop_b`` in all entries."""
+
+        for sym, sym_info in self.items():
+            if sym_info[2] == loop_a:
+                self.update_stmt(sym, **{'loop': loop_b})
 
 
 class ExpressionGraph(object):

@@ -31,12 +31,6 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-try:
-    from collections import OrderedDict
-# OrderedDict was added in Python 2.7. Earlier versions can use ordereddict
-# from PyPI
-except ImportError:
-    from ordereddict import OrderedDict
 from copy import deepcopy as dcopy
 
 from base import *
@@ -126,7 +120,10 @@ class LoopOptimizer(object):
                 ew.licm()
                 # Fuse loops iterating along the same iteration space
                 lm = PerfectSSALoopMerger(self.expr_graph, self.root)
-                lm.merge()
+                merged_loops = lm.merge()
+                for merged, merged_in in merged_loops:
+                    [self.hoisted.update_loop(l, merged_in) for l in merged]
+                # Removed redundant expressions
                 ew.simplify()
 
         # Eliminate zero-valued columns if the kernel operation uses block-sparse

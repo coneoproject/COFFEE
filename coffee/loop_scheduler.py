@@ -158,6 +158,7 @@ class PerfectSSALoopMerger(LoopScheduler):
                 # Track written variables
                 written_syms.extend(self._accessed_syms(n, 0))
 
+        all_merged = []
         # A perfect loop nest L1 is mergeable in a loop nest L2 if
         # 1 - their iteration space is identical; implicitly true because the keys,
         #     in the dictionary, are iteration spaces.
@@ -201,6 +202,11 @@ class PerfectSSALoopMerger(LoopScheduler):
             for l in reversed(mergeable):
                 merged, l_itvars, m_itvars = self._merge_loops(self.root, l, merging_in)
                 self._update_it_vars(merged, dict(zip(l_itvars, m_itvars)))
+            # Update the list of merged loops
+            all_merged.append((mergeable, merging_in))
+
+        # Return the list of merged loops and the resulting loop
+        return all_merged
 
 
 class ExprLoopFissioner(LoopScheduler):
