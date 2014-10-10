@@ -107,24 +107,26 @@ class LoopOptimizer(object):
         if not self.asm_expr:
             return
 
+        # Expression rewriting
         kernel_info = (self.header, self.kernel_decls)
         for stmt_info in self.asm_expr.items():
             ew = ExpressionRewriter(stmt_info, self.decls, kernel_info,
                                     self.hoisted, self.expr_graph)
-            # Perform expression rewriting
             if level > 0:
                 ew.licm()
             if level > 1:
                 ew.expand()
                 ew.distribute()
                 ew.licm()
-                # Fuse loops iterating along the same iteration space
-                lm = PerfectSSALoopMerger(self.expr_graph, self.root)
-                merged_loops = lm.merge()
-                for merged, merged_in in merged_loops:
-                    [self.hoisted.update_loop(l, merged_in) for l in merged]
-                # Removed redundant expressions
-                ew.simplify()
+
+        # Fuse loops iterating along the same iteration space and remove
+        # any duplicate sub-expressions
+        if level > 1:
+            lm = PerfectSSALoopMerger(self.expr_graph, self.root)
+            merged_loops = lm.merge()
+            for merged, merged_in in merged_loops:
+                [self.hoisted.update_loop(l, merged_in) for l in merged]
+            lm.simplify()
 
         # Eliminate zero-valued columns if the kernel operation uses block-sparse
         # arrays (contiguous zero-valued columns are present)

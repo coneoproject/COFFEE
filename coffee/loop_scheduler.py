@@ -72,6 +72,7 @@ class PerfectSSALoopMerger(LoopScheduler):
 
     def __init__(self, expr_graph, root):
         super(PerfectSSALoopMerger, self).__init__(expr_graph, root)
+        self.merged_loops = []
 
     def _find_it_space(self, node):
         """Return the iteration space of the loop nest rooted in ``node``,
@@ -202,11 +203,60 @@ class PerfectSSALoopMerger(LoopScheduler):
             for l in reversed(mergeable):
                 merged, l_itvars, m_itvars = self._merge_loops(self.root, l, merging_in)
                 self._update_it_vars(merged, dict(zip(l_itvars, m_itvars)))
-            # Update the list of merged loops
+            # Update the lists of merged loops
             all_merged.append((mergeable, merging_in))
+            self.merged_loops.append(merging_in)
 
         # Return the list of merged loops and the resulting loop
         return all_merged
+
+    def simplify(self):
+        """Scan the list of merged loops and eliminate sub-expressions that became
+        duplicate as now iterating along the same iteration space. For example: ::
+
+            for i = 0 to N
+              A[i] = B[i] + C[i]
+            for j = 0 to N
+              D[j] = B[j] + C[j]
+
+        After merging this becomes: ::
+
+            for i = 0 to N
+              A[i] = B[i] + C[i]
+              D[i] = B[i] + C[i]
+
+        And finally, after simplification (i.e. after ``simplify`` is applied): ::
+
+            for i = 0 to N
+              A[i] = B[i] + C[i]
+              D[i] = A[i]
+
+        Note this last step is not done by compilers like intel's (version 14).
+        """
+
+        def replace_expr(node, parent, parent_idx, it_var, hoisted_expr):
+            """Recursively search for any sub-expressions rooted in node that have
+            been hoisted and therefore are already kept in a temporary. Replace them
+            with such temporary."""
+            if isinstance(node, Symbol):
+                return
+            else:
+                tmp_sym = hoisted_expr.get(str(node)) or hoisted_expr.get(str(parent))
+                if tmp_sym:
+                    # Found a temporary value already hosting the value of node
+                    parent.children[parent_idx] = dcopy(tmp_sym)
+                else:
+                    # Go ahead recursively
+                    for i, n in enumerate(node.children):
+                        replace_expr(n, node, i, it_var, hoisted_expr)
+
+        hoisted_expr = {}
+        for loop in self.merged_loops:
+            block = loop.children[0].children
+            for stmt in block:
+                sym, expr = stmt.children
+                replace_expr(expr.children[0], expr, 0, loop.it_var(), hoisted_expr)
+                hoisted_expr[str(expr)] = sym
 
 
 class ExprLoopFissioner(LoopScheduler):

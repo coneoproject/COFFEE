@@ -182,37 +182,6 @@ class ExpressionRewriter(object):
             new_prods.append(Par(Prod(dist[0], target)))
         self.stmt.children[1] = Par(create_sum(new_prods))
 
-    def simplify(self):
-        """Scan the hoisted terms one by one and eliminate duplicate sub-expressions.
-        Remove useless assignments (e.g. a = b, and b never used later)."""
-
-        def replace_expr(node, parent, parent_idx, it_var, hoisted_expr):
-            """Recursively search for any sub-expressions rooted in node that have
-            been hoisted and therefore are already kept in a temporary. Replace them
-            with such temporary."""
-            if isinstance(node, Symbol):
-                return
-            else:
-                tmp_sym = hoisted_expr.get(str(node)) or hoisted_expr.get(str(parent))
-                if tmp_sym:
-                    # Found a temporary value already hosting the value of node
-                    parent.children[parent_idx] = Symbol(dcopy(tmp_sym), (it_var,))
-                else:
-                    # Go ahead recursively
-                    for i, n in enumerate(node.children):
-                        replace_expr(n, node, i, it_var, hoisted_expr)
-
-        # Remove duplicates
-        hoisted_expr = {}
-        for sym, sym_info in self.hoisted.items():
-            expr, var_decl, inv_for, place = sym_info
-            if not isinstance(inv_for, For):
-                continue
-            # Check if any sub-expressions rooted in expr is alredy stored in a temporary
-            replace_expr(expr.children[0], expr, 0, inv_for.it_var(), hoisted_expr)
-            # Track the (potentially modified) hoisted expression
-            hoisted_expr[str(expr)] = sym
-
 
 class ExpressionHoister(object):
     """Perform loop-invariant code motion (licm).
@@ -370,7 +339,7 @@ class ExpressionHoister(object):
             self.extracted = False
             self.counter += 1
 
-            for all_deps, expr in sorted(expr_dep.items()):
+            for all_deps, expr in expr_dep.items():
                 # -1) Filter dependencies that do not pertain to the expression
                 dep = tuple(d for d in all_deps if d in real_deps)
 
