@@ -204,7 +204,7 @@ def visit(node, parent):
                 opt_par = opts[2][delim:].replace(" ", "")
                 if opt_name == "assembly":
                     # Found high-level optimisation
-                    return (parent, zip(*fors)[0], (opt_par[1], opt_par[3]))
+                    return (parent, fors, (opt_par[1], opt_par[3]))
 
     def inspect(node, parent, mode=""):
         if isinstance(node, EmptyStatement):

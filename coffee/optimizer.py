@@ -37,7 +37,7 @@ from base import *
 from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
 from utils import set_itspace
 from expression import MetaExpr
-from loop_scheduler import PerfectSSALoopMerger, ExprLoopFissioner, ZeroLoopScheduler
+from loop_scheduler import PerfectSSALoopMerger, ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
@@ -137,10 +137,10 @@ class LoopOptimizer(object):
             # columns in different positions. The ZeroLoopScheduler analyzes statements
             # "one by one", and changes the iteration spaces of the enclosing
             # loops accordingly.
-            elf = ExprLoopFissioner(self.expr_graph, self.root, 1)
+            elf = ExpressionFissioner(self.expr_graph, self.root, 1)
             new_asm_expr = {}
             for expr in self.asm_expr.items():
-                new_asm_expr.update(elf.expr_fission(expr, False))
+                new_asm_expr.update(elf.fission(expr, False))
             # Search for zero-valued columns and restructure the iteration spaces
             zls = ZeroLoopScheduler(self.expr_graph, self.root,
                                     (self.kernel_decls, self.decls))
@@ -414,10 +414,10 @@ class CPULoopOptimizer(LoopOptimizer):
             return
 
         new_asm_expr = {}
-        elf = ExprLoopFissioner(self.expr_graph, self.root, cut)
+        elf = ExpressionFissioner(self.expr_graph, self.root, cut)
         for splittable in self.asm_expr.items():
             # Split the expression
-            new_asm_expr.update(elf.expr_fission(splittable, True))
+            new_asm_expr.update(elf.fission(splittable, True))
         self.asm_expr = new_asm_expr
 
     def blas(self, library):

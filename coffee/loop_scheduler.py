@@ -259,17 +259,17 @@ class PerfectSSALoopMerger(LoopScheduler):
                 hoisted_expr[str(expr)] = sym
 
 
-class ExprLoopFissioner(LoopScheduler):
+class ExpressionFissioner(LoopScheduler):
 
     """Analyze data dependencies and iteration spaces, then fission associative
     operations in expressions.
     Fissioned expressions are placed in a separate loop nest."""
 
     def __init__(self, expr_graph, root, cut):
-        """Initialize the ExprLoopFissioner.
+        """Initialize the ExpressionFissioner.
 
         :arg cut: number of operands requested to fission expressions."""
-        super(ExprLoopFissioner, self).__init__(expr_graph, root)
+        super(ExpressionFissioner, self).__init__(expr_graph, root)
         self.cut = cut
 
     def _split_sum(self, node, parent, is_left, found, sum_count):
@@ -318,9 +318,12 @@ class ExprLoopFissioner(LoopScheduler):
         loop nests if ``copy_loops`` is true; they are placed in the same
         original loop nest otherwise. Return the two split expressions as a
         2-tuple, in which the second element is potentially further splittable."""
+
         stmt, expr_info = stmt_info
-        parent = expr_info.parent
-        loops = expr_info.fast_loops
+        expr_parent = expr_info.parent
+        fast_outerloop_info = expr_info.fast_loops_info[0]
+        fast_outerloop, fast_outerparent = fast_outerloop_info
+
         # Copy the original expression twice, and then split the two copies, that
         # we refer to as ``left`` and ``right``, meaning that the left copy will
         # be transformed in the sub-expression from the origin up to the cut point,
@@ -335,30 +338,38 @@ class ExprLoopFissioner(LoopScheduler):
         sright = self._split_sum(expr_right.children[0], (expr_right, 0), False, None, 0)
 
         if sleft and sright:
-            index = parent.children.index(stmt)
-            # Append the left-split expression. Re-use a loop nest
-            parent.children[index] = stmt_left
-            # Append the right-split (remainder) expression.
+            index = expr_parent.children.index(stmt)
+
+            # Append the left-split expression, reusing existing loop nest
+            expr_parent.children[index] = stmt_left
+            split = (stmt_left, MetaExpr(expr_parent,
+                                         expr_info.loops_info,
+                                         expr_info.fast_itvars))
+
+            # Append the right-split (remainder) expression
             if copy_loops:
                 # Create a new loop nest
-                new_loop = dcopy(loops[0])
-                new_inner_loop = new_loop.children[0].children[0]
-                new_inner_loop_block = new_inner_loop.children[0]
-                new_inner_loop_block.children[0] = stmt_right
-                expr_right_loops = (new_loop, new_inner_loop)
-                self.root.children.append(new_loop)
+                new_fast_outerloop = dcopy(fast_outerloop)
+                new_fast_innerloop = new_fast_outerloop.children[0].children[0]
+                new_fast_innerloop_block = new_fast_innerloop.children[0]
+                new_fast_innerloop_block.children[0] = stmt_right
+                new_fast_outerloop_info = (new_fast_outerloop, fast_outerparent)
+                new_fast_innerloop_info = (new_fast_innerloop, new_fast_innerloop_block)
+                new_loops_info = expr_info.slow_loops_info + \
+                    (new_fast_outerloop_info,) + (new_fast_innerloop_info,)
+                fast_outerparent.children.append(new_fast_outerloop)
             else:
-                parent.children.insert(index, stmt_right)
-                new_inner_loop_block, expr_right_loops = (parent, loops)
-            # Attach info to the two split sub-expressions
-            split = (stmt_left, MetaExpr(parent, (expr_info.fast_loops,
-                                                  expr_info.slow_loops)))
-            new_loops = (expr_right_loops, expr_info.slow_loops)
-            splittable = (stmt_right, MetaExpr(new_inner_loop_block, new_loops))
+                # Reuse loop nest created in the previous function call
+                expr_parent.children.insert(index, stmt_right)
+                new_fast_innerloop_block = expr_parent
+                new_loops_info = expr_info.loops_info
+            splittable = (stmt_right, MetaExpr(new_fast_innerloop_block,
+                                               new_loops_info,
+                                               expr_info.fast_itvars))
             return (split, splittable)
         return ((stmt, expr_info), ())
 
-    def expr_fission(self, stmt_info, copy_loops):
+    def fission(self, stmt_info, copy_loops):
         """Split an expression containing ``x`` summands into ``x/cut`` chunks.
         Each chunk is placed in a separate loop nest if ``copy_loops`` is true,
         in the same loop nest otherwise. In the former case, the split occurs

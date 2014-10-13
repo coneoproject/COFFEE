@@ -38,39 +38,64 @@ class MetaExpr(object):
 
     """Information container for a compute-intensive expression."""
 
-    def __init__(self, parent, loops, fast_dims):
+    def __init__(self, parent, loops_info, fast_dims):
         """Initialize the MetaExpr.
 
         :arg parent: the parent block node in which the expression is embedded.
-        :arg loops:  the ordered tuple of loops the expression depends on.
+        :arg loops_info:  the ordered tuple of (loop, parent) the expression
+                          depends on.
         :arg fast_dims: the iteration variables along which the expression
                         iterates fastest.
         """
         self._parent = parent
-        self._loops = loops
+        self._loops_info = loops_info
         self._fast_dims = fast_dims
 
     @property
     def loops(self):
-        return self._loops
+        return zip(*self._loops_info)[0]
 
     @property
-    def fast_itvars(self):
-        return self._fast_dims
+    def loops_parents(self):
+        return zip(*self._loops_info)[1]
+
+    @property
+    def loops_info(self):
+        return self._loops_info
 
     @property
     def fast_loops(self):
-        return tuple([l for l in self._loops if l.it_var() in self._fast_dims])
+        return tuple([l for l in self.loops if l.it_var() in self._fast_dims])
+
+    @property
+    def fast_loops_parents(self):
+        return tuple([p for l, p in self._loops_info if l.it_var() in self._fast_dims])
+
+    @property
+    def fast_loops_info(self):
+        return tuple([(l, p) for l, p in self._loops_info if l.it_var() in self._fast_dims])
 
     @property
     def slow_loops(self):
-        return tuple([l for l in self._loops if l.it_var() not in self._fast_dims])
+        return tuple(set(self.loops) - set(self.fast_loops))
+
+    @property
+    def slow_loops_parents(self):
+        return tuple(set(self.loops_parents) - set(self.fast_loops_parents))
+
+    @property
+    def slow_loops_info(self):
+        return tuple(set(self.loops_info) - set(self.fast_loops_info))
 
     @property
     def perfect_loops(self):
         """Return the loops in a perfect loop nest for the expression."""
-        return [l for l in self._loops if is_perfect_loop(l)]
+        return [l for l in self.loops if is_perfect_loop(l)]
 
     @property
     def parent(self):
         return self._parent
+
+    @property
+    def fast_itvars(self):
+        return self._fast_dims
