@@ -53,15 +53,6 @@ class LoopScheduler(object):
     """Base class for classes that handle loop scheduling; that is, loop fusion,
     loop distribution, etc."""
 
-    def __init__(self, expr_graph, root):
-        """Initialize the LoopScheduler.
-
-        :arg expr_graph: the ExpressionGraph tracking all data dependencies involving
-                         identifiers that appear in ``root``.
-        :arg root:       the node where loop scheduling takes place."""
-        self.expr_graph = expr_graph
-        self.root = root
-
 
 class PerfectSSALoopMerger(LoopScheduler):
 
@@ -70,8 +61,14 @@ class PerfectSSALoopMerger(LoopScheduler):
     Statements must be in "soft" SSA form: they can be declared and initialized
     at declaration time, then they can be assigned a value in only one place."""
 
-    def __init__(self, expr_graph, root):
-        super(PerfectSSALoopMerger, self).__init__(expr_graph, root)
+    def __init__(self, root, expr_graph):
+        """Initialize the PerfectSSALoopMerger.
+
+        :arg expr_graph: the ExpressionGraph tracking all data dependencies
+                         involving identifiers that appear in ``root``.
+        :arg root: the node where loop scheduling takes place."""
+        self.root = root
+        self.expr_graph = expr_graph
         self.merged_loops = []
 
     def _find_it_space(self, node):
@@ -265,11 +262,10 @@ class ExpressionFissioner(LoopScheduler):
     operations in expressions.
     Fissioned expressions are placed in a separate loop nest."""
 
-    def __init__(self, expr_graph, root, cut):
+    def __init__(self, cut):
         """Initialize the ExpressionFissioner.
 
         :arg cut: number of operands requested to fission expressions."""
-        super(ExpressionFissioner, self).__init__(expr_graph, root)
         self.cut = cut
 
     def _split_sum(self, node, parent, is_left, found, sum_count):
@@ -416,13 +412,18 @@ class ZeroLoopScheduler(LoopScheduler):
           B[i] = E[i]*F[i]
     """
 
-    def __init__(self, expr_graph, root, decls):
+    def __init__(self, root, expr_graph, decls):
         """Initialize the ZeroLoopScheduler.
 
+        :arg root: the node where loop scheduling takes place.
+        :arg expr_graph: the ExpressionGraph tracking all data dependencies involving
+                         identifiers that appear in ``root``.
         :arg decls: lists of array declarations. A 2-tuple is expected: the first
                     element is the list of kernel declarations; the second element
-                    is the list of hoisted temporaries declarations."""
-        super(ZeroLoopScheduler, self).__init__(expr_graph, root)
+                    is the list of hoisted temporaries declarations.
+        """
+        self.root = root
+        self.expr_graph = expr_graph
         self.kernel_decls, self.hoisted_decls = decls
         # Track zero blocks in each symbol accessed in the computation rooted in root
         self.nz_in_syms = {}

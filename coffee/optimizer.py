@@ -122,7 +122,7 @@ class LoopOptimizer(object):
         # Fuse loops iterating along the same iteration space and remove
         # any duplicate sub-expressions
         if level > 1:
-            lm = PerfectSSALoopMerger(self.expr_graph, self.root)
+            lm = PerfectSSALoopMerger(self.root, self.expr_graph)
             merged_loops = lm.merge()
             for merged, merged_in in merged_loops:
                 [self.hoisted.update_loop(l, merged_in) for l in merged]
@@ -137,12 +137,12 @@ class LoopOptimizer(object):
             # columns in different positions. The ZeroLoopScheduler analyzes statements
             # "one by one", and changes the iteration spaces of the enclosing
             # loops accordingly.
-            elf = ExpressionFissioner(self.expr_graph, self.root, 1)
+            elf = ExpressionFissioner(1)
             new_asm_expr = {}
             for expr in self.asm_expr.items():
                 new_asm_expr.update(elf.fission(expr, False))
             # Search for zero-valued columns and restructure the iteration spaces
-            zls = ZeroLoopScheduler(self.expr_graph, self.root,
+            zls = ZeroLoopScheduler(self.root, self.expr_graph,
                                     (self.kernel_decls, self.decls))
             self.asm_expr = zls.reschedule()[-1]
             self.nz_in_fors = zls.nz_in_fors
@@ -414,7 +414,7 @@ class CPULoopOptimizer(LoopOptimizer):
             return
 
         new_asm_expr = {}
-        elf = ExpressionFissioner(self.expr_graph, self.root, cut)
+        elf = ExpressionFissioner(cut)
         for splittable in self.asm_expr.items():
             # Split the expression
             new_asm_expr.update(elf.fission(splittable, True))
