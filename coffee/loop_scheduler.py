@@ -317,8 +317,8 @@ class ExpressionFissioner(LoopScheduler):
 
         stmt, expr_info = stmt_info
         expr_parent = expr_info.parent
-        fast_outerloop_info = expr_info.fast_loops_info[0]
-        fast_outerloop, fast_outerparent = fast_outerloop_info
+        unit_stride_outerloop_info = expr_info.unit_stride_loops_info[0]
+        unit_stride_outerloop, unit_stride_outerparent = unit_stride_outerloop_info
 
         # Copy the original expression twice, and then split the two copies, that
         # we refer to as ``left`` and ``right``, meaning that the left copy will
@@ -340,28 +340,30 @@ class ExpressionFissioner(LoopScheduler):
             expr_parent.children[index] = stmt_left
             split = (stmt_left, MetaExpr(expr_parent,
                                          expr_info.loops_info,
-                                         expr_info.fast_itvars))
+                                         expr_info.unit_stride_itvars))
 
             # Append the right-split (remainder) expression
             if copy_loops:
                 # Create a new loop nest
-                new_fast_outerloop = dcopy(fast_outerloop)
-                new_fast_innerloop = new_fast_outerloop.children[0].children[0]
-                new_fast_innerloop_block = new_fast_innerloop.children[0]
-                new_fast_innerloop_block.children[0] = stmt_right
-                new_fast_outerloop_info = (new_fast_outerloop, fast_outerparent)
-                new_fast_innerloop_info = (new_fast_innerloop, new_fast_innerloop_block)
+                new_unit_stride_outerloop = dcopy(unit_stride_outerloop)
+                new_unit_stride_innerloop = new_unit_stride_outerloop.children[0].children[0]
+                new_unit_stride_innerloop_block = new_unit_stride_innerloop.children[0]
+                new_unit_stride_innerloop_block.children[0] = stmt_right
+                new_unit_stride_outerloop_info = (new_unit_stride_outerloop,
+                                                  unit_stride_outerparent)
+                new_unit_stride_innerloop_info = (new_unit_stride_innerloop,
+                                                  new_unit_stride_innerloop_block)
                 new_loops_info = expr_info.slow_loops_info + \
-                    (new_fast_outerloop_info,) + (new_fast_innerloop_info,)
-                fast_outerparent.children.append(new_fast_outerloop)
+                    (new_unit_stride_outerloop_info,) + (new_unit_stride_innerloop_info,)
+                unit_stride_outerparent.children.append(new_unit_stride_outerloop)
             else:
                 # Reuse loop nest created in the previous function call
                 expr_parent.children.insert(index, stmt_right)
-                new_fast_innerloop_block = expr_parent
+                new_unit_stride_innerloop_block = expr_parent
                 new_loops_info = expr_info.loops_info
-            splittable = (stmt_right, MetaExpr(new_fast_innerloop_block,
+            splittable = (stmt_right, MetaExpr(new_unit_stride_innerloop_block,
                                                new_loops_info,
-                                               expr_info.fast_itvars))
+                                               expr_info.unit_stride_itvars))
             return (split, splittable)
         return ((stmt, expr_info), ())
 

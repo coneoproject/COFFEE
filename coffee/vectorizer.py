@@ -166,13 +166,10 @@ class LoopVectorizer(object):
           unroll-and-jam factor. Note that factor is just a suggestion to the
           compiler, which can freely decide to use a higher or lower value."""
 
-        if not self.loop_opt.asm_expr:
-            return
-
         for stmt, expr_info in self.loop_opt.asm_expr.items():
             # First, find outer product loops in the nest
             parent = expr_info.parent
-            loops = expr_info.fast_loops
+            loops = expr_info.unit_stride_loops
 
             # Check if outer-product vectorization is actually doable
             vect_len = self.intr["dp_reg"]
@@ -180,6 +177,7 @@ class LoopVectorizer(object):
             if rows < vect_len:
                 continue
             if len(loops) != 2:
+                # There must be exactly two unit-strided dimensions
                 continue
 
             op = OuterProduct(stmt, loops, self.intr, self.loop_opt)

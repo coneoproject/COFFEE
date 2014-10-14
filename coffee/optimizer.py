@@ -238,7 +238,7 @@ class LoopOptimizer(object):
             no_prec = no_prec.union([l[2] for l in self.hoisted.values() if l[2]])
         to_remove, precomputed_block, precomputed_syms = ([], [], {})
         for i in self.loop.children[0].children:
-            if i in flatten(self.expr_fast_loops):
+            if i in flatten(self.expr_unit_stride_loops):
                 break
             elif i not in no_prec:
                 precompute_stmt(i, precomputed_syms, precomputed_block)
@@ -285,10 +285,10 @@ class LoopOptimizer(object):
         return [expr_info.loops for expr_info in self.asm_expr.values()]
 
     @property
-    def expr_fast_loops(self):
-        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
-        loops along which expressions iterate fastest."""
-        return [expr_info.fast_loops for expr_info in self.asm_expr.values()]
+    def expr_unit_stride_loops(self):
+        """Return ``[(loop1, loop2, ...), ...]``, where a tuple contains all
+        loops along which an expression performs unit-stride memory accesses."""
+        return [expr_info.unit_stride_loops for expr_info in self.asm_expr.values()]
 
 
 class CPULoopOptimizer(LoopOptimizer):

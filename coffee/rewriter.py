@@ -106,7 +106,7 @@ class ExpressionRewriter(object):
         # The heuristics here is that the expansion occurs along the iteration
         # variable which appears in more unique arrays. This will allow factorization
         # to be more effective.
-        asm_out, asm_in = self.expr_info.fast_itvars
+        asm_out, asm_in = self.expr_info.unit_stride_itvars
         it_var_occs = {asm_out: 0, asm_in: 0}
         for s in count_occurrences(self.stmt.children[1]).keys():
             if s[1] and s[1][0] in it_var_occs:
