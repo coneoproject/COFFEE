@@ -155,32 +155,44 @@ class LoopVectorizer(object):
                     d.sym.rank = d.sym.rank[:-1] + (rounded,)
                 self.padded.append(d.sym)
 
-    def outer_product(self, opts, factor=1):
-        """Compute outer products according to ``opts``.
+    def specialize(self, opts, factor=1):
+        """Generate code for specialized expression vectorization. Check for peculiar
+        memory access patterns in an expression and replace scalar code with highly
+        optimized vector code. Currently, the following patterns are supported:
+
+        * Outer products - e.g. A[i]*B[j]
+
+        Also, code generation is supported for the following instruction sets:
+
+        * AVX
+
+        The parameter ``opts`` can be used to drive the transformation process:
 
         * ``opts = V_OP_PADONLY`` : no peeling, just use padding
         * ``opts = V_OP_PEEL`` : peeling for autovectorisation
-        * ``opts = V_OP_UAJ`` : set unroll_and_jam factor
+        * ``opts = V_OP_UAJ`` : set unroll_and_jam as specified by ``factor``
         * ``opts = V_OP_UAJ_EXTRA`` : as above, but extra iters avoid remainder
           loop factor is an additional parameter to specify things like
           unroll-and-jam factor. Note that factor is just a suggestion to the
-          compiler, which can freely decide to use a higher or lower value."""
+          compiler, which can freely decide to use a higher or lower value.
+        """
 
+        layout = None
         for stmt, expr_info in self.loop_opt.asm_expr.items():
-            # First, find outer product loops in the nest
             parent = expr_info.parent
-            loops = expr_info.unit_stride_loops
+            unit_stride_loops, unit_stride_loops_parents = \
+                zip(*expr_info.unit_stride_loops_info)
 
             # Check if outer-product vectorization is actually doable
             vect_len = self.intr["dp_reg"]
-            rows = loops[0].size()
+            rows = unit_stride_loops[0].size()
             if rows < vect_len:
                 continue
-            if len(loops) != 2:
+            if len(unit_stride_loops) != 2:
                 # There must be exactly two unit-strided dimensions
                 continue
 
-            op = OuterProduct(stmt, loops, self.intr, self.loop_opt)
+            op = OuterProduct(stmt, unit_stride_loops, self.intr, self.loop_opt)
 
             # Vectorisation
             unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
@@ -205,26 +217,28 @@ class LoopVectorizer(object):
             # Construct the remainder loop
             if opts != ap.V_OP_UAJ_EXTRA and rows > rows_per_it and rows % rows_per_it > 0:
                 # peel out
-                loop_peel = dcopy(loops)
+                loop_peel = dcopy(unit_stride_loops)
                 # Adjust main, layout and remainder loops bound and trip
-                bound = loops[0].cond.children[1].symbol
+                bound = unit_stride_loops[0].cond.children[1].symbol
                 bound -= bound % rows_per_it
-                loops[0].cond.children[1] = c_sym(bound)
+                unit_stride_loops[0].cond.children[1] = c_sym(bound)
                 layout.cond.children[1] = c_sym(bound)
                 loop_peel[0].init.init = c_sym(bound)
                 loop_peel[0].incr.children[1] = c_sym(1)
                 loop_peel[1].incr.children[1] = c_sym(1)
                 # Append peeling loop after the main loop
-                self.loop_opt.root.children.append(loop_peel[0])
+                unit_stride_outerparent = unit_stride_loops_parents[0]
+                ofs = unit_stride_outerparent.children.index(unit_stride_loops[0])
+                unit_stride_outerparent.children.insert(ofs+1, loop_peel[0])
 
             # Insert the vectorized code at the right point in the loop nest
             blk = parent.children
             ofs = blk.index(stmt)
             parent.children = blk[:ofs] + body + blk[ofs + 1:]
 
-            # Append the layout code after the loop nest
-            if layout:
-                parent = self.loop_opt.header.children.append(layout)
+        # Append the layout code after the whole loop nest
+        if layout:
+            parent = self.loop_opt.header.children.append(layout)
 
 
 class OuterProduct():

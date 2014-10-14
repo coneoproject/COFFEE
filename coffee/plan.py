@@ -263,8 +263,9 @@ class ASTKernel(object):
                     if v_type and v_type != AUTOVECT:
                         if intrinsics['inst_set'] == 'SSE':
                             raise RuntimeError("SSE vectorization not supported")
-                        # Outer-product vectorization
-                        vect.outer_product(v_type, v_param)
+                        # Specialize vectorization for the memory access pattern
+                        # of the expression
+                        vect.specialize(v_type, v_param)
 
                 # 5) Conversion into blas calls
                 if blas:
