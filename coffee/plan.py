@@ -233,7 +233,6 @@ class ASTKernel(object):
                 # 0) Expression Rewriting
                 if rewrite:
                     loop_opt.rewrite(rewrite)
-                    decls.update(loop_opt.decls)
 
                 # 1) Dead-operations elimination
                 if dead_ops_elimination:
@@ -258,6 +257,7 @@ class ASTKernel(object):
 
                 # 4) Vectorization
                 if initialized:
+                    decls = dict(decls.items() + loop_opt.decls.items())
                     vect = LoopVectorizer(loop_opt, intrinsics, compiler)
                     if ap:
                         # Data alignment
