@@ -232,8 +232,10 @@ class LoopOptimizer(object):
         # Precomputation
         no_prec = set()
         if mode == 1:
-            no_prec = set([l[1] for l in self.hoisted.values() if l[2]])
-            no_prec = no_prec.union([l[2] for l in self.hoisted.values() if l[2]])
+            for l in self.hoisted.values():
+                if l.loop:
+                    no_prec.add(l.decl)
+                    no_prec.add(l.loop)
         to_remove, precomputed_block, precomputed_syms = ([], [], {})
         for i in self.loop.children[0].children:
             if i in flatten(self.expr_unit_stride_loops):

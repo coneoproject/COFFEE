@@ -424,9 +424,8 @@ class ExpressionHoister(object):
             place.children = place.children[:ofs] + new_block
             # Update information about hoisted symbols
             for i in var_decl:
-                old_sym_info = self.hoisted[i.sym.symbol]
-                old_sym_info = old_sym_info[0:2] + (inv_code[0],) + (place.children,)
-                self.hoisted[i.sym.symbol] = old_sym_info
+                self.hoisted.update_stmt(i.sym.symbol, **{'loop': inv_code[0],
+                                                          'place': place.children})
 
         # Increase the global counter for subsequent calls to licm
         ExpressionHoister.GLOBAL_LICM_COUNTER += 1
@@ -459,7 +458,10 @@ class ExpressionExpander(object):
         be expanded occurs multiple times in the expression, or it depends on
         other hoisted symbols that will also be expanded, create a new symbol."""
 
-        old_expr, var_decl, inv_for, place = self.hoisted[sym.symbol]
+        old_expr = self.hoisted[sym.symbol].expr
+        var_decl = self.hoisted[sym.symbol].decl
+        loop = self.hoisted[sym.symbol].loop
+        place = self.hoisted[sym.symbol].place
 
         # The expanding expression is first assigned to a temporary value in order
         # to minimize code size and, possibly, work around compiler's inefficiencies
@@ -477,7 +479,7 @@ class ExpressionExpander(object):
             self.found_consts[const_str] = const_sym
             self.expr_graph.add_dependency(const_sym, const, False)
             # Update the AST
-            place.insert(place.index(inv_for), new_const_decl)
+            place.insert(place.index(loop), new_const_decl)
             const = const_sym
 
         # No dependencies, just perform the expansion
@@ -494,12 +496,12 @@ class ExpressionExpander(object):
         new_var_decl = dcopy(var_decl)
         new_var_decl.sym.symbol = sym.symbol
         # Append new expression and declaration
-        inv_for.children[0].children.append(new_node)
+        loop.children[0].children.append(new_node)
         place.insert(place.index(var_decl), new_var_decl)
         self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, plan.LOCAL_VAR)
         self.expanded_syms.append(new_var_decl.sym)
         # Update tracked information
-        self.hoisted[sym.symbol] = (new_expr, new_var_decl, inv_for, place)
+        self.hoisted[sym.symbol] = (new_expr, new_var_decl, loop, place)
         self.expr_graph.add_dependency(sym, new_expr, 0)
         return sym
 
@@ -536,7 +538,6 @@ class ExpressionExpander(object):
                     # Perform the expansion
                     if sym.symbol not in self.hoisted:
                         raise RuntimeError("Expansion error: no symbol: %s" % sym.symbol)
-                    old_expr, var_decl, inv_for, place = self.hoisted[sym.symbol]
                     replacing = self._do_expand(sym, const)
                     if replacing:
                         to_replace[str(Par(sym))] = replacing

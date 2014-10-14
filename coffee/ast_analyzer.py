@@ -43,6 +43,17 @@ import networkx as nx
 from base import *
 
 
+class StmtInfo():
+    """Simple container class defining ``StmtTracker`` values."""
+
+    INFO = ['expr', 'decl', 'loop', 'place']
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.iteritems():
+            assert(k in self.__class__.INFO)
+            setattr(self, k, v)
+
+
 class StmtTracker(OrderedDict):
 
     """Track the location of generic statements in an abstract syntax tree.
@@ -62,36 +73,51 @@ class StmtTracker(OrderedDict):
         * The parent block of the loop
     """
 
+    def __setitem__(self, key, value):
+        if not isinstance(value, StmtInfo):
+            if not isinstance(value, tuple):
+                raise RuntimeError("StmtTracker accepts tuple or StmtInfo objects")
+            value = StmtInfo(**dict(zip(StmtInfo.INFO, value)))
+        return OrderedDict.__setitem__(self, key, value)
+
     def update_stmt(self, sym, **kwargs):
         """Given the symbol ``sym``, it updates information related to it as
-        specified in ``kwargs``. ``kwargs`` is based on the following special
-        keys:
+        specified in ``kwargs``. If ``sym`` is not present, return ``None``.
+        ``kwargs`` is based on the following special keys:
 
             * "expr": change the expression
             * "decl": change the declaration
             * "loop": change the closest loop
             * "place": change the parent block of the loop
         """
-        up_expr = kwargs.get('expr')
-        up_decl = kwargs.get('decl')
-        up_loop = kwargs.get('loop')
-        up_place = kwargs.get('place')
-
-        if up_expr:
-            self[sym] = (up_expr,) + self[sym][1:4]
-        if up_decl:
-            self[sym] = self[sym][:1] + (up_decl,) + self[sym][2:4]
-        if up_loop:
-            self[sym] = self[sym][:2] + (up_loop,) + self[sym][3:4]
-        if up_place:
-            self[sym] = self[sym][:3] + (up_decl,)
+        if sym not in self:
+            return None
+        for k, v in kwargs.iteritems():
+            assert(k in StmtInfo.INFO)
+            setattr(self[sym], k, v)
 
     def update_loop(self, loop_a, loop_b):
         """Replace all occurrences of ``loop_a`` with ``loop_b`` in all entries."""
 
         for sym, sym_info in self.items():
-            if sym_info[2] == loop_a:
+            if sym_info.loop == loop_a:
                 self.update_stmt(sym, **{'loop': loop_b})
+
+    @property
+    def expr(self, sym):
+        return self[sym].expr if self.get(sym) else None
+
+    @property
+    def decl(self, sym):
+        return self[sym].decl if self.get(sym) else None
+
+    @property
+    def loop(self, sym):
+        return self[sym].loop if self.get(sym) else None
+
+    @property
+    def place(self, sym):
+        return self[sym].place if self.get(sym) else None
 
 
 class ExpressionGraph(object):

@@ -426,7 +426,7 @@ class ZeroLoopScheduler(LoopScheduler):
         """
         self.root = root
         self.expr_graph = expr_graph
-        self.kernel_decls, self.hoisted_decls = decls
+        self.kernel_decls, self.hoisted = decls
         # Track zero blocks in each symbol accessed in the computation rooted in root
         self.nz_in_syms = {}
         # Track blocks accessed for evaluating symbols in the various for loops
@@ -487,7 +487,7 @@ class ZeroLoopScheduler(LoopScheduler):
         # If iteration space along which they are accessed is bigger than the
         # non-zero region, hoisted symbols must be initialized to zero
         for sym, nz_regions in found_syms:
-            sym_decl = self.hoisted_decls.get(sym)
+            sym_decl = self.hoisted.get(sym)
             if not sym_decl:
                 continue
             for itvar, size in itspace:
