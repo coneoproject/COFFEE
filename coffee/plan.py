@@ -355,6 +355,17 @@ class ASTKernel(object):
             if not blas_interface:
                 raise RuntimeError("Must set PYOP2_BLAS to convert into BLAS calls")
             params = dict(blas_config.items() + [('blas', blas_interface['name'])])
+        elif opts.get('Ofast'):
+            params = {'rewrite': 2, 'align_pad': True, 'vectorize': (V_OP_UAJ, 2),
+                      'precompute': 1}
+        elif opts.get('O3'):
+            params = {'rewrite': 3, 'align_pad': True, 'precompute': 1}
+        elif opts.get('O2'):
+            params = {'rewrite': 2, 'align_pad': True, 'precompute': 1}
+        elif opts.get('O1'):
+            params = {'rewrite': 1, 'align_pad': True}
+        elif opts.get('O0'):
+            params = {}
         else:
             params = opts
 
