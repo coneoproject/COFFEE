@@ -362,6 +362,26 @@ def itspace_merge(itspaces):
     return tuple(merged_itspaces)
 
 
+def itspace_to_for(itspaces, loop_parent):
+    """Given an iterator of iteration spaces, each iteration space represented
+    as a 2-tuple containing the start and the end point, return a tuple
+    ``(loops_info, inner_block)``, in which ``loops_info`` is the tuple of all
+    tuples (loop, loop_parent) embedding ``inner_block``."""
+    inner_block = Block([], open_scope=True)
+    loops, loops_parents = [], [loop_parent]
+    loop_body = inner_block
+    for i, itspace in enumerate(itspaces):
+        start, stop = itspace
+        loops.insert(0, For(Decl("int", start, c_sym(0)), Less(start, stop),
+                            Incr(start, c_sym(1)), loop_body))
+        loop_body = Block([loops[i-1]], open_scope=True)
+        loops_parents.append(loop_body)
+    # Note that #loops_parents = #loops+1, but by zipping we just cut away the
+    # last entry in loops_parents
+    loops_info = zip(loops, loops_parents)
+    return (tuple(loops_info), inner_block)
+
+
 #############################
 # Generic utility functions #
 #############################

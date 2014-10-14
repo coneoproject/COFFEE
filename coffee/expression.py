@@ -102,3 +102,32 @@ class MetaExpr(object):
     @property
     def unit_stride_itvars(self):
         return self._unit_stride_itvars
+
+
+def copy_metaexpr(expr_info, **kwargs):
+    """Given a ``MetaExpr``, return a plain new ``MetaExpr`` starting from a
+    copy of ``expr_info``, and replaces some attributes as specified in
+    ``kwargs``. In particular, ``kwargs`` has the following keys:
+
+    * ``parent``: the block node that embeds the expression.
+    * ``loops_info``: an iterator of 2-tuple ``(loop, loop_parent)`` which
+      substitute analogous information in the new ``MetaExpr``.
+    * ``itvars``: the iteration variables along which the expression performs
+      unit-stride accesses.
+    """
+
+    parent = kwargs.get('parent', expr_info.parent)
+    unit_stride_itvars = kwargs.get('itvars', expr_info.unit_stride_itvars)
+
+    new_loops_info, old_loops_info = [], expr_info.loops_info
+    to_replace_loops_info = kwargs.get('loops_info', [])
+    to_replace_loops_info = dict(zip([l.it_var() for l, p in to_replace_loops_info],
+                                     to_replace_loops_info))
+    for loop_info in old_loops_info:
+        loop_itvar = loop_info[0].it_var()
+        if loop_itvar in to_replace_loops_info:
+            new_loops_info.append(to_replace_loops_info[loop_itvar])
+        else:
+            new_loops_info.append(loop_info)
+
+    return MetaExpr(parent, new_loops_info, unit_stride_itvars)

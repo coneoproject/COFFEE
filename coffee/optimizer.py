@@ -127,22 +127,15 @@ class LoopOptimizer(object):
             lm.simplify()
 
     def eliminate_zeros(self):
-        """Avoid accessing blocks of contiguous zero-valued columns when computing
-        an expression."""
+        """Avoid accessing blocks of contiguous (i.e. unit-stride) zero-valued
+        columns when computing an expression."""
 
-        # First, split expressions into separate loop nests, based on sum's
-        # associativity. This exposes more opportunities for restructuring loops,
-        # since different summands may have contiguous regions of zero-valued
-        # columns in different positions
-        elf = ExpressionFissioner(1)
-        for expr in self.asm_expr.items():
-            elf.fission(expr, False)
         # Search for zero-valued columns and restructure the iteration spaces;
         # the ZeroLoopScheduler analyzes statements "one by one", and changes
         # the iteration spaces of the enclosing loops accordingly.
-        zls = ZeroLoopScheduler(self.root, self.expr_graph,
-                                (self.kernel_decls, self.decls))
-        self.asm_expr = zls.reschedule()[-1]
+        zls = ZeroLoopScheduler(self.asm_expr, self.expr_graph,
+                                (self.kernel_decls, self.hoisted))
+        zls.reschedule()
         self.nz_in_fors = zls.nz_in_fors
 
     def precompute(self, mode=0):
@@ -230,17 +223,17 @@ class LoopOptimizer(object):
             return
 
         # Precomputation
-        no_prec = set()
+        do_not_precompute = set()
         if mode == 1:
             for l in self.hoisted.values():
                 if l.loop:
-                    no_prec.add(l.decl)
-                    no_prec.add(l.loop)
+                    do_not_precompute.add(l.decl)
+                    do_not_precompute.add(l.loop)
         to_remove, precomputed_block, precomputed_syms = ([], [], {})
         for i in self.loop.children[0].children:
             if i in flatten(self.expr_unit_stride_loops):
                 break
-            elif i not in no_prec:
+            elif i not in do_not_precompute:
                 precompute_stmt(i, precomputed_syms, precomputed_block)
                 to_remove.append(i)
         # Remove precomputed statements

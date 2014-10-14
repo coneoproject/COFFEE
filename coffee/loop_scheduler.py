@@ -42,10 +42,11 @@ except ImportError:
 from collections import defaultdict
 import itertools
 from copy import deepcopy as dcopy
+from warnings import warn as warning
 
 from base import *
-from expression import MetaExpr
-from utils import ast_update_ofs, itspace_size_ofs, itspace_merge
+from expression import MetaExpr, copy_metaexpr
+from utils import ast_update_ofs, itspace_size_ofs, itspace_merge, itspace_to_for
 
 
 class LoopScheduler(object):
@@ -414,17 +415,17 @@ class ZeroLoopScheduler(LoopScheduler):
           B[i] = E[i]*F[i]
     """
 
-    def __init__(self, root, expr_graph, decls):
+    def __init__(self, asm_expr, expr_graph, decls):
         """Initialize the ZeroLoopScheduler.
 
-        :arg root: the node where loop scheduling takes place.
+        :arg asm_expr: the expressions for which the zero-elimination is performed.
         :arg expr_graph: the ExpressionGraph tracking all data dependencies involving
                          identifiers that appear in ``root``.
         :arg decls: lists of array declarations. A 2-tuple is expected: the first
                     element is the list of kernel declarations; the second element
                     is the list of hoisted temporaries declarations.
         """
-        self.root = root
+        self.asm_expr = asm_expr
         self.expr_graph = expr_graph
         self.kernel_decls, self.hoisted = decls
         # Track zero blocks in each symbol accessed in the computation rooted in root
@@ -507,8 +508,7 @@ class ZeroLoopScheduler(LoopScheduler):
                         break
                 if not iteration_ok:
                     # Iterating over a non-initialized region, need to zero it
-                    sym_decl = sym_decl[0]
-                    sym_decl.init = FlatBlock("{0.0}")
+                    sym_decl.decl.init = FlatBlock("{0.0}")
 
     def _track_expr_nz_columns(self, node):
         """Return the first and last indices assumed by the iteration variables
@@ -611,7 +611,7 @@ class ZeroLoopScheduler(LoopScheduler):
                 # Track the propagation of non-zero blocks in this specific
                 # loop nest. Outer loops, i.e. loops that have non been
                 # encountered as visiting from the root, are discarded.
-                key = loop_nest[0]
+                key = loop_nest
                 itvar_nz_bounds = dict([(k, v) for k, v in itvar_nz_bounds.items()
                                         if k in [l.it_var() for l in loop_nest]])
                 if key not in self.nz_in_fors:
@@ -619,13 +619,13 @@ class ZeroLoopScheduler(LoopScheduler):
                 self.nz_in_fors[key].append((node, itvar_nz_bounds))
         if isinstance(node, For):
             self._track_nz_blocks(node.children[0], node, loop_nest + (node,))
-        if isinstance(node, Block):
+        if isinstance(node, (Root, Block)):
             for n in node.children:
                 self._track_nz_blocks(n, node, loop_nest)
 
-    def _track_nz_from_root(self):
+    def _track_nz(self, root):
         """Track the propagation of zero columns along the computation which is
-        rooted in ``self.root``."""
+        rooted in ``root``."""
 
         # Initialize a dict mapping symbols to their zero columns with the info
         # already available in the kernel's declarations
@@ -645,43 +645,39 @@ class ZeroLoopScheduler(LoopScheduler):
             return {}
 
         # Track propagation of zero blocks by symbolically executing the code
-        self._track_nz_blocks(self.root)
+        self._track_nz_blocks(root)
 
-    def reschedule(self):
-        """Restructure the loop nests rooted in ``self.root`` based on the
-        propagation of zero-valued columns along the computation. This, therefore,
-        involves fissing and fusing loops so as to remove iterations spent
-        performing arithmetic operations over zero-valued entries.
-        Return a list of dictionaries, a dictionary for each loop nest encountered.
-        Each entry in a dictionary is of the form {stmt: (itvars, parent, loops)},
-        in which ``stmt`` is a statement found in the loop nest from which the
-        dictionary derives, ``itvars`` is the tuple of the iteration variables of
-        the enclosing loops, ``parent`` is the AST node in which the loop nest is
-        rooted, ``loops`` is the tuple of loops composing the loop nest."""
+    def _reschedule_itspace(self, root, asm_expr):
+        """Consider two statements A and B, and their iteration spaces.
+        If the two iteration spaces have
 
-        # First, symbolically execute the code starting from self.root to track
-        # the propagation of zeros
-        self._track_nz_from_root()
+        * Same size and same bounds, then put A and B in the same loop nest: ::
 
-        # Consider two statements A and B, and their iteration spaces.
-        # If the two iteration spaces have:
-        # - Same size and same bounds: then put A and B in the same loop nest
-        #   for i, for j
-        #     W1[i][j] = W2[i][j]
-        #     Z1[i][j] = Z2[i][j]
-        # - Same size but different bounds: then put A and B in the same loop
-        #   nest, but add suitable offsets to all of the involved iteration
-        #   variables
-        #   for i, for j
-        #     W1[i][j] = W2[i][j]
-        #     Z1[i+k][j+k] = Z2[i+k][j+k]
-        # - Different size: then put A and B in two different loop nests
-        #   for i, for j
-        #     W1[i][j] = W2[i][j]
-        #   for i, for j  // Different loop bounds
-        #     Z1[i][j] = Z2[i][j]
-        all_moved_stmts = []
+           for i, for j
+             W1[i][j] = W2[i][j]
+             Z1[i][j] = Z2[i][j]
+
+        * Same size but different bounds, then put A and B in the same loop
+          nest, but add suitable offsets to all of the involved iteration
+          variables: ::
+
+           for i, for j
+             W1[i][j] = W2[i][j]
+             Z1[i+k][j+k] = Z2[i+k][j+k]
+
+        * Different size, then put A and B in two different loop nests: ::
+
+           for i, for j
+             W1[i][j] = W2[i][j]
+           for i, for j  // Different loop bounds
+             Z1[i][j] = Z2[i][j]
+
+        Return the dictionary of the updated expressions.
+        """
+
+        new_asm_expr = {}
         new_nz_in_fors = {}
+        track_exprs = {}
         for loop, stmt_itspaces in self.nz_in_fors.items():
             fissioned_loops = defaultdict(list)
             # Fission the loops on an intermediate representation
@@ -690,25 +686,65 @@ class ZeroLoopScheduler(LoopScheduler):
                 for nz_bounds in nz_bounds_list:
                     itvar_nz_bounds = tuple(zip(stmt_itspace.keys(), nz_bounds))
                     itspace, stmt_ofs = itspace_size_ofs(itvar_nz_bounds)
-                    fissioned_loops[itspace].append((dcopy(stmt), stmt_ofs))
+                    copy_stmt = dcopy(stmt)
+                    fissioned_loops[itspace].append((copy_stmt, stmt_ofs))
+                    if stmt in asm_expr:
+                        track_exprs[copy_stmt] = asm_expr[stmt]
             # Generate the actual code.
             # The dictionary is sorted because we must first execute smaller
             # loop nests, since larger ones may depend on them
-            moved_stmts = {}
             for itspace, stmt_ofs in sorted(fissioned_loops.items()):
-                new_loops, inner_block = c_from_itspace_to_fors(itspace)
+                loops_info, inner_block = itspace_to_for(itspace, root)
                 for stmt, ofs in stmt_ofs:
                     dict_ofs = dict(ofs)
                     ast_update_ofs(stmt, dict_ofs)
                     self._set_var_to_zero(stmt, dict_ofs, itspace)
                     inner_block.children.append(stmt)
-                    moved_stmts[stmt] = (tuple(i[0] for i in ofs), inner_block, new_loops)
-                new_nz_in_fors[new_loops[0]] = stmt_ofs
+                    # Update expressions and hoisting-related information
+                    if stmt in track_exprs:
+                        new_asm_expr[stmt] = copy_metaexpr(track_exprs[stmt],
+                                                           **{'parent': inner_block,
+                                                              'loops_info': loops_info})
+                    self.hoisted.update_stmt(stmt.children[0].symbol,
+                                             **{'loop': loops_info[0][0],
+                                                'place': root.children})
+                new_nz_in_fors[loops_info[-1][0]] = stmt_ofs
                 # Append the created loops to the root
-                index = self.root.children.index(loop)
-                self.root.children.insert(index, new_loops[-1])
-            self.root.children.remove(loop)
-            all_moved_stmts.append(moved_stmts)
+                index = root.children.index(loop[0])
+                root.children.insert(index, loops_info[0][0])
+            root.children.remove(loop[0])
 
         self.nz_in_fors = new_nz_in_fors
-        return all_moved_stmts
+        return new_asm_expr
+
+    def reschedule(self):
+        """Restructure the loop nests embedding ``self.asm_expr`` based on the
+        propagation of zero-valued columns along the computation. This, therefore,
+        involves fissing and fusing loops so as to remove iterations spent
+        performing arithmetic operations over zero-valued entries."""
+
+        if not self.asm_expr:
+            return
+
+        roots, new_asm_expr = set(), {}
+        elf = ExpressionFissioner(1)
+        for expr in self.asm_expr.items():
+            # First, split expressions into separate loop nests, based on sum's
+            # associativity. This exposes more opportunities for restructuring loops,
+            # since different summands may have contiguous regions of zero-valued
+            # columns in different positions
+            new_asm_expr.update(elf.fission(expr, False))
+            roots.add(expr[1].unit_stride_loops_parents[0])
+            self.asm_expr.pop(expr[0])
+
+            if len(roots) > 1:
+                warning("Found multiple roots while performing zero-elimination")
+                warning("The code generation is undefined")
+
+        root = roots.pop()
+        # Symbolically execute the code starting from root to track the
+        # propagation of zeros
+        self._track_nz(root)
+
+        # Finally, restructure the iteration spaces
+        self.asm_expr.update(self._reschedule_itspace(root, new_asm_expr))
