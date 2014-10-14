@@ -207,6 +207,7 @@ class ASTKernel(object):
             unroll = kwargs.get('unroll')
             permute = kwargs.get('permute')
             precompute = kwargs.get('precompute')
+            dead_ops_elimination = kwargs.get('dead_ops_elimination')
 
             # Combining certain optimizations is meaningless/forbidden.
             if unroll and blas:
@@ -229,10 +230,15 @@ class ASTKernel(object):
             decls, fors = self._visit_ast(self.ast, fors=[], decls={})
             loop_opts = [CPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
             for loop_opt in loop_opts:
-                # 1) Expression Rewriting
+                # 0) Expression Rewriting
                 if rewrite:
-                    loop_opt.rewrite(rewrite, self._is_block_sparse)
+                    loop_opt.rewrite(rewrite)
                     decls.update(loop_opt.decls)
+
+                # 1) Dead-operations elimination
+                if dead_ops_elimination:
+                    if self._is_block_sparse:
+                        loop_opt.eliminate_zeros()
 
                 # 2) Splitting
                 if split:
@@ -356,14 +362,30 @@ class ASTKernel(object):
                 raise RuntimeError("Must set PYOP2_BLAS to convert into BLAS calls")
             params = dict(blas_config.items() + [('blas', blas_interface['name'])])
         elif opts.get('Ofast'):
-            params = {'rewrite': 2, 'align_pad': True, 'vectorize': (V_OP_UAJ, 2),
-                      'precompute': 1}
+            params = {
+                'rewrite': 2,
+                'align_pad': True,
+                'vectorize': (V_OP_UAJ, 2),
+                'precompute': 1
+            }
         elif opts.get('O3'):
-            params = {'rewrite': 3, 'align_pad': True, 'precompute': 1}
+            params = {
+                'rewrite': 2,
+                'dead_ops_elimination': True,
+                'align_pad': True,
+                'precompute': 1
+            }
         elif opts.get('O2'):
-            params = {'rewrite': 2, 'align_pad': True, 'precompute': 1}
+            params = {
+                'rewrite': 2,
+                'align_pad': True,
+                'precompute': 1
+            }
         elif opts.get('O1'):
-            params = {'rewrite': 1, 'align_pad': True}
+            params = {
+                'rewrite': 1,
+                'align_pad': True
+            }
         elif opts.get('O0'):
             params = {}
         else:

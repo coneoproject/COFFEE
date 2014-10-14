@@ -75,7 +75,7 @@ class LoopOptimizer(object):
         for stmt, expr_info in info['exprs'].items():
             self.asm_expr[stmt] = MetaExpr(*expr_info)
 
-    def rewrite(self, level, is_block_sparse):
+    def rewrite(self, level):
         """Rewrite a compute-intensive expression found in the loop nest so as to
         minimize floating point operations and to relieve register pressure.
         This involves several possible transformations:
@@ -100,8 +100,6 @@ class LoopOptimizer(object):
                     * level == 3: level 2 + avoid computing zero-columns
                     * level == 4: level 3 + precomputation of read-only expressions \
                                   out of the loop nest
-        :arg is_block_sparse: True if the expression is characterized by the
-                              presence of block-sparse arrays
         """
 
         if not self.asm_expr:
@@ -128,24 +126,24 @@ class LoopOptimizer(object):
                 [self.hoisted.update_loop(l, merged_in) for l in merged]
             lm.simplify()
 
-        # Eliminate zero-valued columns if the kernel operation uses block-sparse
-        # arrays (contiguous zero-valued columns are present)
-        if level == 3 and is_block_sparse:
-            # Split the expression into separate loop nests, based on sum's
-            # associativity. This exposes more opportunities for restructuring loops,
-            # since different summands may have contiguous regions of zero-valued
-            # columns in different positions. The ZeroLoopScheduler analyzes statements
-            # "one by one", and changes the iteration spaces of the enclosing
-            # loops accordingly.
-            elf = ExpressionFissioner(1)
-            new_asm_expr = {}
-            for expr in self.asm_expr.items():
-                new_asm_expr.update(elf.fission(expr, False))
-            # Search for zero-valued columns and restructure the iteration spaces
-            zls = ZeroLoopScheduler(self.root, self.expr_graph,
-                                    (self.kernel_decls, self.decls))
-            self.asm_expr = zls.reschedule()[-1]
-            self.nz_in_fors = zls.nz_in_fors
+    def eliminate_zeros(self):
+        """Avoid accessing blocks of contiguous zero-valued columns when computing
+        an expression."""
+
+        # First, split expressions into separate loop nests, based on sum's
+        # associativity. This exposes more opportunities for restructuring loops,
+        # since different summands may have contiguous regions of zero-valued
+        # columns in different positions
+        elf = ExpressionFissioner(1)
+        for expr in self.asm_expr.items():
+            elf.fission(expr, False)
+        # Search for zero-valued columns and restructure the iteration spaces;
+        # the ZeroLoopScheduler analyzes statements "one by one", and changes
+        # the iteration spaces of the enclosing loops accordingly.
+        zls = ZeroLoopScheduler(self.root, self.expr_graph,
+                                (self.kernel_decls, self.decls))
+        self.asm_expr = zls.reschedule()[-1]
+        self.nz_in_fors = zls.nz_in_fors
 
     def precompute(self, mode=0):
         """Precompute statements out of ``self.loop``, which implies scalar
