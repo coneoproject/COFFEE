@@ -221,6 +221,9 @@ class LoopOptimizer(object):
         # is triggered
         if is_perfect_loop(self.loop):
             return
+        # TODO: To be removed when supporting RHS optimization
+        if not self.asm_expr:
+            return
 
         # Precomputation
         do_not_precompute = set()
