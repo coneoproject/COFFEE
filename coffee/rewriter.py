@@ -35,7 +35,7 @@ from collections import defaultdict
 from copy import deepcopy as dcopy
 
 from base import *
-from utils import visit, is_perfect_loop, count_occurrences
+from utils import visit, is_perfect_loop, count_occurrences, ast_c_sum
 from utils import ast_replace, loops_as_dict, od_find_next
 import plan
 
@@ -159,12 +159,6 @@ class ExpressionRewriter(object):
                     raise RuntimeError("Distribute error: symbol not found")
                 to_distr[dist].append(target)
 
-        def create_sum(symbols):
-            if len(symbols) == 1:
-                return symbols[0]
-            else:
-                return Sum(symbols[0], create_sum(symbols[1:]))
-
         # Expansion ensures the expression to be in a form like:
         # tensor[i][j] += A[i]*B[j] + C[i]*D[j] + A[i]*E[j] + ...
         if not self._expanded:
@@ -178,9 +172,9 @@ class ExpressionRewriter(object):
         new_prods = []
         for d in to_distr.values():
             dist, target = zip(*d)
-            target = Par(create_sum(target)) if len(target) > 1 else create_sum(target)
+            target = Par(ast_c_sum(target)) if len(target) > 1 else ast_c_sum(target)
             new_prods.append(Par(Prod(dist[0], target)))
-        self.stmt.children[1] = Par(create_sum(new_prods))
+        self.stmt.children[1] = Par(ast_c_sum(new_prods))
 
 
 class ExpressionHoister(object):

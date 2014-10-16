@@ -35,7 +35,7 @@ from copy import deepcopy as dcopy
 
 from base import *
 from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
-from utils import set_itspace
+from utils import set_itspace, ast_c_for
 from expression import MetaExpr
 from loop_scheduler import PerfectSSALoopMerger, ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
@@ -209,14 +209,6 @@ class LoopOptimizer(object):
             else:
                 raise RuntimeError("Precompute error: unexpteced node: %s" % str(node))
 
-        def create_prec_for(stmts):
-            """Create a for loop having the same iteration space as  ``self.loop``
-            enclosing the statements in  ``stmts``."""
-            wrap = Block(stmts, open_scope=True)
-            precompute_for = For(dcopy(self.loop.init), dcopy(self.loop.cond),
-                                 dcopy(self.loop.incr), wrap, dcopy(self.loop.pragma))
-            return precompute_for
-
         # Check if the outermost loop is not perfect, in which case precomputation
         # is triggered
         if is_perfect_loop(self.loop):
@@ -248,16 +240,16 @@ class LoopOptimizer(object):
         searching_stmt = []
         for i in precomputed_block:
             if searching_stmt and not isinstance(i, (Assign, Incr)):
-                new_outer_block.append(create_prec_for(searching_stmt))
+                new_outer_block.append(ast_c_for(searching_stmt, self.loop))
                 searching_stmt = []
             if isinstance(i, For):
-                new_outer_block.append(create_prec_for([i]))
+                new_outer_block.append(ast_c_for([i], self.loop))
             elif isinstance(i, (Assign, Incr)):
                 searching_stmt.append(i)
             else:
                 new_outer_block.append(i)
         if searching_stmt:
-            new_outer_block.append(create_prec_for(searching_stmt))
+            new_outer_block.append(ast_c_for(searching_stmt, self.loop))
 
         # Update the AST adding the newly precomputed blocks
         root = self.header.children

@@ -162,6 +162,32 @@ def ast_update_rank(node, new_rank):
             ast_update_rank(n, new_rank)
 
 
+###############################################
+# Functions to simplify creation of AST nodes #
+###############################################
+
+
+def ast_c_for(stmts, loop, copy=False):
+    """Create a for loop having the same iteration space as  ``loop`` enclosing
+    the statements in  ``stmts``. If ``copy == True``, then new instances of
+    ``stmts`` are created"""
+    if copy:
+        stmts = dcopy(stmts)
+    wrap = Block(stmts, open_scope=True)
+    new_loop = For(dcopy(loop.init), dcopy(loop.cond), dcopy(loop.incr),
+                   wrap, dcopy(loop.pragma))
+    return new_loop
+
+
+def ast_c_sum(symbols):
+    """Create a ``Sum`` object starting from a symbols list ``symbols``. If
+    the length of ``symbols`` is 1, return ``Symbol(symbols[0])``."""
+    if len(symbols) == 1:
+        return symbols[0]
+    else:
+        return Sum(symbols[0], ast_c_sum(symbols[1:]))
+
+
 ###########################################################
 # Functions to visit and to query properties of AST nodes #
 ###########################################################
