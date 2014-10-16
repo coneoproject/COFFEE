@@ -60,8 +60,6 @@ class LoopOptimizer(object):
         self.kernel_decls = kernel_decls
         # Track nonzero regions accessed in the various loops
         self.nz_in_fors = {}
-        # Integration loop (if any)
-        self.int_loop = loop if "#pragma pyop2 integration" in loop.pragma else None
         # Expression graph tracking data dependencies
         self.expr_graph = ExpressionGraph()
         # Dictionary contaning various information about hoisted expressions
@@ -245,13 +243,6 @@ class LoopOptimizer(object):
 
         # Update the AST by scalar-expanding the pre-computed accessed variables
         ast_update_rank(self.loop, precomputed_syms)
-
-    @property
-    def root(self):
-        """Return the root node of the assembly loop nest. It can be either the
-        loop over quadrature points or, if absent, a generic point in the
-        assembly routine."""
-        return self.int_loop.children[0] if self.int_loop else self.header
 
     @property
     def expr_loops(self):
