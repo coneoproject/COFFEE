@@ -167,8 +167,13 @@ class ASTKernel(object):
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
 
-        # Unrolling threshold when autotuning
-        autotune_unroll_ths = 10
+        # Unrolling thresholds when autotuning
+        autotune_unroll_ths = {
+            'default': 10,
+            'minimal': 4,
+            'hoisted>20': 4,
+            'hoisted>40': 1
+        }
         # The higher, the more precise and costly is autotuning
         autotune_resolution = 100000000
         # Kernel variant when blas transformation is selected
@@ -182,10 +187,11 @@ class ASTKernel(object):
                         ('base', {'rewrite': 1, 'align_pad': True}),
                         ('rewrite', {'rewrite': 2, 'align_pad': True}),
                         ('rewrite', {'rewrite': 2, 'align_pad': True, 'precompute': 1}),
-                        ('rewrite', {'rewrite': 2, 'align_pad': True,
-                                     'dead_ops_elimination': True}),
-                        ('rewrite', {'rewrite': 2, 'align_pad': True, 'precompute': 1,
-                                     'dead_ops_elimination': True}),
+                        ('rewrite_full', {'rewrite': 2, 'align_pad': True,
+                                          'dead_ops_elimination': True}),
+                        ('rewrite_full', {'rewrite': 2, 'align_pad': True,
+                                          'precompute': 1,
+                                          'dead_ops_elimination': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 4}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
@@ -292,18 +298,15 @@ class ASTKernel(object):
                 raise RuntimeError("Must initialize COFFEE prior to autotuning")
             # Set granularity of autotuning
             resolution = autotune_resolution
-            unroll_ths = autotune_unroll_ths
             autotune_configs = autotune_all
             if opts['autotune'] == 'minimal':
                 resolution = 1
                 autotune_configs = autotune_min
-                unroll_ths = 4
             elif blas_interface:
                 library = ('blas', blas_interface['name'])
                 autotune_configs.append(('blas', dict(blas_config.items() + [library])))
             variants = []
             autotune_configs_uf = []
-            found_zeros = False
             tunable = True
             original_ast = dcopy(self.ast)
             for opt, params in autotune_configs:
@@ -322,8 +325,16 @@ class ASTKernel(object):
                 # Calculate variants characterized by different unroll factors,
                 # determined heuristically
                 loop_opt = loop_opts[0]
-                found_zeros = found_zeros or loop_opt.nz_in_fors
-                if opt in ['rewrite', 'split'] and not found_zeros:
+                if opt in ['rewrite', 'split']:
+                    # Set the unroll threshold
+                    if opts['autotune'] == 'minimal':
+                        unroll_ths = autotune_unroll_ths['minimal']
+                    elif len(loop_opt.hoisted) > 40:
+                        unroll_ths = autotune_unroll_ths['hoisted>40']
+                    elif len(loop_opt.hoisted) > 20:
+                        unroll_ths = autotune_unroll_ths['hoisted>20']
+                    else:
+                        unroll_ths = autotune_unroll_ths['default']
                     expr_loops = loop_opt.expr_loops
                     if not expr_loops:
                         continue
