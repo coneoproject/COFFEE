@@ -419,7 +419,7 @@ class ExpressionHoister(object):
             # Update information about hoisted symbols
             for i in var_decl:
                 self.hoisted.update_stmt(i.sym.symbol, **{'loop': inv_code[0],
-                                                          'place': place.children})
+                                                          'place': place})
 
         # Increase the global counter for subsequent calls to licm
         ExpressionHoister.GLOBAL_LICM_COUNTER += 1
@@ -473,7 +473,7 @@ class ExpressionExpander(object):
             self.found_consts[const_str] = const_sym
             self.expr_graph.add_dependency(const_sym, const, False)
             # Update the AST
-            place.insert(place.index(loop), new_const_decl)
+            place.children.insert(place.children.index(loop), new_const_decl)
             const = const_sym
 
         # No dependencies, just perform the expansion
@@ -491,7 +491,7 @@ class ExpressionExpander(object):
         new_var_decl.sym.symbol = sym.symbol
         # Append new expression and declaration
         loop.children[0].children.append(new_node)
-        place.insert(place.index(var_decl), new_var_decl)
+        place.children.insert(place.children.index(var_decl), new_var_decl)
         self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, plan.LOCAL_VAR)
         self.expanded_syms.append(new_var_decl.sym)
         # Update tracked information

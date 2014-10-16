@@ -706,8 +706,7 @@ class ZeroLoopScheduler(LoopScheduler):
                                                            **{'parent': inner_block,
                                                               'loops_info': loops_info})
                     self.hoisted.update_stmt(stmt.children[0].symbol,
-                                             **{'loop': loops_info[0][0],
-                                                'place': root.children})
+                                             **{'loop': loops_info[0][0], 'place': root})
                 new_nz_in_fors[loops_info[-1][0]] = stmt_ofs
                 # Append the created loops to the root
                 index = root.children.index(loop[0])
