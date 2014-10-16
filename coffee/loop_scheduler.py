@@ -410,17 +410,17 @@ class ZeroLoopScheduler(LoopScheduler):
           B[i] = E[i]*F[i]
     """
 
-    def __init__(self, asm_expr, expr_graph, decls):
+    def __init__(self, exprs, expr_graph, decls):
         """Initialize the ZeroLoopScheduler.
 
-        :arg asm_expr: the expressions for which the zero-elimination is performed.
+        :arg exprs: the expressions for which the zero-elimination is performed.
         :arg expr_graph: the ExpressionGraph tracking all data dependencies involving
                          identifiers that appear in ``root``.
         :arg decls: lists of array declarations. A 2-tuple is expected: the first
                     element is the list of kernel declarations; the second element
                     is the list of hoisted temporaries declarations.
         """
-        self.asm_expr = asm_expr
+        self.exprs = exprs
         self.expr_graph = expr_graph
         self.kernel_decls, self.hoisted = decls
         # Track zero blocks in each symbol accessed in the computation rooted in root
@@ -642,7 +642,7 @@ class ZeroLoopScheduler(LoopScheduler):
         # Track propagation of zero blocks by symbolically executing the code
         self._track_nz_blocks(root)
 
-    def _reschedule_itspace(self, root, asm_expr):
+    def _reschedule_itspace(self, root, exprs):
         """Consider two statements A and B, and their iteration spaces.
         If the two iteration spaces have
 
@@ -670,7 +670,7 @@ class ZeroLoopScheduler(LoopScheduler):
         Return the dictionary of the updated expressions.
         """
 
-        new_asm_expr = {}
+        new_exprs = {}
         new_nz_in_fors = {}
         track_exprs = {}
         for loop, stmt_itspaces in self.nz_in_fors.items():
@@ -683,8 +683,8 @@ class ZeroLoopScheduler(LoopScheduler):
                     itspace, stmt_ofs = itspace_size_ofs(itvar_nz_bounds)
                     copy_stmt = dcopy(stmt)
                     fissioned_loops[itspace].append((copy_stmt, stmt_ofs))
-                    if stmt in asm_expr:
-                        track_exprs[copy_stmt] = asm_expr[stmt]
+                    if stmt in exprs:
+                        track_exprs[copy_stmt] = exprs[stmt]
             # Generate the actual code.
             # The dictionary is sorted because we must first execute smaller
             # loop nests, since larger ones may depend on them
@@ -697,9 +697,9 @@ class ZeroLoopScheduler(LoopScheduler):
                     inner_block.children.append(stmt)
                     # Update expressions and hoisting-related information
                     if stmt in track_exprs:
-                        new_asm_expr[stmt] = copy_metaexpr(track_exprs[stmt],
-                                                           **{'parent': inner_block,
-                                                              'loops_info': loops_info})
+                        new_exprs[stmt] = copy_metaexpr(track_exprs[stmt],
+                                                        **{'parent': inner_block,
+                                                           'loops_info': loops_info})
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              **{'loop': loops_info[0][0], 'place': root})
                 new_nz_in_fors[loops_info[-1][0]] = stmt_ofs
@@ -709,27 +709,27 @@ class ZeroLoopScheduler(LoopScheduler):
             root.children.remove(loop[0])
 
         self.nz_in_fors = new_nz_in_fors
-        return new_asm_expr
+        return new_exprs
 
     def reschedule(self):
-        """Restructure the loop nests embedding ``self.asm_expr`` based on the
+        """Restructure the loop nests embedding ``self.exprs`` based on the
         propagation of zero-valued columns along the computation. This, therefore,
         involves fissing and fusing loops so as to remove iterations spent
         performing arithmetic operations over zero-valued entries."""
 
-        if not self.asm_expr:
+        if not self.exprs:
             return
 
-        roots, new_asm_expr = set(), {}
+        roots, new_exprs = set(), {}
         elf = ExpressionFissioner(1)
-        for expr in self.asm_expr.items():
+        for expr in self.exprs.items():
             # First, split expressions into separate loop nests, based on sum's
             # associativity. This exposes more opportunities for restructuring loops,
             # since different summands may have contiguous regions of zero-valued
             # columns in different positions
-            new_asm_expr.update(elf.fission(expr, False))
+            new_exprs.update(elf.fission(expr, False))
             roots.add(expr[1].unit_stride_loops_parents[0])
-            self.asm_expr.pop(expr[0])
+            self.exprs.pop(expr[0])
 
             if len(roots) > 1:
                 warning("Found multiple roots while performing zero-elimination")
@@ -741,4 +741,4 @@ class ZeroLoopScheduler(LoopScheduler):
         self._track_nz(root)
 
         # Finally, restructure the iteration spaces
-        self.asm_expr.update(self._reschedule_itspace(root, new_asm_expr))
+        self.exprs.update(self._reschedule_itspace(root, new_exprs))

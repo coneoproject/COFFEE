@@ -67,11 +67,11 @@ class LoopOptimizer(object):
 
         # Inspect the loop nest and collect info
         info = visit(self.loop, self.header)
-        self.decls, self.asm_expr = ({}, {})
+        self.decls, self.exprs = ({}, {})
         for decl_str, decl in info['decls'].items():
             self.decls[decl_str] = (decl, plan.LOCAL_VAR)
         for stmt, expr_info in info['exprs'].items():
-            self.asm_expr[stmt] = MetaExpr(*expr_info)
+            self.exprs[stmt] = MetaExpr(*expr_info)
 
     def rewrite(self, level):
         """Rewrite a compute-intensive expression found in the loop nest so as to
@@ -101,7 +101,7 @@ class LoopOptimizer(object):
         """
 
         kernel_info = (self.header, self.kernel_decls)
-        for stmt_info in self.asm_expr.items():
+        for stmt_info in self.exprs.items():
             ew = ExpressionRewriter(stmt_info, self.decls, kernel_info,
                                     self.hoisted, self.expr_graph)
             if level > 0:
@@ -118,7 +118,7 @@ class LoopOptimizer(object):
         # Search for zero-valued columns and restructure the iteration spaces;
         # the ZeroLoopScheduler analyzes statements "one by one", and changes
         # the iteration spaces of the enclosing loops accordingly.
-        zls = ZeroLoopScheduler(self.asm_expr, self.expr_graph,
+        zls = ZeroLoopScheduler(self.exprs, self.expr_graph,
                                 (self.kernel_decls, self.hoisted))
         zls.reschedule()
         self.nz_in_fors = zls.nz_in_fors
@@ -199,7 +199,7 @@ class LoopOptimizer(object):
         if is_perfect_loop(self.loop):
             return
         # TODO: To be removed when supporting RHS optimization
-        if not self.asm_expr:
+        if not self.exprs:
             return
 
         # Precomputation
@@ -248,13 +248,13 @@ class LoopOptimizer(object):
     def expr_loops(self):
         """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
         loops that expressions depend on."""
-        return [expr_info.loops for expr_info in self.asm_expr.values()]
+        return [expr_info.loops for expr_info in self.exprs.values()]
 
     @property
     def expr_unit_stride_loops(self):
         """Return ``[(loop1, loop2, ...), ...]``, where a tuple contains all
         loops along which an expression performs unit-stride memory accesses."""
-        return [expr_info.unit_stride_loops for expr_info in self.asm_expr.values()]
+        return [expr_info.unit_stride_loops for expr_info in self.exprs.values()]
 
 
 class CPULoopOptimizer(LoopOptimizer):
@@ -281,8 +281,8 @@ class CPULoopOptimizer(LoopOptimizer):
 
         unrolled_loops = set()
         for itspace, uf in loop_uf.items():
-            new_asm_expr = {}
-            for stmt, expr_info in self.asm_expr.items():
+            new_exprs = {}
+            for stmt, expr_info in self.exprs.items():
                 loop = [l for l in expr_info.perfect_loops if l.it_var() == itspace]
                 if not loop:
                     # Unroll only loops in a perfect loop nest
@@ -292,11 +292,11 @@ class CPULoopOptimizer(LoopOptimizer):
                     new_stmt = dcopy(stmt)
                     update_expr(new_stmt, itspace, i+1)
                     expr_info.parent.children.append(new_stmt)
-                    new_asm_expr.update({new_stmt: expr_info})
+                    new_exprs.update({new_stmt: expr_info})
                 if loop not in unrolled_loops:
                     loop.incr.children[1].symbol += uf-1
                     unrolled_loops.add(loop)
-            self.asm_expr.update(new_asm_expr)
+            self.exprs.update(new_exprs)
 
     def permute(self, transpose=False):
         """Permute the outermost loop with the innermost loop in the loop nest.
@@ -376,15 +376,15 @@ class CPULoopOptimizer(LoopOptimizer):
                 A[i][j] += B[i]*X[j]
         """
 
-        if not self.asm_expr:
+        if not self.exprs:
             return
 
-        new_asm_expr = {}
+        new_exprs = {}
         elf = ExpressionFissioner(cut)
-        for splittable in self.asm_expr.items():
+        for splittable in self.exprs.items():
             # Split the expression
-            new_asm_expr.update(elf.fission(splittable, True))
-        self.asm_expr = new_asm_expr
+            new_exprs.update(elf.fission(splittable, True))
+        self.exprs = new_exprs
 
     def blas(self, library):
         """Convert an expression into sequences of calls to external dense linear

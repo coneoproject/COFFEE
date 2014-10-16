@@ -178,7 +178,7 @@ class LoopVectorizer(object):
         """
 
         layout = None
-        for stmt, expr_info in self.loop_opt.asm_expr.items():
+        for stmt, expr_info in self.loop_opt.exprs.items():
             parent = expr_info.parent
             unit_stride_loops, unit_stride_loops_parents = \
                 zip(*expr_info.unit_stride_loops_info)
