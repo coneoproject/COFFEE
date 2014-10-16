@@ -60,7 +60,7 @@ class LoopVectorizer(object):
             if d.sym.rank and s != ap.PARAM_VAR:
                 d.attr.append(self.comp["align"](self.intr["alignment"]))
 
-    def padding(self, decl_scope, nz_in_fors):
+    def padding(self, decl_scope):
         """Pad all data structures accessed in the loop nest to the nearest
         multiple of the vector length. Adjust trip counts and bounds of all
         innermost loops where padded arrays are written to. Since padding
@@ -95,7 +95,7 @@ class LoopVectorizer(object):
                     break
             # Condition 2
             alignable_stmts = []
-            nz_in_l = nz_in_fors.get(l, [])
+            nz_in_l = self.loop_opt.nz_in_fors.get(l, [])
             # Note that if nz_in_l is None, the full iteration space is traversed,
             # from the beginning to the end, so no offsets are used and it's ok
             # to adjust the top bound of the loop over the region that is going

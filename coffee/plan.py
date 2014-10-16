@@ -270,7 +270,7 @@ class ASTKernel(object):
                         vect.alignment(decls)
                         # Padding
                         if not blas:
-                            vect.padding(decls, loop_opt.nz_in_fors)
+                            vect.padding(decls)
                             self.ap = True
                     if v_type and v_type != AUTOVECT:
                         if intrinsics['inst_set'] == 'SSE':
