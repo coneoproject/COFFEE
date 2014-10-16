@@ -38,16 +38,16 @@ from copy import deepcopy as dcopy
 from collections import defaultdict
 
 from base import *
-from utils import ast_update_ofs, itspace_merge
+from utils import ast_update_ofs, itspace_merge, inner_loops, visit
 import plan as ap
 
 
-class AssemblyVectorizer(object):
+class LoopVectorizer(object):
 
-    """ Loop vectorizer """
+    """ Expression vectorizer class."""
 
-    def __init__(self, assembly_optimizer, intrinsics, compiler):
-        self.asm_opt = assembly_optimizer
+    def __init__(self, loop_opt, intrinsics, compiler):
+        self.loop_opt = loop_opt
         self.intr = intrinsics
         self.comp = compiler
         self.padded = []
@@ -60,7 +60,7 @@ class AssemblyVectorizer(object):
             if d.sym.rank and s != ap.PARAM_VAR:
                 d.attr.append(self.comp["align"](self.intr["alignment"]))
 
-    def padding(self, decl_scope, nz_in_fors):
+    def padding(self, decl_scope):
         """Pad all data structures accessed in the loop nest to the nearest
         multiple of the vector length. Adjust trip counts and bounds of all
         innermost loops where padded arrays are written to. Since padding
@@ -68,7 +68,7 @@ class AssemblyVectorizer(object):
         pragmas to inner loops to inform the backend compiler about this
         property."""
 
-        iloops = inner_loops(self.asm_opt.pre_header)
+        iloops = inner_loops(self.loop_opt.header)
         adjusted_loops = []
         # 1) Bound adjustment
         # Bound adjustment consists of modifying the start point and the
@@ -95,7 +95,7 @@ class AssemblyVectorizer(object):
                     break
             # Condition 2
             alignable_stmts = []
-            nz_in_l = nz_in_fors.get(l, [])
+            nz_in_l = self.loop_opt.nz_in_fors.get(l, [])
             # Note that if nz_in_l is None, the full iteration space is traversed,
             # from the beginning to the end, so no offsets are used and it's ok
             # to adjust the top bound of the loop over the region that is going
@@ -143,7 +143,8 @@ class AssemblyVectorizer(object):
                 l.pragma.append(self.comp["decl_aligned_for"])
 
         # 3) Padding
-        used_syms = [s.symbol for s in self.asm_opt.sym]
+        symbols = visit(self.loop_opt.loop, self.loop_opt.header)['symbols']
+        used_syms = [s.symbol for s in symbols.keys()]
         acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
         for d, s in acc_decls:
             if d.sym.rank:
@@ -154,31 +155,47 @@ class AssemblyVectorizer(object):
                     d.sym.rank = d.sym.rank[:-1] + (rounded,)
                 self.padded.append(d.sym)
 
-    def outer_product(self, opts, factor=1):
-        """Compute outer products according to ``opts``.
+    def specialize(self, opts, factor=1):
+        """Generate code for specialized expression vectorization. Check for peculiar
+        memory access patterns in an expression and replace scalar code with highly
+        optimized vector code. Currently, the following patterns are supported:
+
+        * Outer products - e.g. A[i]*B[j]
+
+        Also, code generation is supported for the following instruction sets:
+
+        * AVX
+
+        The parameter ``opts`` can be used to drive the transformation process:
 
         * ``opts = V_OP_PADONLY`` : no peeling, just use padding
         * ``opts = V_OP_PEEL`` : peeling for autovectorisation
-        * ``opts = V_OP_UAJ`` : set unroll_and_jam factor
+        * ``opts = V_OP_UAJ`` : set unroll_and_jam as specified by ``factor``
         * ``opts = V_OP_UAJ_EXTRA`` : as above, but extra iters avoid remainder
           loop factor is an additional parameter to specify things like
           unroll-and-jam factor. Note that factor is just a suggestion to the
-          compiler, which can freely decide to use a higher or lower value."""
+          compiler, which can freely decide to use a higher or lower value.
+        """
 
-        if not self.asm_opt.asm_expr:
-            return
+        layout = None
+        for stmt, expr_info in self.loop_opt.exprs.items():
+            parent = expr_info.parent
+            unit_stride_loops, unit_stride_loops_parents = \
+                zip(*expr_info.unit_stride_loops_info)
 
-        for stmt, stmt_info in self.asm_opt.asm_expr.items():
-            # First, find outer product loops in the nest
-            it_vars, parent, loops = stmt_info
-
+            # Check if outer-product vectorization is actually doable
             vect_len = self.intr["dp_reg"]
-            rows = loops[0].size()
-            unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
+            rows = unit_stride_loops[0].size()
+            if rows < vect_len:
+                continue
+            if len(unit_stride_loops) != 2:
+                # There must be exactly two unit-strided dimensions
+                continue
 
-            op = OuterProduct(stmt, loops, self.intr, self.asm_opt)
+            op = OuterProduct(stmt, unit_stride_loops, self.intr, self.loop_opt)
 
             # Vectorisation
+            unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
             rows_per_it = vect_len*unroll_factor
             if opts == ap.V_OP_UAJ:
                 if rows_per_it <= rows:
@@ -200,28 +217,28 @@ class AssemblyVectorizer(object):
             # Construct the remainder loop
             if opts != ap.V_OP_UAJ_EXTRA and rows > rows_per_it and rows % rows_per_it > 0:
                 # peel out
-                loop_peel = dcopy(loops)
+                loop_peel = dcopy(unit_stride_loops)
                 # Adjust main, layout and remainder loops bound and trip
-                bound = loops[0].cond.children[1].symbol
+                bound = unit_stride_loops[0].cond.children[1].symbol
                 bound -= bound % rows_per_it
-                loops[0].cond.children[1] = c_sym(bound)
+                unit_stride_loops[0].cond.children[1] = c_sym(bound)
                 layout.cond.children[1] = c_sym(bound)
                 loop_peel[0].init.init = c_sym(bound)
                 loop_peel[0].incr.children[1] = c_sym(1)
                 loop_peel[1].incr.children[1] = c_sym(1)
                 # Append peeling loop after the main loop
-                parent_loop = self.asm_opt.fors[0]
-                parent_loop.children[0].children.append(loop_peel[0])
+                unit_stride_outerparent = unit_stride_loops_parents[0]
+                ofs = unit_stride_outerparent.children.index(unit_stride_loops[0])
+                unit_stride_outerparent.children.insert(ofs+1, loop_peel[0])
 
             # Insert the vectorized code at the right point in the loop nest
             blk = parent.children
             ofs = blk.index(stmt)
             parent.children = blk[:ofs] + body + blk[ofs + 1:]
 
-        # Append the layout code after the loop nest
+        # Append the layout code after the whole loop nest
         if layout:
-            parent = self.asm_opt.pre_header.children
-            parent.insert(parent.index(self.asm_opt.fors[0]) + 1, layout)
+            parent = self.loop_opt.header.children.append(layout)
 
 
 class OuterProduct():
@@ -441,7 +458,7 @@ class OuterProduct():
         # the innermost loop (i.e. loop nest is j-k-i), stores in memory are
         # done outside of ip, i.e. immediately before the outer product's
         # inner loop terminates.
-        if self.loops[1].it_var() == self.nest.fors[-1].it_var():
+        if self.loops[1] in inner_loops(self.loops[0]):
             mode = self.OP_STORE_IN_MEM
             tensor_size = cols
         else:
@@ -515,22 +532,3 @@ def vect_rounddown(x):
     """Return x rounded down to the vector length. """
     word_len = ap.intrinsics.get("dp_reg") or 1
     return x - (x % word_len)
-
-
-def inner_loops(node):
-    """Find inner loops in the subtree rooted in node."""
-
-    def find_iloops(node, loops):
-        if isinstance(node, Perfect):
-            return False
-        elif isinstance(node, (Block, Root)):
-            return any([find_iloops(s, loops) for s in node.children])
-        elif isinstance(node, For):
-            found = find_iloops(node.children[0], loops)
-            if not found:
-                loops.append(node)
-            return True
-
-    loops = []
-    find_iloops(node, loops)
-    return loops

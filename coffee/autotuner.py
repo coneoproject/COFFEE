@@ -82,9 +82,9 @@ static inline long stamp()
 }
 
 #ifdef DEBUG
-static int compare_1d(double A1[%(trial)s], double A2[%(trial)s], FILE* out)
+static int compare_1d(double A1[%(cols)s], double A2[%(cols)s], FILE* out)
 {
-  for(int i = 0; i < %(trial)s; i++)
+  for(int i = 0; i < %(cols)s; i++)
   {
     if(fabs(A1[i] - A2[i]) > TOLERANCE)
     {
@@ -95,11 +95,11 @@ static int compare_1d(double A1[%(trial)s], double A2[%(trial)s], FILE* out)
   return 0;
 }
 
-static int compare_2d(double A1[%(trial)s][%(trial)s], double A2[%(trial)s][%(trial)s], FILE* out)
+static int compare_2d(double A1[%(rows)s][%(cols)s], double A2[%(rows)s][%(cols)s], FILE* out)
 {
-  for(int i = 0; i < %(trial)s; i++)
+  for(int i = 0; i < %(rows)s; i++)
   {
-    for(int j = 0; j < %(trial)s; j++)
+    for(int j = 0; j < %(cols)s; j++)
     {
       if(fabs(A1[i][j] - A2[i][j]) > TOLERANCE)
       {
@@ -204,9 +204,9 @@ int main()
 """
     _debug_template = """
   // First discard padded region, then check output
-  double A_%(iter)s_debug[%(trial)s][%(trial)s] = {{0.0}};
-  for (int i_0 = 0; i_0 < %(trial)s; i_0++)
-    for (int i_1 = 0; i_1 < %(trial)s; i_1++)
+  double A_%(iter)s_debug[%(rows)s][%(cols)s] = {{0.0}};
+  for (int i_0 = 0; i_0 < %(rows)s; i_0++)
+    for (int i_1 = 0; i_1 < %(cols)s; i_1++)
       A_%(iter)s_debug[i_0][i_1] = A_%(iter)s[i_0][i_1];
   if(%(call_debug)s(A_0, A_%(iter)s_debug, out))
   {
@@ -238,11 +238,10 @@ int main()
     """Create and execute a C file in which multiple variants of the same kernel
     are executed to determine the fastest implementation."""
 
-    def __init__(self, variants, itspace, include, compiler, isa, blas):
+    def __init__(self, variants, include, compiler, isa, blas):
         """Initialize the autotuner.
 
         :arg variants:     list of (ast, used_optimizations) for autotuning
-        :arg itspace:      kernel's iteration space
         :arg include:      list of directories to be searched for header files
         :arg compiler:     backend compiler info
         :arg isa:          instruction set architecture info
@@ -250,7 +249,6 @@ int main()
         """
 
         self.variants = variants
-        self.itspace = itspace
         self.include = include
         self.compiler = compiler
         self.isa = isa
@@ -355,62 +353,79 @@ See %s for more info about the error""" % logfile)
 
         :arg resolution: the amount of time in milliseconds a kernel is run."""
 
-        is_global_decl = lambda s: isinstance(s, Decl) and ('static' and 'const' in s.qual)
-        coords_size = self._retrieve_coords_size(str(self.variants[0][0]))
-        trial_dofs = self.itspace[0][0].size() if len(self.itspace) >= 1 else 0
-        test_dofs = self.itspace[1][0].size() if len(self.itspace) >= 2 else 0
-        coeffs_size = {}
+        is_global = lambda s: isinstance(s, Decl) and ('static' and 'const' in s.qual)
+
+        # First, determine sizes of parameters in the non-transformed variant
+        non_transf_ast = self.variants[0][0]
+        fun_decl = non_transf_ast.children[1]
+        # Local tensor size
+        tensor_rank = fun_decl.args[0].sym.rank
+        lt_rows, lt_cols = tensor_rank[0], tensor_rank[-1]
+        # Coordinates size
+        coords_size = self._retrieve_coords_size(str(non_transf_ast))
+        # Coefficients size
+        coeffs_syms = [f.sym.symbol.replace('*', '') for f in fun_decl.args[2:]]
+        coeffs_size = self._retrieve_coeff_size(fun_decl, coeffs_syms)
 
         # Create the invidual test cases
         call_variants, debug_code, global_decls = ([], [], [])
         for i, variant in enumerate(self.variants):
             ast, used_opts = variant
-            fun_decl = ast.children[1]
-            fun_decl.pred.remove('inline')
+
             # Create ficticious kernel parameters
             # Here, we follow the "standard" convention:
             # - The first parameter is the local tensor (lt)
             # - The second parameter is the coordinates field (coords)
             # - (Optional) any additional parameter is a generic field,
             #   whose size is bound to the number of dofs in the kernel
+            fun_decl = ast.children[1]
+            fun_decl.pred.remove('inline')
+
             lt_arg = fun_decl.args[0].sym
             lt_sym = lt_arg.symbol + "_%d" % i
-            coords_sym = fun_decl.args[1].sym.symbol.replace('*', '')
-            coeffs_syms = [f.sym.symbol.replace('*', '') for f in fun_decl.args[2:]]
-            coeffs_types = [f.typ for f in fun_decl.args[2:]]
-            lt_init = "".join("{" for r in lt_arg.rank) + "0.0" + "".join("}" for r in lt_arg.rank)
+            lt_init = "".join("{" for r in lt_arg.rank) + "0.0" + \
+                "".join("}" for r in lt_arg.rank)
             lt_align = self.compiler['align']("VECTOR_ALIGN")
             if lt_arg.rank[-1] % self.isa["dp_reg"]:
                 lt_align = ""
-            lt_decl = "double " + lt_sym + "".join(["[%d]" % r for r in lt_arg.rank]) + lt_align + \
-                " = " + lt_init
+            lt_decl = "double " + lt_sym + "".join(["[%d]" % r for r in lt_arg.rank]) + \
+                lt_align + " = " + lt_init
+
+            # Coordinates
+            coords_sym = fun_decl.args[1].sym.symbol.replace('*', '')
             coords_decl = "double " + coords_sym + "_%d[%d][1]" % (i, coords_size)
-            coeffs_size = coeffs_size or self._retrieve_coeff_size(fun_decl, coeffs_syms)
+
+            # Coefficients
+            coeffs_syms = [f.sym.symbol.replace('*', '') for f in fun_decl.args[2:]]
+            coeffs_types = [f.typ for f in fun_decl.args[2:]]
             coeffs_decl = ["%s " % t + f + "_%d[%d][1]" % (i, coeffs_size[f]) for t, f
                            in zip(coeffs_types, coeffs_syms)]
+
             # Adjust kernel's signature
             fun_decl.args[1].sym = Symbol(coords_sym, ("%d" % coords_size, 1))
             for d, f in zip(fun_decl.args[2:], coeffs_syms):
                 d.sym = Symbol(f, ("%d" % coeffs_size[f], 1))
+
             # Adjust symbols names for kernel invokation
             coords_sym += "_%d" % i
             coeffs_syms = [f + "_%d" % i for f in coeffs_syms]
-
             # Adjust kernel name
             fun_decl.name = fun_decl.name + "_%d" % i
 
             # Remove any static const declaration from the kernel (they are declared
             # just once at the beginning of the file, to reduce code size)
             fun_body = fun_decl.children[0].children
-            global_decls = global_decls or "\n".join([str(s) for s in fun_body if is_global_decl(s)])
-            fun_decl.children[0].children = [s for s in fun_body if not is_global_decl(s)]
+            global_decls = "\n".join([str(s) for s in fun_body if is_global(s)])
+            fun_decl.children[0].children = [s for s in fun_body if not is_global(s)]
 
             # Initialize coefficients (if any)
             init_coeffs = ""
             if coeffs_syms:
                 wrap_coeffs = "#ifndef DEBUG\n      %s\n#else\n      %s\n#endif"
-                real_coeffs = ";\n      ".join([f + "[j][0] = (double)rand();" for f in coeffs_syms])
-                debug_coeffs = ";\n      ".join([f + "[j][0] = (double)(rand()%10);" for f in coeffs_syms])
+                real_coeffs = ";\n      ".join([f + "[j][0] = (double)rand();"
+                                                for f in coeffs_syms])
+                debug_coeffs = ";\n      ".join([f + "[j][0] = (double)(rand()%10);"
+                                                 for f in coeffs_syms])
                 init_coeffs = Autotuner._coeffs_template % {
                     'ndofs': min(coeffs_size.values()),
                     'init_coeffs': wrap_coeffs % (real_coeffs, debug_coeffs)
@@ -428,10 +443,11 @@ See %s for more info about the error""" % logfile)
             })
 
             # Create debug code, apart from the BLAS case
-            if not used_opts[0] == 4:
+            if not used_opts.get('blas'):
                 debug_code.append(Autotuner._debug_template % {
                     'iter': i,
-                    'trial': trial_dofs,
+                    'rows': lt_rows,
+                    'cols': lt_cols,
                     'call_debug': "compare_2d"
                 })
 
@@ -440,8 +456,8 @@ See %s for more info about the error""" % logfile)
                                   for i, k in enumerate(zip(*self.variants)[0])])
         code_template = Autotuner._code_template % {
             'filename': os.path.join(self.coffee_dir, "%s.out" % Autotuner._filename),
-            'trial': trial_dofs,
-            'test': test_dofs,
+            'rows': lt_rows,
+            'cols': lt_cols,
             'vect_header': self.compiler['vect_header'],
             'vect_align': self.isa['alignment'],
             'blas_header': self.blas['header'],

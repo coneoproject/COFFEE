@@ -34,6 +34,9 @@
 """This file contains the hierarchy of classes that implement a kernel's
 Abstract Syntax Tree (AST)."""
 
+
+from copy import deepcopy as dcopy
+
 # Utilities for simple exprs and commands
 point = lambda p: "[%s]" % p
 point_ofs = lambda p, o: "[%s*%s+%s]" % (p, o[0], o[1])
@@ -105,6 +108,13 @@ class BinExpr(Expr):
         super(BinExpr, self).__init__([expr1, expr2])
         self.op = op
 
+    def __deepcopy__(self, memo):
+        """Binary expressions always need to be copied as plain new objects,
+        ignoring whether they have been copied before; that is, the ``memo``
+        dictionary tracking the objects copied up to ``self``, which is used
+        by the classic ``deepcopy`` method, is ignored."""
+        return self.__class__(dcopy(self.children[0]), dcopy(self.children[1]))
+
     def gencode(self):
         return (" "+self.op+" ").join([n.gencode() for n in self.children])
 
@@ -115,6 +125,13 @@ class UnaryExpr(Expr):
 
     def __init__(self, expr):
         super(UnaryExpr, self).__init__([expr])
+
+    def __deepcopy__(self, memo):
+        """Unary expressions always need to be copied as plain new objects,
+        ignoring whether they have been copied before; that is, the ``memo``
+        dictionary tracking the objects copied up to ``self``, which is used
+        by the classic ``deepcopy`` method, is ignored."""
+        return self.__class__(dcopy(self.children[0]))
 
 
 class Neg(UnaryExpr):
@@ -358,7 +375,7 @@ class EmptyStatement(Statement, Perfect):
         return ""
 
 
-class FlatBlock(Statement):
+class FlatBlock(Statement, Perfect):
     """Treat a chunk of code as a single statement, i.e. a C string"""
 
     def __init__(self, code, pragma=None):
@@ -531,7 +548,10 @@ class For(Statement):
         self.incr = incr
 
     def it_var(self):
-        return self.init.sym.symbol
+        if isinstance(self.init, Decl):
+            return self.init.sym.symbol
+        elif isinstance(self.init, Assign):
+            return self.init.children[0]
 
     def start(self):
         return self.init.init.symbol
@@ -734,13 +754,3 @@ def c_flat_for(code, parent):
     parent.children.append(FlatBlock(code))
     parent.children.append(new_block)
     return new_block
-
-
-def c_from_itspace_to_fors(itspaces):
-    inner_block = Block([], open_scope=True)
-    loops = []
-    for i, itspace in enumerate(itspaces):
-        s, size = itspace
-        loops.append(For(Decl("int", s, c_sym(0)), Less(s, size), Incr(s, c_sym(1)),
-                     Block([loops[i-1]], open_scope=True) if loops else inner_block))
-    return (tuple(loops), inner_block)
