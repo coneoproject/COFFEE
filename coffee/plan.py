@@ -181,11 +181,11 @@ class ASTKernel(object):
         autotune_all = [('base', {}),
                         ('base', {'rewrite': 1, 'align_pad': True}),
                         ('rewrite', {'rewrite': 2, 'align_pad': True}),
+                        ('rewrite', {'rewrite': 2, 'align_pad': True, 'precompute': 1}),
                         ('rewrite', {'rewrite': 2, 'align_pad': True,
-                                     'precompute': True}),
-                        ('rewrite', {'rewrite': 3, 'align_pad': True}),
-                        ('rewrite', {'rewrite': 3, 'align_pad': True,
-                                     'precompute': True}),
+                                     'dead_ops_elimination': True}),
+                        ('rewrite', {'rewrite': 2, 'align_pad': True, 'precompute': 1,
+                                     'dead_ops_elimination': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 4}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
@@ -323,7 +323,7 @@ class ASTKernel(object):
                 # determined heuristically
                 loop_opt = loop_opts[0]
                 found_zeros = found_zeros or loop_opt.nz_in_fors
-                if opt in ['licm', 'split'] and not found_zeros:
+                if opt in ['rewrite', 'split'] and not found_zeros:
                     expr_loops = loop_opt.expr_loops
                     if not expr_loops:
                         continue

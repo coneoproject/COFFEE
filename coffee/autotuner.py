@@ -443,7 +443,7 @@ See %s for more info about the error""" % logfile)
             })
 
             # Create debug code, apart from the BLAS case
-            if not used_opts[0] == 4:
+            if not used_opts.get('blas'):
                 debug_code.append(Autotuner._debug_template % {
                     'iter': i,
                     'rows': lt_rows,
