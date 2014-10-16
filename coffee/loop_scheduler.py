@@ -47,6 +47,7 @@ from warnings import warn as warning
 from base import *
 from expression import MetaExpr, copy_metaexpr
 from utils import ast_update_ofs, itspace_size_ofs, itspace_merge, itspace_to_for
+from utils import itspace_from_for, visit, flatten
 
 
 class LoopScheduler(object):
@@ -55,7 +56,7 @@ class LoopScheduler(object):
     loop distribution, etc."""
 
 
-class PerfectSSALoopMerger(LoopScheduler):
+class SSALoopMerger(LoopScheduler):
 
     """Analyze data dependencies and iteration spaces, then merge fusable
     loops.
@@ -63,7 +64,7 @@ class PerfectSSALoopMerger(LoopScheduler):
     at declaration time, then they can be assigned a value in only one place."""
 
     def __init__(self, root, expr_graph):
-        """Initialize the PerfectSSALoopMerger.
+        """Initialize the SSALoopMerger.
 
         :arg expr_graph: the ExpressionGraph tracking all data dependencies
                          involving identifiers that appear in ``root``.
@@ -71,15 +72,6 @@ class PerfectSSALoopMerger(LoopScheduler):
         self.root = root
         self.expr_graph = expr_graph
         self.merged_loops = []
-
-    def _find_it_space(self, node):
-        """Return the iteration space of the loop nest rooted in ``node``,
-        as a tuple of 3-tuple, in which each 3-tuple is of the form
-        (start, bound, increment)."""
-        if isinstance(node, For):
-            itspace = (node.start(), node.end(), node.increment())
-            child_itspace = self._find_it_space(node.children[0].children[0])
-            return (itspace, child_itspace) if child_itspace else (itspace,)
 
     def _accessed_syms(self, node, mode):
         """Return a list of symbols that are being accessed in the tree
@@ -145,17 +137,18 @@ class PerfectSSALoopMerger(LoopScheduler):
 
     def merge(self):
         """Merge perfect loop nests rooted in ``self.root``."""
-        # {((start, bound, increment), ...) --> [outer_loop]}
         found_nests = defaultdict(list)
-        written_syms = []
         # Collect some info visiting the tree rooted in node
         for n in self.root.children:
             if isinstance(n, For):
                 # Track structure of iteration spaces
-                found_nests[self._find_it_space(n)].append(n)
-            else:
-                # Track written variables
-                written_syms.extend(self._accessed_syms(n, 0))
+                loops_infos = visit(n, self.root)['fors']
+                for li in loops_infos:
+                    loops, loops_parents = zip(*li)
+                    # Note that only inner loops can be fused, and that they share
+                    # the same parent
+                    key = (itspace_from_for(loops), loops_parents[-1])
+                    found_nests[key].append(loops[-1])
 
         all_merged = []
         # A perfect loop nest L1 is mergeable in a loop nest L2 if
@@ -167,10 +160,11 @@ class PerfectSSALoopMerger(LoopScheduler):
         #     in L1 and read in L2. This is checked next.
         # Here, to simplify the data flow analysis, the last loop in the tree
         # rooted in node is selected as L2
-        for itspace, loop_nests in found_nests.items():
+        for itspace_parent, loop_nests in found_nests.items():
             if len(loop_nests) == 1:
                 # At least two loops are necessary for merging to be meaningful
                 continue
+            itspace, parent = itspace_parent
             mergeable = []
             merging_in = loop_nests[-1]
             merging_in_read_syms = self._accessed_syms(merging_in, 1)
@@ -178,11 +172,12 @@ class PerfectSSALoopMerger(LoopScheduler):
                 is_mergeable = True
                 # Get the symbols written to in the loop nest ln
                 ln_written_syms = self._accessed_syms(ln, 0)
-                # Get the symbols written to between ln and merging_in (included)
-                _written_syms = [self._accessed_syms(l, 0) for l in
-                                 loop_nests[loop_nests.index(ln)+1:-1]]
-                _written_syms = [i for l in _written_syms for i in l]  # list flattening
-                _written_syms += written_syms
+                # Get the symbols written to between loop ln (excluded) and
+                # loop merging_in (included)
+                bound_left = parent.children.index(ln)+1
+                bound_right = parent.children.index(merging_in)
+                _written_syms = flatten([self._accessed_syms(l, 0) for l in
+                                         parent.children[bound_left:bound_right]])
                 # Check condition 2
                 for ws, lws in itertools.product(_written_syms, ln_written_syms):
                     if self.expr_graph.has_dep(ws, lws):
@@ -199,7 +194,7 @@ class PerfectSSALoopMerger(LoopScheduler):
                     mergeable.append(ln)
             # If there is at least one mergeable loops, do the merging
             for l in reversed(mergeable):
-                merged, l_itvars, m_itvars = self._merge_loops(self.root, l, merging_in)
+                merged, l_itvars, m_itvars = self._merge_loops(parent, l, merging_in)
                 self._update_it_vars(merged, dict(zip(l_itvars, m_itvars)))
             # Update the lists of merged loops
             all_merged.append((mergeable, merging_in))

@@ -37,7 +37,7 @@ from base import *
 from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
 from utils import set_itspace, ast_c_for
 from expression import MetaExpr
-from loop_scheduler import PerfectSSALoopMerger, ExpressionFissioner, ZeroLoopScheduler
+from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
@@ -102,10 +102,6 @@ class LoopOptimizer(object):
                                   out of the loop nest
         """
 
-        if not self.asm_expr:
-            return
-
-        # Expression rewriting
         kernel_info = (self.header, self.kernel_decls)
         for stmt_info in self.asm_expr.items():
             ew = ExpressionRewriter(stmt_info, self.decls, kernel_info,
@@ -115,16 +111,7 @@ class LoopOptimizer(object):
             if level > 1:
                 ew.expand()
                 ew.distribute()
-                ew.licm()
-
-        # Fuse loops iterating along the same iteration space and remove
-        # any duplicate sub-expressions
-        if level > 1:
-            lm = PerfectSSALoopMerger(self.root, self.expr_graph)
-            merged_loops = lm.merge()
-            for merged, merged_in in merged_loops:
-                [self.hoisted.update_loop(l, merged_in) for l in merged]
-            lm.simplify()
+                ew.licm(merge_and_simplify=True)
 
     def eliminate_zeros(self):
         """Avoid accessing blocks of contiguous (i.e. unit-stride) zero-valued

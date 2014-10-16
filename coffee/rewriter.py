@@ -35,6 +35,7 @@ from collections import defaultdict
 from copy import deepcopy as dcopy
 
 from base import *
+from loop_scheduler import SSALoopMerger
 from utils import visit, is_perfect_loop, count_occurrences, ast_c_sum
 from utils import ast_replace, loops_as_dict, od_find_next
 import plan
@@ -79,9 +80,17 @@ class ExpressionRewriter(object):
         # Properties of the transformed expression
         self._expanded = False
 
-    def licm(self):
-        """Perform loop-invariant code motion."""
-        self.expr_hoister.licm()
+    def licm(self, merge_and_simplify=False):
+        """Perform generalized loop-invariant code motion.
+
+        :arg merge_and_simpliy: True if should try to merge the loops in which
+                                invariant expressions are evaluated, because they
+                                might be characterized by the same iteration space.
+                                In this process, computation which is redundant
+                                because performed in at least two merged loops, is
+                                eliminated.
+        """
+        self.expr_hoister.licm(merge_and_simplify)
 
     def expand(self):
         """Expand expressions such that: ::
@@ -307,7 +316,7 @@ class ExpressionHoister(object):
         else:
             raise RuntimeError("Fatal error while finding hoistable terms")
 
-    def licm(self):
+    def licm(self, merge_and_simplify):
         """Perform loop-invariant code motion for the expression passed in at
         object construction time."""
 
@@ -423,6 +432,16 @@ class ExpressionHoister(object):
 
         # Increase the global counter for subsequent calls to licm
         ExpressionHoister.GLOBAL_LICM_COUNTER += 1
+
+        # Try to merge the hoisted loops, because they might have the same
+        # iteration space (call to merge()), and also possibly share sare
+        # redundant computation (call to simplify())
+        if merge_and_simplify:
+            lm = SSALoopMerger(self.header, self.expr_graph)
+            merged_loops = lm.merge()
+            for merged, merged_in in merged_loops:
+                [self.hoisted.update_loop(l, merged_in) for l in merged]
+            lm.simplify()
 
 
 class ExpressionExpander(object):

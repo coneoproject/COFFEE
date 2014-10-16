@@ -119,6 +119,10 @@ class StmtTracker(OrderedDict):
     def place(self, sym):
         return self[sym].place if self.get(sym) else None
 
+    @property
+    def all_places(self):
+        return set((stmt_info.place for stmt_info in self.values()))
+
 
 class ExpressionGraph(object):
 
