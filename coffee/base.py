@@ -34,6 +34,9 @@
 """This file contains the hierarchy of classes that implement a kernel's
 Abstract Syntax Tree (AST)."""
 
+
+from copy import deepcopy as dcopy
+
 # Utilities for simple exprs and commands
 point = lambda p: "[%s]" % p
 point_ofs = lambda p, o: "[%s*%s+%s]" % (p, o[0], o[1])
@@ -105,6 +108,13 @@ class BinExpr(Expr):
         super(BinExpr, self).__init__([expr1, expr2])
         self.op = op
 
+    def __deepcopy__(self, memo):
+        """Binary expressions always need to be copied as plain new objects,
+        ignoring whether they have been copied before; that is, the ``memo``
+        dictionary tracking the objects copied up to ``self``, which is used
+        by the classic ``deepcopy`` method, is ignored."""
+        return self.__class__(dcopy(self.children[0]), dcopy(self.children[1]))
+
     def gencode(self):
         return (" "+self.op+" ").join([n.gencode() for n in self.children])
 
@@ -115,6 +125,13 @@ class UnaryExpr(Expr):
 
     def __init__(self, expr):
         super(UnaryExpr, self).__init__([expr])
+
+    def __deepcopy__(self, memo):
+        """Unary expressions always need to be copied as plain new objects,
+        ignoring whether they have been copied before; that is, the ``memo``
+        dictionary tracking the objects copied up to ``self``, which is used
+        by the classic ``deepcopy`` method, is ignored."""
+        return self.__class__(dcopy(self.children[0]))
 
 
 class Neg(UnaryExpr):
