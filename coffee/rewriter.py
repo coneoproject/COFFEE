@@ -80,7 +80,7 @@ class ExpressionRewriter(object):
         # Properties of the transformed expression
         self._expanded = False
 
-    def licm(self, merge_and_simplify=False):
+    def licm(self, merge_and_simplify=False, compact_tmps=False):
         """Perform generalized loop-invariant code motion.
 
         :arg merge_and_simpliy: True if should try to merge the loops in which
@@ -89,8 +89,50 @@ class ExpressionRewriter(object):
                                 In this process, computation which is redundant
                                 because performed in at least two merged loops, is
                                 eliminated.
+        :arg compact_tmps: True if temporaries accessed only once should be inlined.
         """
-        self.expr_hoister.licm(merge_and_simplify)
+        self.expr_hoister.licm()
+
+        # Try to merge the hoisted loops, because they might have the same
+        # iteration space (call to merge()), and also possibly share some
+        # redundant computation (call to simplify())
+        if merge_and_simplify:
+            lm = SSALoopMerger(self.header, self.expr_graph)
+            merged_loops = lm.merge()
+            for merged, merged_in in merged_loops:
+                [self.hoisted.update_loop(l, merged_in) for l in merged]
+            lm.simplify()
+
+        # Remove temporaries created yet accessed only once
+        if compact_tmps:
+            stmt_occs = count_occurrences(self.stmt, key=1, read_only=True)
+            for l in self.hoisted.all_loops:
+                l_occs = count_occurrences(l, key=0, read_only=True)
+                to_replace, to_delete = {}, []
+                for sym_rank, sym_occs in l_occs.items():
+                    # If the symbol appears once is a potential candidate for
+                    # being removed. It is actually removed if it does't appear
+                    # in the expression from which was extracted. Symbols appearing
+                    # more than once are removed if they host an expression made
+                    # of just one symbol
+                    sym, rank = sym_rank
+                    if sym not in self.hoisted or sym in stmt_occs:
+                        continue
+                    expr = self.hoisted[sym].expr
+                    if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
+                        continue
+                    if not self.hoisted[sym].loop:
+                        continue
+
+                    to_replace[str(Symbol(sym, rank))] = expr
+                    to_delete.append(sym)
+
+                for stmt in l.children[0].children:
+                    symbol, expr = stmt.children
+                    sym = symbol.symbol
+                    ast_replace(expr, to_replace, copy=True)
+                for sym in to_delete:
+                    self.hoisted.delete_hoisted(sym)
 
     def expand(self):
         """Expand expressions such that: ::
@@ -174,7 +216,7 @@ class ExpressionRewriter(object):
             raise RuntimeError("Distribute error: expansion required first.")
 
         to_distr = defaultdict(list)
-        occurrences = count_occurrences(self.stmt.children[1], True)
+        occurrences = count_occurrences(self.stmt.children[1], key=2)
         find_prod(self.stmt.children[1], occurrences, to_distr)
 
         # Create the new expression
@@ -316,7 +358,7 @@ class ExpressionHoister(object):
         else:
             raise RuntimeError("Fatal error while finding hoistable terms")
 
-    def licm(self, merge_and_simplify):
+    def licm(self):
         """Perform loop-invariant code motion for the expression passed in at
         object construction time."""
 
@@ -433,16 +475,6 @@ class ExpressionHoister(object):
         # Increase the global counter for subsequent calls to licm
         ExpressionHoister.GLOBAL_LICM_COUNTER += 1
 
-        # Try to merge the hoisted loops, because they might have the same
-        # iteration space (call to merge()), and also possibly share sare
-        # redundant computation (call to simplify())
-        if merge_and_simplify:
-            lm = SSALoopMerger(self.header, self.expr_graph)
-            merged_loops = lm.merge()
-            for merged, merged_in in merged_loops:
-                [self.hoisted.update_loop(l, merged_in) for l in merged]
-            lm.simplify()
-
 
 class ExpressionExpander(object):
     """Expand expressions such that: ::
@@ -553,7 +585,7 @@ class ExpressionExpander(object):
                         raise RuntimeError("Expansion error: no symbol: %s" % sym.symbol)
                     replacing = self._do_expand(sym, const)
                     if replacing:
-                        to_replace[str(Par(sym))] = replacing
+                        to_replace[str(sym)] = replacing
                 ast_replace(node, to_replace, copy=True)
                 # Update the parent node, since an expression has been expanded
                 if parent.children[0] == node:

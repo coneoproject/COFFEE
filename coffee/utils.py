@@ -110,26 +110,16 @@ def ast_replace(node, syms_dict, n_replaced={}, copy=False):
     various ``syms`` rooted in ``node`` with ``to_replace``. If ``copy`` is True,
     a deep copy of the replacing symbol is created."""
 
-    if isinstance(node, Symbol):
-        return syms_dict.get(str(Par(node)))
-
-    str_node = str(node)
-    if isinstance(node, Par):
-        if str_node in syms_dict:
-            return syms_dict[str_node]
-        else:
-            return ast_replace(node.children[0], syms_dict, n_replaced, copy)
-    if str_node in syms_dict:
-        return syms_dict[str_node]
-
-    # Traverse the expression tree and replace
     to_replace = {}
     for i, n in enumerate(node.children):
-        replacing = ast_replace(n, syms_dict, n_replaced, copy)
+        replacing = syms_dict.get(str(n)) or syms_dict.get(str(Par(n)))
         if replacing:
             to_replace[i] = replacing if not copy else dcopy(replacing)
             if n_replaced:
                 n_replaced[str(replacing)] += 1
+        elif not isinstance(n, Symbol):
+            # Useless to traverse the tree if the child is a symbol
+            ast_replace(n, syms_dict, n_replaced, copy)
     for i, r in to_replace.items():
         node.children[i] = r
 
@@ -320,27 +310,47 @@ def is_perfect_loop(loop):
     return check_perfectness(loop)
 
 
-def count_occurrences(node, str_key=False):
+def count_occurrences(node, key=0, read_only=False):
     """For each variable ``node``, count how many times it appears as involved
-    in some arithmetic operations. For example, for the expression: ::
+    in some expressions. For example, for the expression: ::
 
         ``a*(5+c) + b*(a+4)``
 
     return ::
 
-        ``{a: 2, b: 1, c: 1}``"""
+        ``{a: 2, b: 1, c: 1}``
+
+    :arg key: This can be any value in [0, 1, 2]. If ``key == 0``, then the symbol
+              name and its rank are used as key of the returned dictionary. If
+              ``key == 1`` only the symbol name is used. If ``key == 2`` a string
+              representation of the symbol is used.
+    :arg read_only: True if only variables on the right-hand side of a statement
+                    should be counted; False if any appearance should be counted.
+    """
 
     def count(node, counter):
         if isinstance(node, Symbol):
-            node = str(node) if str_key else (node.symbol, node.rank)
+            if key == 0:
+                node = (node.symbol, node.rank)
+            elif key == 1:
+                node = node.symbol
+            elif key == 2:
+                node = str(node)
             if node in counter:
                 counter[node] += 1
             else:
                 counter[node] = 1
+        elif isinstance(node, FlatBlock):
+            return
         else:
-            for c in node.children:
+            to_traverse = node.children
+            if isinstance(node, (Assign, Incr, Decr)) and read_only:
+                to_traverse = node.children[1:]
+            for c in to_traverse:
                 count(c, counter)
 
+    if key not in [0, 1, 2]:
+        raise RuntimeError("Count_occurrences got a wrong key (valid: 0, 1, 2)")
     counter = {}
     count(node, counter)
     return counter
