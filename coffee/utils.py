@@ -418,17 +418,24 @@ def itspace_to_for(itspaces, loop_parent):
     return (tuple(loops_info), inner_block)
 
 
-def itspace_from_for(loops):
+def itspace_from_for(loops, mode):
     """Given an iterator of for ``loops``, return a tuple that rather contains
     the iteration space of each loop, i.e. given: ::
 
         [for1, for2, ...]
 
-    Return: ::
+    If ``mode == 0``, return: ::
 
         ((start1, bound1, increment1), (start2, bound2, increment2), ...)
+
+    If ``mode > 0``, return: ::
+
+        ((for1_itvar, (start1, topiter1)), (for2_itvar, (start2, topiter2):, ...)
     """
-    return tuple((l.start(), l.end(), l.increment()) for l in loops)
+    if mode == 0:
+        return tuple((l.start(), l.end(), l.increment()) for l in loops)
+    else:
+        return tuple((l.it_var(), (l.start(), l.end() - 1)) for l in loops)
 
 
 #############################
