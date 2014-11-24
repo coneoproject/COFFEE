@@ -43,6 +43,7 @@ import resource
 import operator
 from warnings import warn as warning
 from copy import deepcopy as dcopy
+from collections import defaultdict
 
 from base import *
 
@@ -320,10 +321,12 @@ def count_occurrences(node, key=0, read_only=False):
 
         ``{a: 2, b: 1, c: 1}``
 
-    :arg key: This can be any value in [0, 1, 2]. If ``key == 0``, then the symbol
-              name and its rank are used as key of the returned dictionary. If
-              ``key == 1`` only the symbol name is used. If ``key == 2`` a string
-              representation of the symbol is used.
+    :arg key: This can be any value in [0, 1, 2]. The keys used in the returned
+              dictionary can be:
+
+              * ``key == 0``: a tuple (symbol name, symbol rank)
+              * ``key == 1``: the symbol name
+              * ``key == 2``: a string representation of the symbol
     :arg read_only: True if only variables on the right-hand side of a statement
                     should be counted; False if any appearance should be counted.
     """
@@ -336,10 +339,7 @@ def count_occurrences(node, key=0, read_only=False):
                 node = node.symbol
             elif key == 2:
                 node = str(node)
-            if node in counter:
-                counter[node] += 1
-            else:
-                counter[node] = 1
+            counter[node] += 1
         elif isinstance(node, FlatBlock):
             return
         else:
@@ -351,7 +351,7 @@ def count_occurrences(node, key=0, read_only=False):
 
     if key not in [0, 1, 2]:
         raise RuntimeError("Count_occurrences got a wrong key (valid: 0, 1, 2)")
-    counter = {}
+    counter = defaultdict(int)
     count(node, counter)
     return counter
 
