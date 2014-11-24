@@ -414,7 +414,7 @@ class ExpressionHoister(object):
                 expr = dict([(str(e), e) for e in expr]).values()
 
                 # 2) Create the new invariant sub-expressions and temporaries
-                sym_rank, for_dep = (tuple([wl.size()]), tuple([wl.it_var()])) \
+                sym_rank, for_dep = (tuple([wl.size]), tuple([wl.itvar])) \
                     if wl else ((), ())
                 syms = [Symbol("LI_%s_%d_%s" % ("".join(dep).upper() if dep else "C",
                         self.counter, i), sym_rank) for i in range(len(expr))]

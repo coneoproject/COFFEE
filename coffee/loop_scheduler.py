@@ -103,37 +103,37 @@ class SSALoopMerger(LoopScheduler):
         containing the merged loop as well as the iteration variables used
         in the respective iteration spaces."""
         # Find the first statement in the perfect loop nest loop_b
-        it_vars_a, it_vars_b = [], []
+        itvars_a, itvars_b = [], []
         while isinstance(loop_b.children[0], (Block, For)):
             if isinstance(loop_b, For):
-                it_vars_b.append(loop_b.it_var())
+                itvars_b.append(loop_b.itvar)
             loop_b = loop_b.children[0]
         # Find the first statement in the perfect loop nest loop_a
         root_loop_a = loop_a
         while isinstance(loop_a.children[0], (Block, For)):
             if isinstance(loop_a, For):
-                it_vars_a.append(loop_a.it_var())
+                itvars_a.append(loop_a.itvar)
             loop_a = loop_a.children[0]
         # Merge body of loop_a in loop_b
         loop_b.children[0:0] = loop_a.children
         # Remove loop_a from root
         root.children.remove(root_loop_a)
-        return (loop_b, tuple(it_vars_a), tuple(it_vars_b))
+        return (loop_b, tuple(itvars_a), tuple(itvars_b))
 
-    def _update_it_vars(self, node, it_vars):
+    def _update_itvars(self, node, itvars):
         """Change the iteration variables in the nodes rooted in ``node``
-        according to the map defined in ``it_vars``, which is a dictionary
+        according to the map defined in ``itvars``, which is a dictionary
         from old_iteration_variable to new_iteration_variable. For example,
-        given it_vars = {'i': 'j'} and a node "A[i] = B[i]", change the node
+        given itvars = {'i': 'j'} and a node "A[i] = B[i]", change the node
         into "A[j] = B[j]"."""
         if isinstance(node, Symbol):
             new_rank = []
             for r in node.rank:
-                new_rank.append(r if r not in it_vars else it_vars[r])
+                new_rank.append(r if r not in itvars else itvars[r])
             node.rank = tuple(new_rank)
         elif not isinstance(node, FlatBlock):
             for n in node.children:
-                self._update_it_vars(n, it_vars)
+                self._update_itvars(n, itvars)
 
     def merge(self):
         """Merge perfect loop nests rooted in ``self.root``."""
@@ -195,7 +195,7 @@ class SSALoopMerger(LoopScheduler):
             # If there is at least one mergeable loops, do the merging
             for l in reversed(mergeable):
                 merged, l_itvars, m_itvars = self._merge_loops(parent, l, merging_in)
-                self._update_it_vars(merged, dict(zip(l_itvars, m_itvars)))
+                self._update_itvars(merged, dict(zip(l_itvars, m_itvars)))
             # Update the lists of merged loops
             all_merged.append((mergeable, merging_in))
             self.merged_loops.append(merging_in)
@@ -227,7 +227,7 @@ class SSALoopMerger(LoopScheduler):
         Note this last step is not done by compilers like intel's (version 14).
         """
 
-        def replace_expr(node, parent, parent_idx, it_var, hoisted_expr):
+        def replace_expr(node, parent, parent_idx, itvar, hoisted_expr):
             """Recursively search for any sub-expressions rooted in node that have
             been hoisted and therefore are already kept in a temporary. Replace them
             with such temporary."""
@@ -241,14 +241,14 @@ class SSALoopMerger(LoopScheduler):
                 else:
                     # Go ahead recursively
                     for i, n in enumerate(node.children):
-                        replace_expr(n, node, i, it_var, hoisted_expr)
+                        replace_expr(n, node, i, itvar, hoisted_expr)
 
         hoisted_expr = {}
         for loop in self.merged_loops:
             block = loop.children[0].children
             for stmt in block:
                 sym, expr = stmt.children
-                replace_expr(expr.children[0], expr, 0, loop.it_var(), hoisted_expr)
+                replace_expr(expr.children[0], expr, 0, loop.itvar, hoisted_expr)
                 hoisted_expr[str(expr)] = sym
 
 
@@ -593,8 +593,8 @@ class ZeroLoopScheduler(LoopScheduler):
             # columns "up to this point of the computation", we have to merge
             # the non-zero columns produced by this node with those that we
             # had already found.
-            nz_in_sym = tuple(itvar_nz_bounds[l.it_var()] for l in loop_nest
-                              if l.it_var() in rank)
+            nz_in_sym = tuple(itvar_nz_bounds[l.itvar] for l in loop_nest
+                              if l.itvar in rank)
             if symbol in self.nz_in_syms:
                 merged_nz_in_sym = []
                 for i in zip(nz_in_sym, self.nz_in_syms[symbol]):
@@ -608,7 +608,7 @@ class ZeroLoopScheduler(LoopScheduler):
                 # encountered as visiting from the root, are discarded.
                 key = loop_nest
                 itvar_nz_bounds = dict([(k, v) for k, v in itvar_nz_bounds.items()
-                                        if k in [l.it_var() for l in loop_nest]])
+                                        if k in [l.itvar for l in loop_nest]])
                 if key not in self.nz_in_fors:
                     self.nz_in_fors[key] = []
                 self.nz_in_fors[key].append((node, itvar_nz_bounds))
@@ -633,7 +633,7 @@ class ZeroLoopScheduler(LoopScheduler):
                 self.nz_in_syms[i] = (((0, j[0].sym.rank[0] - 1),),
                                       (nz_col_bounds,))
             else:
-                self.nz_in_syms[i] = tuple(((0, r-1),) for r in j[0].size())
+                self.nz_in_syms[i] = tuple(((0, r-1),) for r in j[0].size)
 
         # If zeros were not found, then just give up
         if not self.nz_in_syms:

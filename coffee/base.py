@@ -470,6 +470,7 @@ class Decl(Statement, Perfect):
         self.init = as_symbol(init) if init is not None else EmptyStatement()
         self.pragma = pragma or ""
 
+    @property
     def size(self):
         """Return the size of the declared variable. In particular, return
 
@@ -547,21 +548,26 @@ class For(Statement):
         self.cond = cond
         self.incr = incr
 
-    def it_var(self):
+    @property
+    def itvar(self):
         if isinstance(self.init, Decl):
             return self.init.sym.symbol
         elif isinstance(self.init, Assign):
             return self.init.children[0]
 
+    @property
     def start(self):
         return self.init.init.symbol
 
+    @property
     def end(self):
         return self.cond.children[1].symbol
 
+    @property
     def size(self):
         return self.cond.children[1].symbol - self.init.init.symbol
 
+    @property
     def increment(self):
         return self.incr.children[1].symbol
 

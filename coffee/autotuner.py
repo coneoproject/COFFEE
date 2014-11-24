@@ -286,7 +286,7 @@ int main()
                     return loop_sizes[node.rank[0]] if node.rank[0] != '0' else 1
                 return 0
             elif isinstance(node, For):
-                loop_sizes[node.it_var()] = node.size()
+                loop_sizes[node.itvar] = node.size
             for n in node.children:
                 size = find_coeff_size(n, coeff, loop_sizes)
                 if size:
