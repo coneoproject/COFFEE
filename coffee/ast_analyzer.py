@@ -103,6 +103,24 @@ class StmtTracker(OrderedDict):
             if sym_info.loop == loop_a:
                 self.update_stmt(sym, **{'loop': loop_b})
 
+    def delete_hoisted(self, sym):
+        """Remove the hoisted statement whose temporary is symbol ``sym``.
+        The removal is total: it is deleted from the loop nest in which it is
+        computed, as well as from the dictionary."""
+
+        decl = self[sym].decl
+        place = self[sym].place
+        loop = self[sym].loop
+
+        place.children.remove(decl)
+        to_remove = None
+        for stmt in loop.children[0].children:
+            if stmt.children[0].symbol == sym:
+                to_remove = stmt
+        loop.children[0].children.remove(to_remove)
+
+        self.pop(sym)
+
     @property
     def expr(self, sym):
         return self[sym].expr if self.get(sym) else None
@@ -122,6 +140,10 @@ class StmtTracker(OrderedDict):
     @property
     def all_places(self):
         return set((stmt_info.place for stmt_info in self.values()))
+
+    @property
+    def all_loops(self):
+        return set((stmt_info.loop for stmt_info in self.values() if stmt_info.loop))
 
 
 class ExpressionGraph(object):

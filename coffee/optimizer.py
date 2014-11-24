@@ -109,7 +109,7 @@ class LoopOptimizer(object):
             if level > 1:
                 ew.expand()
                 ew.distribute()
-                ew.licm(merge_and_simplify=True)
+                ew.licm(merge_and_simplify=True, compact_tmps=True)
 
     def eliminate_zeros(self):
         """Avoid accessing blocks of contiguous (i.e. unit-stride) zero-valued

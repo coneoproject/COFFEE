@@ -147,7 +147,7 @@ class SSALoopMerger(LoopScheduler):
                     loops, loops_parents = zip(*li)
                     # Note that only inner loops can be fused, and that they share
                     # the same parent
-                    key = (itspace_from_for(loops), loops_parents[-1])
+                    key = (itspace_from_for(loops, mode=0), loops_parents[-1])
                     found_nests[key].append(loops[-1])
 
         all_merged = []
@@ -680,6 +680,9 @@ class ZeroLoopScheduler(LoopScheduler):
                 nz_bounds_list = [i for i in itertools.product(*stmt_itspace.values())]
                 for nz_bounds in nz_bounds_list:
                     itvar_nz_bounds = tuple(zip(stmt_itspace.keys(), nz_bounds))
+                    if not itvar_nz_bounds:
+                        # If no non_zero bounds, then just reuse the existing loops
+                        itvar_nz_bounds = itspace_from_for(loop, mode=1)
                     itspace, stmt_ofs = itspace_size_ofs(itvar_nz_bounds)
                     copy_stmt = dcopy(stmt)
                     fissioned_loops[itspace].append((copy_stmt, stmt_ofs))
