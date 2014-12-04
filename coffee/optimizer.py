@@ -167,8 +167,8 @@ class LoopOptimizer(object):
             elif isinstance(node, (Assign, Incr)):
                 # Precompute the LHS of the assignment
                 symbol = node.children[0]
-                precomputed[symbol.symbol] = (self.loop.it_var(),)
-                new_rank = (self.loop.it_var(),) + symbol.rank
+                precomputed[symbol.symbol] = (self.loop.itvar,)
+                new_rank = (self.loop.itvar,) + symbol.rank
                 symbol.rank = new_rank
                 # Vector-expand the RHS
                 precompute_stmt(node.children[1], precomputed, new_outer_block)
@@ -183,7 +183,7 @@ class LoopOptimizer(object):
                     precompute_stmt(new_assign, precomputed, new_outer_block)
                     node.init = EmptyStatement()
                 # Vector-expand the declaration of the precomputed symbol
-                node.sym.rank = (self.loop.size(),) + node.sym.rank
+                node.sym.rank = (self.loop.size,) + node.sym.rank
             elif isinstance(node, For):
                 # Precompute and/or Vector-expand inner statements
                 new_children = []
@@ -283,7 +283,7 @@ class CPULoopOptimizer(LoopOptimizer):
         for itspace, uf in loop_uf.items():
             new_exprs = {}
             for stmt, expr_info in self.exprs.items():
-                loop = [l for l in expr_info.perfect_loops if l.it_var() == itspace]
+                loop = [l for l in expr_info.perfect_loops if l.itvar == itspace]
                 if not loop:
                     # Unroll only loops in a perfect loop nest
                     continue
@@ -419,7 +419,7 @@ class GPULoopOptimizer(LoopOptimizer):
             for n in node.children[0].children:
                 parent.insert(parent.index(node), n)
             parent.remove(node)
-            itspace_vrs.add(node.it_var())
+            itspace_vrs.add(node.itvar)
 
         from utils import any_in
         accessed_vrs = [s for s in syms if any_in(s.rank, itspace_vrs)]

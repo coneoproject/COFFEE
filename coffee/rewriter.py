@@ -33,6 +33,7 @@
 
 from collections import defaultdict
 from copy import deepcopy as dcopy
+import operator
 
 from base import *
 from loop_scheduler import SSALoopMerger
@@ -157,15 +158,14 @@ class ExpressionRewriter(object):
         # The heuristics here is that the expansion occurs along the iteration
         # variable which appears in more unique arrays. This will allow factorization
         # to be more effective.
-        asm_out, asm_in = self.expr_info.unit_stride_itvars
-        it_var_occs = {asm_out: 0, asm_in: 0}
-        for s in count_occurrences(self.stmt.children[1]).keys():
-            if s[1] and s[1][0] in it_var_occs:
-                it_var_occs[s[1][0]] += 1
+        itvars_occs = dict.fromkeys(self.expr_info.unit_stride_itvars, 0)
+        for _, itvar in count_occurrences(self.stmt.children[1]).keys():
+            if itvar and itvar[0] in itvars_occs:
+                itvars_occs[itvar[0]] += 1
 
-        exp_var = asm_out if it_var_occs[asm_out] < it_var_occs[asm_in] else asm_in
+        itvar_exp = max(itvars_occs.iteritems(), key=operator.itemgetter(1))[0]
         ee = ExpressionExpander(self.hoisted, self.expr_graph)
-        ee.expand(self.stmt.children[1], self.stmt, it_var_occs, exp_var)
+        ee.expand(self.stmt.children[1], self.stmt, itvars_occs, itvar_exp)
         self.decls.update(ee.expanded_decls)
         self._expanded = True
 
@@ -414,7 +414,7 @@ class ExpressionHoister(object):
                 expr = dict([(str(e), e) for e in expr]).values()
 
                 # 2) Create the new invariant sub-expressions and temporaries
-                sym_rank, for_dep = (tuple([wl.size()]), tuple([wl.it_var()])) \
+                sym_rank, for_dep = (tuple([wl.size]), tuple([wl.itvar])) \
                     if wl else ((), ())
                 syms = [Symbol("LI_%s_%d_%s" % ("".join(dep).upper() if dep else "C",
                         self.counter, i), sym_rank) for i in range(len(expr))]
@@ -550,25 +550,25 @@ class ExpressionExpander(object):
         self.expr_graph.add_dependency(sym, new_expr, 0)
         return sym
 
-    def expand(self, node, parent, it_vars, exp_var):
+    def expand(self, node, parent, itvars_occs, itvar_exp):
         """Perform the expansion of the expression rooted in ``node``. Terms are
-        expanded along the iteration variable ``exp_var``."""
+        expanded along the iteration variable ``itvar_exp``."""
 
         if isinstance(node, Symbol):
             if not node.rank:
                 return ([node], self.CONST)
-            elif node.rank[-1] not in it_vars.keys():
+            elif node.rank[-1] not in itvars_occs.keys():
                 return ([node], self.CONST)
             else:
                 return ([node], self.ITVAR)
         elif isinstance(node, Par):
-            return self.expand(node.children[0], node, it_vars, exp_var)
+            return self.expand(node.children[0], node, itvars_occs, itvar_exp)
         elif isinstance(node, Prod):
-            l_node, l_type = self.expand(node.children[0], node, it_vars, exp_var)
-            r_node, r_type = self.expand(node.children[1], node, it_vars, exp_var)
+            l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
+            r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
             if l_type == self.ITVAR and r_type == self.ITVAR:
                 # Found an expandable product
-                to_exp = l_node if l_node[0].rank[-1] == exp_var else r_node
+                to_exp = l_node if l_node[0].rank[-1] == itvar_exp else r_node
                 return (to_exp, self.ITVAR)
             elif l_type == self.CONST and r_type == self.CONST:
                 # Product of constants; they are both used for expansion (if any)
@@ -596,8 +596,8 @@ class ExpressionExpander(object):
                     raise RuntimeError("Expansion error: wrong parent-child association")
                 return (expandable, self.ITVAR)
         elif isinstance(node, Sum):
-            l_node, l_type = self.expand(node.children[0], node, it_vars, exp_var)
-            r_node, r_type = self.expand(node.children[1], node, it_vars, exp_var)
+            l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
+            r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
             if l_type == self.ITVAR and r_type == self.ITVAR:
                 return (l_node + r_node, self.ITVAR)
             elif l_type == self.CONST and r_type == self.CONST:

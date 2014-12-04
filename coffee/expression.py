@@ -65,17 +65,16 @@ class MetaExpr(object):
 
     @property
     def unit_stride_loops(self):
-        return tuple([l for l in self.loops if l.it_var()
-                      in self._unit_stride_itvars])
+        return tuple([l for l in self.loops if l.itvar in self._unit_stride_itvars])
 
     @property
     def unit_stride_loops_parents(self):
-        return tuple([p for l, p in self._loops_info if l.it_var()
+        return tuple([p for l, p in self._loops_info if l.itvar
                       in self._unit_stride_itvars])
 
     @property
     def unit_stride_loops_info(self):
-        return tuple([(l, p) for l, p in self._loops_info if l.it_var()
+        return tuple([(l, p) for l, p in self._loops_info if l.itvar
                       in self._unit_stride_itvars])
 
     @property
@@ -121,10 +120,10 @@ def copy_metaexpr(expr_info, **kwargs):
 
     new_loops_info, old_loops_info = [], expr_info.loops_info
     to_replace_loops_info = kwargs.get('loops_info', [])
-    to_replace_loops_info = dict(zip([l.it_var() for l, p in to_replace_loops_info],
+    to_replace_loops_info = dict(zip([l.itvar for l, p in to_replace_loops_info],
                                      to_replace_loops_info))
     for loop_info in old_loops_info:
-        loop_itvar = loop_info[0].it_var()
+        loop_itvar = loop_info[0].itvar
         if loop_itvar in to_replace_loops_info:
             new_loops_info.append(to_replace_loops_info[loop_itvar])
         else:

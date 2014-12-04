@@ -84,12 +84,12 @@ class LoopVectorizer(object):
         for l in iloops:
             adjust = True
             loop_size = 0
-            lvar = l.it_var()
+            lvar = l.itvar
             # Condition 1
             for stmt in l.children[0].children:
                 sym = stmt.children[0]
                 if sym.rank:
-                    loop_size = loop_size or decl_scope[sym.symbol][0].size()[-1]
+                    loop_size = loop_size or decl_scope[sym.symbol][0].size[-1]
                 if not (sym.rank and sym.rank[-1] == lvar):
                     adjust = False
                     break
@@ -110,8 +110,8 @@ class LoopVectorizer(object):
                     # points cover the whole iteration space. Also, the padded
                     # region cannot be exceeded.
                     start_point = vect_rounddown(l_ofs)
-                    end_point = start_point + vect_roundup(l.end())  # == tot iters
-                    if end_point >= l_ofs + l.end():
+                    end_point = start_point + vect_roundup(l.end)  # == tot iters
+                    if end_point >= l_ofs + l.end:
                         alignable_stmts.append((stmt, dict([(lvar, start_point)])))
                     read_regions[str(expr)].append((start_point, end_point))
                 for rr in read_regions.values():
@@ -122,7 +122,7 @@ class LoopVectorizer(object):
             # Conditions checked, if both passed then adjust loop and offsets
             if adjust:
                 # Adjust end point
-                l.cond.children[1] = c_sym(vect_roundup(l.end()))
+                l.cond.children[1] = c_sym(vect_roundup(l.end))
                 # Adjust start points
                 for stmt, ofs in alignable_stmts:
                     ast_update_ofs(stmt, ofs)
@@ -139,7 +139,7 @@ class LoopVectorizer(object):
         # 2- the size of the loop is a multiple of the vector length (note that
         #    at this point, we have already checked the loop increment is 1)
         for l in adjusted_loops:
-            if not (l.start() % self.intr["dp_reg"] and l.size() % self.intr["dp_reg"]):
+            if not (l.start % self.intr["dp_reg"] and l.size % self.intr["dp_reg"]):
                 l.pragma.append(self.comp["decl_aligned_for"])
 
         # 3) Padding
@@ -185,7 +185,7 @@ class LoopVectorizer(object):
 
             # Check if outer-product vectorization is actually doable
             vect_len = self.intr["dp_reg"]
-            rows = unit_stride_loops[0].size()
+            rows = unit_stride_loops[0].size
             if rows < vect_len:
                 continue
             if len(unit_stride_loops) != 2:
@@ -286,7 +286,7 @@ class OuterProduct():
 
         # Find inner variables
         regs = [reg for node, reg in vrs.items()
-                if node.rank and node.rank[-1] == self.loops[1].it_var()]
+                if node.rank and node.rank[-1] == self.loops[1].itvar]
 
         if step in [0, 2]:
             return [Assign(r, self.intr["l_perm"](r, "5")) for r in regs]
@@ -308,7 +308,7 @@ class OuterProduct():
         """
         stmt = []
         for node, reg in vrs.items():
-            if node.rank and node.rank[-1] in [i.it_var() for i in self.loops]:
+            if node.rank and node.rank[-1] in [i.itvar for i in self.loops]:
                 exp = self.intr["symbol_load"](node.symbol, node.rank, node.offset)
             else:
                 exp = self.intr["symbol_set"](node.symbol, node.rank, node.offset)
@@ -335,7 +335,7 @@ class OuterProduct():
         """
 
         if isinstance(node, Symbol):
-            if node.rank and self.loops[0].it_var() == node.rank[-1]:
+            if node.rank and self.loops[0].itvar == node.rank[-1]:
                 # The symbol depends on the outer loop dimension, so add offset
                 n_ofs = tuple([(1, 0) for i in range(len(node.rank)-1)]) + ((1, ofs),)
                 node = Symbol(node.symbol, dcopy(node.rank), n_ofs)

@@ -43,6 +43,7 @@ import resource
 import operator
 from warnings import warn as warning
 from copy import deepcopy as dcopy
+from collections import defaultdict
 
 from base import *
 
@@ -91,11 +92,10 @@ def unroll_factors(loops):
 
     # Then, determine possible unroll factors for all loops
     for l in loops:
-        itspace = l.it_var()
         if l in _inner_loops:
-            loops_unroll[itspace] = [1]
+            loops_unroll[l.itvar] = [1]
         else:
-            loops_unroll[itspace] = [i+1 for i in range(l.size()) if l.size() % (i+1) == 0]
+            loops_unroll[l.itvar] = [i+1 for i in range(l.size) if l.size % (i+1) == 0]
 
     return loops_unroll
 
@@ -244,7 +244,7 @@ def visit(node, parent):
             dep_itspace = node.loop_dep
             if node.symbol in info['symbols_written']:
                 dep_loops = info['symbols_written'][node.symbol]
-                dep_itspace = tuple(l[0].it_var() for l in dep_loops)
+                dep_itspace = tuple(l[0].itvar for l in dep_loops)
             info['symbols'][node] = dep_itspace
         elif isinstance(node, Expr):
             for child in node.children:
@@ -320,10 +320,12 @@ def count_occurrences(node, key=0, read_only=False):
 
         ``{a: 2, b: 1, c: 1}``
 
-    :arg key: This can be any value in [0, 1, 2]. If ``key == 0``, then the symbol
-              name and its rank are used as key of the returned dictionary. If
-              ``key == 1`` only the symbol name is used. If ``key == 2`` a string
-              representation of the symbol is used.
+    :arg key: This can be any value in [0, 1, 2]. The keys used in the returned
+              dictionary can be:
+
+              * ``key == 0``: a tuple (symbol name, symbol rank)
+              * ``key == 1``: the symbol name
+              * ``key == 2``: a string representation of the symbol
     :arg read_only: True if only variables on the right-hand side of a statement
                     should be counted; False if any appearance should be counted.
     """
@@ -336,10 +338,7 @@ def count_occurrences(node, key=0, read_only=False):
                 node = node.symbol
             elif key == 2:
                 node = str(node)
-            if node in counter:
-                counter[node] += 1
-            else:
-                counter[node] = 1
+            counter[node] += 1
         elif isinstance(node, FlatBlock):
             return
         else:
@@ -351,7 +350,7 @@ def count_occurrences(node, key=0, read_only=False):
 
     if key not in [0, 1, 2]:
         raise RuntimeError("Count_occurrences got a wrong key (valid: 0, 1, 2)")
-    counter = {}
+    counter = defaultdict(int)
     count(node, counter)
     return counter
 
@@ -368,7 +367,7 @@ def itspace_size_ofs(itspace):
 
     return ::
 
-        ((('it_var', bound_b - bound_a), ...), (('it_var', bound_a), ...))"""
+        ((('itvar', bound_b - bound_a), ...), (('itvar', bound_a), ...))"""
     itspace_info = []
     for var, bounds in itspace:
         itspace_info.append(((var, bounds[1] - bounds[0] + 1), (var, bounds[0])))
@@ -433,9 +432,9 @@ def itspace_from_for(loops, mode):
         ((for1_itvar, (start1, topiter1)), (for2_itvar, (start2, topiter2):, ...)
     """
     if mode == 0:
-        return tuple((l.start(), l.end(), l.increment()) for l in loops)
+        return tuple((l.start, l.end, l.increment) for l in loops)
     else:
-        return tuple((l.it_var(), (l.start(), l.end() - 1)) for l in loops)
+        return tuple((l.itvar, (l.start, l.end - 1)) for l in loops)
 
 
 #############################
@@ -460,5 +459,5 @@ def set_itspace(loop_a, loop_b):
 
 
 def loops_as_dict(loops):
-    loops_it_vars = [l.it_var() for l in loops]
-    return OrderedDict(zip(loops_it_vars, loops))
+    loops_itvars = [l.itvar for l in loops]
+    return OrderedDict(zip(loops_itvars, loops))
