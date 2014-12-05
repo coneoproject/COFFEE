@@ -43,6 +43,7 @@ setup(name='COFFEE',
       author='Fabio Luporini',
       author_email='f.luporini12@imperial.ac.uk',
       url='https://github.com/coneoproject/COFFEE',
+      install_requires=["networkx"],
       classifiers=[
       'Development Status :: 3 - Alpha',
       'Intended Audience :: Developers',
