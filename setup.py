@@ -42,7 +42,7 @@ setup(name='COFFEE',
       long_description=open('README.rst').read(),
       author='Fabio Luporini',
       author_email='f.luporini12@imperial.ac.uk',
-      url='https://github.com/FabioLuporini/COFFEE',
+      url='https://github.com/coneoproject/COFFEE',
       classifiers=[
       'Development Status :: 3 - Alpha',
       'Intended Audience :: Developers',
