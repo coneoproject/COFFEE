@@ -408,18 +408,19 @@ class GPULoopOptimizer(LoopOptimizer):
         ``pragma pyop2 itspace``."""
 
         info = visit(self.loop, self.header)
-        fors = info['fors']
+        fors_list = info['fors']
         syms = info['symbols']
 
         itspace_vrs = set()
-        for node, parent in reversed(fors):
-            if '#pragma pyop2 itspace' not in node.pragma:
-                continue
-            parent = parent.children
-            for n in node.children[0].children:
-                parent.insert(parent.index(node), n)
-            parent.remove(node)
-            itspace_vrs.add(node.itvar)
+        for fors in fors_list:
+            for node, parent in reversed(fors):
+                if '#pragma pyop2 itspace' not in node.pragma:
+                    continue
+                parent = parent.children
+                for n in node.children[0].children:
+                    parent.insert(parent.index(node), n)
+                parent.remove(node)
+                itspace_vrs.add(node.itvar)
 
         from utils import any_in
         accessed_vrs = [s for s in syms if any_in(s.rank, itspace_vrs)]
