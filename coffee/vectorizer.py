@@ -143,7 +143,7 @@ class LoopVectorizer(object):
                 l.pragma.append(self.comp["decl_aligned_for"])
 
         # 3) Padding
-        symbols = visit(self.loop_opt.loop, self.loop_opt.header)['symbols']
+        symbols = visit(self.loop_opt.header, None)['symbols']
         used_syms = [s.symbol for s in symbols.keys()]
         acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
         for d, s in acc_decls:
