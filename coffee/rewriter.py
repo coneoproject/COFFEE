@@ -38,7 +38,7 @@ import operator
 from base import *
 from loop_scheduler import SSALoopMerger
 from utils import visit, is_perfect_loop, count_occurrences, ast_c_sum
-from utils import ast_replace, loops_as_dict, od_find_next
+from utils import ast_replace, loops_as_dict, od_find_next, flatten
 import plan
 
 
@@ -288,6 +288,10 @@ class ExpressionHoister(object):
 
         if isinstance(node, Symbol):
             return (self.symbols[node], self.INV, 1)
+        if isinstance(node, FunCall):
+            arg_deps = flatten([self._extract_exprs(n, expr_dep, length)[0]
+                                for n in node.children])
+            return (arg_deps, self.INV, length)
         if isinstance(node, Par):
             return (self._extract_exprs(node.children[0], expr_dep, length))
 
