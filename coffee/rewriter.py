@@ -119,6 +119,9 @@ class ExpressionRewriter(object):
                     sym, rank = sym_rank
                     if sym not in self.hoisted or sym in stmt_occs:
                         continue
+                    loop = self.hoisted[sym].loop
+                    if loop is not l:
+                        continue
                     expr = self.hoisted[sym].expr
                     if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
                         continue
