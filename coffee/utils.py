@@ -249,6 +249,9 @@ def visit(node, parent):
         elif isinstance(node, Expr):
             for child in node.children:
                 inspect(child, node)
+        elif isinstance(node, FunCall):
+            for child in node.children:
+                inspect(child, node)
         elif isinstance(node, Perfect):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:
