@@ -411,6 +411,25 @@ class ASTKernel(object):
         """Generate a string representation of the AST."""
         return self.ast.gencode()
 
+
+class ASTKernelCPU(ASTKernel):
+    def plan(self, opts):
+        self.plan_cpu(opts)
+
+
+class ASTKernelGPU(ASTKernel):
+    def plan(self, opts=None):
+        self.plan_gpu()
+
+
+class ASTKernelOpenCL(ASTKernelGPU):
+    pass
+
+
+class ASTKernelCUDA(ASTKernelGPU):
+    pass
+
+
 # These global variables capture the internal state of COFFEE
 intrinsics = {}
 compiler = {}
