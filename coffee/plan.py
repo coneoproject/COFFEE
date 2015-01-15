@@ -59,8 +59,7 @@ class ASTKernel(object):
 
     """Manipulate the kernel's Abstract Syntax Tree.
 
-    The single functionality present at the moment is provided by the
-    :meth:`plan_gpu` method, which transforms the AST for GPU execution.
+    Subclasses should implement the `plan` method to transform the AST.
     """
 
     def __init__(self, ast, include_dirs=[]):
@@ -105,66 +104,13 @@ class ASTKernel(object):
 
         return (decls, fors)
 
-    def plan_gpu(self):
-        """Transform the kernel suitably for GPU execution.
+    def gencode(self):
+        """Generate a string representation of the AST."""
+        return self.ast.gencode()
 
-        Loops decorated with a ``pragma pyop2 itspace`` are hoisted out of
-        the kernel. The list of arguments in the function signature is
-        enriched by adding iteration variables of hoisted loops. Size of
-        kernel's non-constant tensors modified in hoisted loops are modified
-        accordingly.
 
-        For example, consider the following function: ::
-
-            void foo (int A[3]) {
-              int B[3] = {...};
-              #pragma pyop2 itspace
-              for (int i = 0; i < 3; i++)
-                A[i] = B[i];
-            }
-
-        plan_gpu modifies its AST such that the resulting output code is ::
-
-            void foo(int A[1], int i) {
-              A[0] = B[i];
-            }
-        """
-
-        decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-        loop_opts = [GPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
-        for loop_opt in loop_opts:
-            itspace_vrs, accessed_vrs = loop_opt.extract()
-
-            for v in accessed_vrs:
-                # Change declaration of non-constant iteration space-dependent
-                # parameters by shrinking the size of the iteration space
-                # dimension to 1
-                decl = set(
-                    [d for d in self.fundecl.args if d.sym.symbol == v.symbol])
-                dsym = decl.pop().sym if len(decl) > 0 else None
-                if dsym and dsym.rank:
-                    dsym.rank = tuple([1 if i in itspace_vrs else j
-                                       for i, j in zip(v.rank, dsym.rank)])
-
-                # Remove indices of all iteration space-dependent and
-                # kernel-dependent variables that are accessed in an itspace
-                v.rank = tuple([0 if i in itspace_vrs and dsym else i
-                                for i in v.rank])
-
-            # Add iteration space arguments
-            self.fundecl.args.extend([Decl("int", c_sym("%s" % i))
-                                     for i in itspace_vrs])
-
-        # Clean up the kernel removing variable qualifiers like 'static'
-        for decl in decls.values():
-            d, place = decl
-            d.qual = [q for q in d.qual if q not in ['static', 'const']]
-
-        if hasattr(self, 'fundecl'):
-            self.fundecl.pred = [q for q in self.fundecl.pred
-                                 if q not in ['static', 'inline']]
-
-    def plan_cpu(self, opts):
+class ASTKernelCPU(ASTKernel):
+    def plan(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
 
         # Unrolling thresholds when autotuning
@@ -407,17 +353,66 @@ class ASTKernel(object):
         # Increase stack size if too much space is used on the stack
         increase_stack(loop_opts)
 
-    def gencode(self):
-        """Generate a string representation of the AST."""
-        return self.ast.gencode()
-
-
-class ASTKernelCPU(ASTKernel):
-    pass
-
 
 class ASTKernelGPU(ASTKernel):
-    pass
+    def plan(self, opts):
+        """Transform the kernel suitably for GPU execution.
+
+        Loops decorated with a ``pragma pyop2 itspace`` are hoisted out of
+        the kernel. The list of arguments in the function signature is
+        enriched by adding iteration variables of hoisted loops. Size of
+        kernel's non-constant tensors modified in hoisted loops are modified
+        accordingly.
+
+        For example, consider the following function: ::
+
+            void foo (int A[3]) {
+              int B[3] = {...};
+              #pragma pyop2 itspace
+              for (int i = 0; i < 3; i++)
+                A[i] = B[i];
+            }
+
+        plan_gpu modifies its AST such that the resulting output code is ::
+
+            void foo(int A[1], int i) {
+              A[0] = B[i];
+            }
+        """
+
+        decls, fors = self._visit_ast(self.ast, fors=[], decls={})
+        loop_opts = [GPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
+        for loop_opt in loop_opts:
+            itspace_vrs, accessed_vrs = loop_opt.extract()
+
+            for v in accessed_vrs:
+                # Change declaration of non-constant iteration space-dependent
+                # parameters by shrinking the size of the iteration space
+                # dimension to 1
+                decl = set(
+                    [d for d in self.fundecl.args if d.sym.symbol == v.symbol])
+                dsym = decl.pop().sym if len(decl) > 0 else None
+                if dsym and dsym.rank:
+                    dsym.rank = tuple([1 if i in itspace_vrs else j
+                                       for i, j in zip(v.rank, dsym.rank)])
+
+                # Remove indices of all iteration space-dependent and
+                # kernel-dependent variables that are accessed in an itspace
+                v.rank = tuple([0 if i in itspace_vrs and dsym else i
+                                for i in v.rank])
+
+            # Add iteration space arguments
+            self.fundecl.args.extend([Decl("int", c_sym("%s" % i))
+                                     for i in itspace_vrs])
+
+        # Clean up the kernel removing variable qualifiers like 'static'
+        for decl in decls.values():
+            d, place = decl
+            d.qual = [q for q in d.qual if q not in ['static', 'const']]
+
+        if hasattr(self, 'fundecl'):
+            self.fundecl.pred = [q for q in self.fundecl.pred
+                                 if q not in ['static', 'inline']]
 
 
 class ASTKernelOpenCL(ASTKernelGPU):
