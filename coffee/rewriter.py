@@ -570,6 +570,9 @@ class ExpressionExpander(object):
                 return ([node], self.ITVAR)
         elif isinstance(node, Par):
             return self.expand(node.children[0], node, itvars_occs, itvar_exp)
+        elif isinstance(node, FunCall):
+            # Functions are considered potentially expandable
+            return ([node], self.CONST)
         elif isinstance(node, (Prod, Div)):
             l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
             r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
