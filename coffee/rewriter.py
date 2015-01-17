@@ -320,7 +320,7 @@ class ExpressionHoister(object):
             hoist(right, dep_r, expr_dep, not self.counter or len_r > 1)
             return ((), self.HOI, node_len)
         elif info_l == self.INV and info_r == self.KSE:
-            # E.g. A[i]*(B[j]) + C[j])
+            # E.g. A[i]*(B[j] + C[j])
             hoist(right, dep_r, expr_dep)
             hoist(left, dep_l, expr_dep, not self.counter or len_l > 1)
             return ((), self.HOI, node_len)
@@ -354,13 +354,17 @@ class ExpressionHoister(object):
                 return (dep_r, self.KSE, node_len)
             else:
                 raise RuntimeError("Error while hoisting invariant terms")
-        elif info_l == self.HOI and info_r == self.KSE:
-            hoist(right, dep_r, expr_dep, len_r > 2)
+        elif info_l == self.HOI:
+            if info_r == self.INV:
+                hoist(right, dep_r, expr_dep, not self.counter)
+            elif info_r == self.KSE:
+                hoist(right, dep_r, expr_dep, len_r > 2)
             return ((), self.HOI, node_len)
-        elif info_l == self.KSE and info_r == self.HOI:
-            hoist(left, dep_l, expr_dep, len_l > 2)
-            return ((), self.HOI, node_len)
-        elif info_l == self.HOI or info_r == self.HOI:
+        elif info_r == self.HOI:
+            if info_l == self.INV:
+                hoist(left, dep_l, expr_dep, not self.counter)
+            elif info_l == self.KSE:
+                hoist(left, dep_l, expr_dep, len_l > 2)
             return ((), self.HOI, node_len)
         else:
             raise RuntimeError("Fatal error while finding hoistable terms")
