@@ -320,7 +320,7 @@ class ExpressionHoister(object):
             hoist(right, dep_r, expr_dep, not self.counter or len_r > 1)
             return ((), self.HOI, node_len)
         elif info_l == self.INV and info_r == self.KSE:
-            # E.g. A[i]*(B[j]) + C[j])
+            # E.g. A[i]*(B[j] + C[j])
             hoist(right, dep_r, expr_dep)
             hoist(left, dep_l, expr_dep, not self.counter or len_l > 1)
             return ((), self.HOI, node_len)
@@ -354,13 +354,17 @@ class ExpressionHoister(object):
                 return (dep_r, self.KSE, node_len)
             else:
                 raise RuntimeError("Error while hoisting invariant terms")
-        elif info_l == self.HOI and info_r == self.KSE:
-            hoist(right, dep_r, expr_dep, len_r > 2)
+        elif info_l == self.HOI:
+            if info_r == self.INV:
+                hoist(right, dep_r, expr_dep, not self.counter)
+            elif info_r == self.KSE:
+                hoist(right, dep_r, expr_dep, len_r > 2)
             return ((), self.HOI, node_len)
-        elif info_l == self.KSE and info_r == self.HOI:
-            hoist(left, dep_l, expr_dep, len_l > 2)
-            return ((), self.HOI, node_len)
-        elif info_l == self.HOI or info_r == self.HOI:
+        elif info_r == self.HOI:
+            if info_l == self.INV:
+                hoist(left, dep_l, expr_dep, not self.counter)
+            elif info_l == self.KSE:
+                hoist(left, dep_l, expr_dep, len_l > 2)
             return ((), self.HOI, node_len)
         else:
             raise RuntimeError("Fatal error while finding hoistable terms")
@@ -570,7 +574,10 @@ class ExpressionExpander(object):
                 return ([node], self.ITVAR)
         elif isinstance(node, Par):
             return self.expand(node.children[0], node, itvars_occs, itvar_exp)
-        elif isinstance(node, Prod):
+        elif isinstance(node, FunCall):
+            # Functions are considered potentially expandable
+            return ([node], self.CONST)
+        elif isinstance(node, (Prod, Div)):
             l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
             r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
             if l_type == self.ITVAR and r_type == self.ITVAR:
@@ -602,7 +609,7 @@ class ExpressionExpander(object):
                 else:
                     raise RuntimeError("Expansion error: wrong parent-child association")
                 return (expandable, self.ITVAR)
-        elif isinstance(node, Sum):
+        elif isinstance(node, (Sum, Sub)):
             l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
             r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
             if l_type == self.ITVAR and r_type == self.ITVAR:
