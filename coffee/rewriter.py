@@ -608,6 +608,9 @@ class ExpressionExpander(object):
                     parent.children[1] = exp_node
                 else:
                     raise RuntimeError("Expansion error: wrong parent-child association")
+                # Replace expanded symbols with the newly used symbols
+                expandable = list(set(e if str(e) not in to_replace
+                                      else to_replace[str(e)] for e in expandable))
                 return (expandable, self.ITVAR)
         elif isinstance(node, (Sum, Sub)):
             l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
