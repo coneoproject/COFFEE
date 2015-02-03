@@ -218,12 +218,52 @@ class Div(BinExpr):
         super(Div, self).__init__(expr1, expr2, "/")
 
 
+class Eq(BinExpr):
+
+    """Compare two expressions using the operand ``==``."""
+
+    def __init__(self, expr1, expr2):
+        super(Eq, self).__init__(expr1, expr2, "==")
+
+
+class NEq(BinExpr):
+
+    """Compare two expressions using the operand ``!=``."""
+
+    def __init__(self, expr1, expr2):
+        super(NEq, self).__init__(expr1, expr2, "!=")
+
+
 class Less(BinExpr):
 
     """Compare two expressions using the operand ``<``."""
 
     def __init__(self, expr1, expr2):
         super(Less, self).__init__(expr1, expr2, "<")
+
+
+class LessEq(BinExpr):
+
+    """Compare two expressions using the operand ``<=``."""
+
+    def __init__(self, expr1, expr2):
+        super(LessEq, self).__init__(expr1, expr2, "<=")
+
+
+class Greater(BinExpr):
+
+    """Compare two expressions using the operand ``>``."""
+
+    def __init__(self, expr1, expr2):
+        super(Greater, self).__init__(expr1, expr2, ">")
+
+
+class GreaterEq(BinExpr):
+
+    """Compare two expressions using the operand ``>=``."""
+
+    def __init__(self, expr1, expr2):
+        super(GreaterEq, self).__init__(expr1, expr2, ">=")
 
 
 class FunCall(Expr, Perfect):
