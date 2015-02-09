@@ -497,7 +497,8 @@ class Invert(Statement, Perfect):
 
     def gencode(self, scope=False):
         sym, dim = self.children
-        return "invert(%s, %d)" % (sym, dim) + semicolon(scope)
+        return "invert(%s, %s)" % (sym.gencode(),
+                                   dim.gencode()) + semicolon(scope)
 
 
 class Decl(Statement, Perfect):
