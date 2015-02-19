@@ -152,6 +152,18 @@ def ast_update_rank(node, new_rank):
             ast_update_rank(n, new_rank)
 
 
+def ast_update_id(symbol, name, id):
+    """Search for string ``name`` in Symbol ``symbol`` and replaces all of the
+    occurrences of ``name`` with ``name_id``."""
+    if not isinstance(symbol, Symbol):
+        return
+    new_name = "%s_%s" % (name, str(id))
+    if name == symbol.symbol:
+        symbol.symbol = new_name
+    new_rank = [new_name if name == r else r for r in symbol.rank]
+    symbol.rank = tuple(new_rank)
+
+
 ###############################################
 # Functions to simplify creation of AST nodes #
 ###############################################
