@@ -228,6 +228,11 @@ def visit(node, parent):
         elif isinstance(node, (Block, Root)):
             for n in node.children:
                 inspect(n, node)
+        elif isinstance(node, (Block, FunDecl)):
+            for n in node.children:
+                inspect(n, node)
+            for n in node.args:
+                inspect(n, node)
         elif isinstance(node, For):
             info['cur_nest'].append((node, parent))
             inspect(node.children[0], node)
@@ -238,6 +243,7 @@ def visit(node, parent):
             inspect(node.children[0], node)
         elif isinstance(node, Decl):
             info['decls'][node.sym.symbol] = node
+            inspect(node.sym, node)
         elif isinstance(node, Symbol):
             if mode in ['written']:
                 info['symbols_written'][node.symbol] = info['cur_nest']
@@ -265,7 +271,7 @@ def visit(node, parent):
     info['cur_nest'] = []
     info['symbols_written'] = {}
     inspect(node, parent)
-    info['max_depth'] = max(len(l) for l in info['fors'])
+    info['max_depth'] = max(len(l) for l in info['fors']) if info['fors'] else 0
     info.pop('cur_nest')
     info.pop('symbols_written')
     return info
