@@ -248,6 +248,9 @@ def visit(node, parent):
         elif isinstance(node, For):
             info['cur_nest'].append((node, parent))
             inspect(node.children[0], node)
+            inspect(node.init, node)
+            inspect(node.cond, node)
+            inspect(node.incr, node)
             if node in _inner_loops:
                 info['fors'].append(info['cur_nest'])
             info['cur_nest'] = info['cur_nest'][:-1]
