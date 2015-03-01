@@ -396,6 +396,11 @@ class ASTKernel(object):
                 'rewrite': 1,
                 'align_pad': True
             }
+        elif opts.get('Oprofile'):
+            params = {
+                'rewrite': 2,
+                'precompute': 1
+            }
         elif opts.get('O0'):
             params = {}
         else:

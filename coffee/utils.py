@@ -550,3 +550,42 @@ def set_itspace(loop_a, loop_b):
 def loops_as_dict(loops):
     loops_itvars = [l.itvar for l in loops]
     return OrderedDict(zip(loops_itvars, loops))
+
+
+###########################################################
+# Functions for creating an AST with IACA instrumentation #
+###########################################################
+
+
+def insert_iaca(ast, iakify):
+    """Create an AST which adds IACA instrumentation around
+    the loop specified by iakify. In the traversal of the AST
+    add IACA instrumentation around the loop Iakify that for loop!"""
+    info = {
+    'loop_nest': 0,
+    'loop_count': 0,
+    'last': True
+    }
+    count = [0]
+    nest = [1]
+
+    def create_iaca_ast_from_ast(node, parent):
+        if isinstance(node, Block) and isinstance(parent, For):
+            count[0] += 1
+            if count[0] == iakify:
+                node.iaca = True
+                info['last'] = False
+                info['loop_nest'] = nest[0]
+                info['loop_count'] = parent.end - parent.start
+            elif count[0] == iakify-1:
+                    node.iaca = False
+        if not isinstance(node, (Symbol, str)):
+            nest[0] += 1
+            for child in node.children:
+                 create_iaca_ast_from_ast(child, node)
+            nest[0] -= 1
+        else:
+            pass
+
+    create_iaca_ast_from_ast(ast, None)
+    return ast, info['last'], info['loop_nest'], info['loop_count']

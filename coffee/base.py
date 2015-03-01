@@ -87,6 +87,10 @@ class Node(object):
     def __str__(self):
         return self.gencode()
 
+    @property
+    def has_children(self):
+        return len(self.children) > 0
+
 
 class Root(Node):
 
@@ -589,17 +593,20 @@ class Block(Statement):
 
     """Block of statements."""
 
-    def __init__(self, stmts, pragma=None, open_scope=False):
+    def __init__(self, stmts, pragma=None, open_scope=False, iaca=False):
         if stmts and isinstance(stmts[0], Block):
             super(Block, self).__init__(stmts[0].children, pragma)
         else:
             super(Block, self).__init__(stmts, pragma)
         self.open_scope = open_scope
+        self.iaca = iaca
 
     def gencode(self, scope=False):
         code = "".join([n.gencode(scope) for n in self.children])
         if self.open_scope:
             code = "{\n%s\n}\n" % indent(code)
+        if self.iaca:
+            code = "{\nIACA_START\n%s\n}\nIACA_END\n" % indent(code)
         return code
 
 
