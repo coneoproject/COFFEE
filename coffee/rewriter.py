@@ -508,7 +508,7 @@ class ExpressionExpander(object):
         self.found_consts = {}
         self.expanded_syms = []
 
-    def _do_expand(self, sym, const):
+    def _do_expand(self, sym, const, op):
         """Perform the actual expansion. If there are no dependencies, then
         the already hoisted expression is expanded. Otherwise, if the symbol to
         be expanded occurs multiple times in the expression, or it depends on
@@ -540,12 +540,12 @@ class ExpressionExpander(object):
 
         # No dependencies, just perform the expansion
         if not self.expr_graph.has_dep(sym):
-            old_expr.children[0] = Prod(Par(old_expr.children[0]), dcopy(const))
+            old_expr.children[0] = op(Par(old_expr.children[0]), dcopy(const))
             self.expr_graph.add_dependency(sym, const, False)
             return
 
         # Create a new symbol, expression, and declaration
-        new_expr = Par(Prod(dcopy(sym), const))
+        new_expr = Par(op(dcopy(sym), const))
         sym = dcopy(sym)
         sym.symbol += "_EXP%d" % len(self.expanded_syms)
         new_node = Assign(sym, new_expr)
@@ -597,7 +597,7 @@ class ExpressionExpander(object):
                     # Perform the expansion
                     if sym.symbol not in self.hoisted:
                         raise RuntimeError("Expansion error: no symbol: %s" % sym.symbol)
-                    replacing = self._do_expand(sym, const)
+                    replacing = self._do_expand(sym, const, node.__class__)
                     if replacing:
                         to_replace[str(sym)] = replacing
                 ast_replace(node, to_replace, copy=True)
