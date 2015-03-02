@@ -291,7 +291,7 @@ class ExpressionHoister(object):
         if isinstance(node, FunCall):
             arg_deps = flatten([self._extract_exprs(n, expr_dep, length)[0]
                                 for n in node.children])
-            return (arg_deps, self.INV, length)
+            return (tuple(set(arg_deps)), self.INV, length)
         if isinstance(node, Par):
             return (self._extract_exprs(node.children[0], expr_dep, length))
 
