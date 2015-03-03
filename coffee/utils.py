@@ -198,6 +198,7 @@ def ast_c_sum(symbols):
 def visit(node, parent):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
+    * Function declarations - a list of all function declarations encountered
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
     * Declarations - a dictionary {variable name (str): declaration (ast node)}
     * Symbols - a dictionary {symbol (ast node): iter space (tuple of loop indices)}
@@ -209,6 +210,7 @@ def visit(node, parent):
     """
 
     info = {
+        'fun_decls': [],
         'fors': [],
         'decls': {},
         'symbols': {},
@@ -240,7 +242,8 @@ def visit(node, parent):
         elif isinstance(node, (Block, Root)):
             for n in node.children:
                 inspect(n, node)
-        elif isinstance(node, (Block, FunDecl)):
+        elif isinstance(node, FunDecl):
+            info['fun_decls'].append(node)
             for n in node.children:
                 inspect(n, node)
             for n in node.args:
@@ -293,7 +296,7 @@ def visit(node, parent):
 
 
 def inner_loops(node):
-    """Find inner loops in the subtree rooted in node."""
+    """Find inner loops in the subtree rooted in ``node``."""
 
     def find_iloops(node, loops):
         if isinstance(node, Perfect):
@@ -309,6 +312,34 @@ def inner_loops(node):
     loops = []
     find_iloops(node, loops)
     return loops
+
+
+def get_fun_decls(node, mode):
+    """Search the ``FunDecl`` node rooted in ``node``.
+
+    :param mode: any string in ['kernel', 'all']. If ``kernel`` is passed, then
+                 only one ``FunDecl`` is expected in the tree rooted in ``node``
+                 (the name "kernel" is to denote that the tree represents a
+                 self-contained piece of code in a function); a search is performed
+                 and the corresponding node returned. If ``all`` is passed, the
+                 whole tree in inspected and all ``FunDecl`` nodes are returned
+                 in a list.
+    """
+
+    def find_fun_decl(node):
+        if isinstance(node, FunDecl):
+            return node
+        for n in node.children:
+            fundecl = find_fun_decl(n)
+            if fundecl:
+                return fundecl
+
+    allowed = ['kernel', 'all']
+    if mode == 'kernel':
+        return find_fun_decl(node)
+    if mode == 'all':
+        return visit(node, None)['fun_decls']
+    raise RuntimeError("Only %s modes are allowed by `get_fun_decls`" % allowed)
 
 
 def is_perfect_loop(loop):
