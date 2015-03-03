@@ -246,7 +246,8 @@ def visit(node, parent):
         'decls': {},
         'symbols': {},
         'exprs': {},
-        'max_depth': 0
+        'max_depth': 0,
+        'linalg_nodes': []
     }
     _inner_loops = inner_loops(node)
 
@@ -307,6 +308,8 @@ def visit(node, parent):
         elif isinstance(node, FunCall):
             for child in node.children:
                 inspect(child, node)
+        elif isinstance(node, Linalg):
+            info['linalg_nodes'].append(node)
         elif isinstance(node, Perfect):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:

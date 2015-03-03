@@ -142,8 +142,10 @@ class LoopVectorizer(object):
             if not (l.start % self.intr["dp_reg"] and l.size % self.intr["dp_reg"]):
                 l.pragma.append(self.comp["decl_aligned_for"])
 
+        info = visit(self.loop_opt.header, None)
+
         # 3) Padding
-        symbols = visit(self.loop_opt.header, None)['symbols']
+        symbols = info['symbols']
         used_syms = [s.symbol for s in symbols.keys()]
         acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
         for d, s in acc_decls:
@@ -154,6 +156,13 @@ class LoopVectorizer(object):
                     rounded = vect_roundup(d.sym.rank[-1])
                     d.sym.rank = d.sym.rank[:-1] + (rounded,)
                 self.padded.append(d.sym)
+
+        # 4) Handle special nodes
+        linalg_nodes = info['linalg_nodes']
+        for n in linalg_nodes:
+            if isinstance(n, Invert):
+                _, _, lda = n.children
+                lda.symbol = vect_roundup(lda.symbol)
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar

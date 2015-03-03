@@ -65,6 +65,12 @@ class Perfect(object):
     pass
 
 
+class Linalg(object):
+    """Dummy mixin class used to decorate classes which represent linear
+    algebra operations."""
+    pass
+
+
 class Node(object):
 
     """The base class of the AST."""
@@ -490,15 +496,25 @@ class IDiv(Statement, Perfect):
         return idiv(sym.gencode(), exp.gencode()) + semicolon(scope)
 
 
-class Invert(Statement, Perfect):
+class Invert(Statement, Perfect, Linalg):
     """In-place inversion of a square array."""
     def __init__(self, sym, dim, pragma=None):
-        super(Invert, self).__init__([sym, dim], pragma)
+        super(Invert, self).__init__([sym, dim, dim], pragma)
 
     def gencode(self, scope=False):
-        sym, dim = self.children
-        return "invert(%s, %s)" % (sym.gencode(),
-                                   dim.gencode()) + semicolon(scope)
+        sym, dim, lda = self.children
+        return """{
+  int n = %s;
+  int lda = %s;
+  int ipiv[n];
+  int lwork = n*n;
+  double work[lwork];
+  int info;
+
+  dgetrf_(&n,&n,%s,&lda,ipiv,&info);
+  dgetri_(&n,A,&lda,ipiv,work,&lwork,&info);
+}
+""" % (str(dim), str(lda), str(sym))
 
 
 class Decl(Statement, Perfect):
