@@ -302,6 +302,7 @@ class Symbol(Expr):
         symbol is accessing, or the size of the tensor itself. """
 
     def __init__(self, symbol, rank=(), offset=()):
+        super(Symbol, self).__init__([])
         self.symbol = symbol
         self.rank = rank
         self.offset = offset
