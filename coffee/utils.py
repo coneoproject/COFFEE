@@ -231,8 +231,9 @@ def visit(node, parent):
 
     * Function declarations - a list of all function declarations encountered
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
-    * Declarations - a dictionary {variable name (str): declaration (ast node)}
-    * Symbols - a dictionary {symbol (ast node): iter space (tuple of loop indices)}
+    * Declarations - a dictionary {variable name (str): declaration (AST node)}
+    * Symbols - a dictionary {symbol (AST node): iter space (tuple of loop indices)}
+    * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
     * Maximum depth - an integer representing the depth of the most depth loop nest
 
@@ -245,6 +246,7 @@ def visit(node, parent):
         'fors': [],
         'decls': {},
         'symbols': {},
+        'symbol_refs': defaultdict(list),
         'exprs': {},
         'max_depth': 0,
         'linalg_nodes': []
@@ -302,6 +304,7 @@ def visit(node, parent):
                 dep_loops = info['symbols_written'][node.symbol]
                 dep_itspace = tuple(l[0].itvar for l in dep_loops)
             info['symbols'][node] = dep_itspace
+            info['symbol_refs'][node.symbol].append((noder parent))
         elif isinstance(node, Expr):
             for child in node.children:
                 inspect(child, node)
