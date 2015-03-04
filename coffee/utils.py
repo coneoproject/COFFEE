@@ -190,6 +190,37 @@ def ast_c_sum(symbols):
         return Sum(symbols[0], ast_c_sum(symbols[1:]))
 
 
+def ast_c_make_alias(node1, node2):
+    """Return an object in which the LHS is represented by ``node1`` and the RHS
+    by ``node2``, and ``node1`` is an alias for ``node2``; that is, ``node1``
+    will point to the same memory region of ``node2``.
+
+    :type node1: either a ``Decl`` or a ``Symbol``. If a ``Decl`` is provided,
+                 the init field of the ``Decl`` is used to assign the alias.
+    :type node2: either a ``Decl`` or a ``Symbol``. If a ``Decl`` is provided,
+                 the symbol is extracted and used for the assignment.
+    """
+    if not isinstance(node1, (Decl, Symbol)):
+        raise RuntimeError("Cannot assign a pointer to %s type" % type(node1))
+    if not isinstance(node2, (Decl, Symbol)):
+        raise RuntimeError("Cannot assign a pointer to %s type" % type(node1))
+
+    # Handle node2
+    if isinstance(node2, Decl):
+        node2 = node2.sym
+    node2.symbol = node2.symbol.strip('*')
+    node2.rank, node2.offset, node2.loop_dep = (), (), ()
+
+    # Handle node1
+    if isinstance(node1, Symbol):
+        node1.symbol = node1.symbol.strip('*')
+        node1.rank, node1.offset, node1.loop_dep = (), (), ()
+        return Assign(node1, node2)
+    else:
+        node1.init = node2
+    return node1
+
+
 ###########################################################
 # Functions to visit and to query properties of AST nodes #
 ###########################################################
@@ -198,6 +229,7 @@ def ast_c_sum(symbols):
 def visit(node, parent):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
+    * Function declarations - a list of all function declarations encountered
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
     * Declarations - a dictionary {variable name (str): declaration (ast node)}
     * Symbols - a dictionary {symbol (ast node): iter space (tuple of loop indices)}
@@ -209,6 +241,7 @@ def visit(node, parent):
     """
 
     info = {
+        'fun_decls': [],
         'fors': [],
         'decls': {},
         'symbols': {},
@@ -240,7 +273,8 @@ def visit(node, parent):
         elif isinstance(node, (Block, Root)):
             for n in node.children:
                 inspect(n, node)
-        elif isinstance(node, (Block, FunDecl)):
+        elif isinstance(node, FunDecl):
+            info['fun_decls'].append(node)
             for n in node.children:
                 inspect(n, node)
             for n in node.args:
@@ -293,7 +327,7 @@ def visit(node, parent):
 
 
 def inner_loops(node):
-    """Find inner loops in the subtree rooted in node."""
+    """Find inner loops in the subtree rooted in ``node``."""
 
     def find_iloops(node, loops):
         if isinstance(node, Perfect):
@@ -309,6 +343,34 @@ def inner_loops(node):
     loops = []
     find_iloops(node, loops)
     return loops
+
+
+def get_fun_decls(node, mode):
+    """Search the ``FunDecl`` node rooted in ``node``.
+
+    :param mode: any string in ['kernel', 'all']. If ``kernel`` is passed, then
+                 only one ``FunDecl`` is expected in the tree rooted in ``node``
+                 (the name "kernel" is to denote that the tree represents a
+                 self-contained piece of code in a function); a search is performed
+                 and the corresponding node returned. If ``all`` is passed, the
+                 whole tree in inspected and all ``FunDecl`` nodes are returned
+                 in a list.
+    """
+
+    def find_fun_decl(node):
+        if isinstance(node, FunDecl):
+            return node
+        for n in node.children:
+            fundecl = find_fun_decl(n)
+            if fundecl:
+                return fundecl
+
+    allowed = ['kernel', 'all']
+    if mode == 'kernel':
+        return find_fun_decl(node)
+    if mode == 'all':
+        return visit(node, None)['fun_decls']
+    raise RuntimeError("Only %s modes are allowed by `get_fun_decls`" % allowed)
 
 
 def is_perfect_loop(loop):
