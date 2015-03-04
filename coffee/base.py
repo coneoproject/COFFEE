@@ -522,6 +522,11 @@ class Decl(Statement, Perfect):
         """
         return self.sym.rank or (0,)
 
+    @property
+    def is_const(self):
+        """Return True if the declaration is a constant."""
+        return 'const' in self.qual
+
     def gencode(self, scope=False):
 
         def spacer(v):
