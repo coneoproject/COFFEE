@@ -233,6 +233,7 @@ def visit(node, parent):
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
     * Declarations - a dictionary {variable name (str): declaration (AST node)}
     * Symbols - a dictionary {symbol (AST node): iter space (tuple of loop indices)}
+    * Symbols access mode - a dictionary {symbol (AST node): access mode (WRITE, ...)}
     * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
     * Maximum depth - an integer representing the depth of the most depth loop nest
@@ -246,6 +247,7 @@ def visit(node, parent):
         'fors': [],
         'decls': {},
         'symbols': {},
+        'symbols_mode': {},
         'symbol_refs': defaultdict(list),
         'exprs': {},
         'max_depth': 0,
@@ -297,14 +299,17 @@ def visit(node, parent):
             info['decls'][node.sym.symbol] = node
             inspect(node.sym, node)
         elif isinstance(node, Symbol):
-            if mode in ['written']:
+            access_mode = ('READ', parent.__class__)
+            if mode in ['WRITE']:
                 info['symbols_written'][node.symbol] = info['cur_nest']
+                access_mode = ('WRITE', parent.__class__)
             dep_itspace = node.loop_dep
             if node.symbol in info['symbols_written']:
                 dep_loops = info['symbols_written'][node.symbol]
                 dep_itspace = tuple(l[0].itvar for l in dep_loops)
             info['symbols'][node] = dep_itspace
-            info['symbol_refs'][node.symbol].append((noder parent))
+            info['symbols_mode'][node] = access_mode
+            info['symbol_refs'][node.symbol].append((node, parent))
         elif isinstance(node, Expr):
             for child in node.children:
                 inspect(child, node)
@@ -317,7 +322,7 @@ def visit(node, parent):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:
                 info['exprs'][node] = expr
-            inspect(node.children[0], node, "written")
+            inspect(node.children[0], node, "WRITE")
             for child in node.children[1:]:
                 inspect(child, node)
         else:
