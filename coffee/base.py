@@ -515,7 +515,7 @@ class Decl(Statement, Perfect):
         self.qual = qualifiers or []
         self.attr = attributes or []
         self.init = as_symbol(init) if init is not None else EmptyStatement()
-        self.pragma = pragma or ""
+        self.pragma = pragma or []
 
     @property
     def size(self):
@@ -545,9 +545,8 @@ class Decl(Statement, Perfect):
             return decl(spacer(self.qual), self.typ, self.sym.gencode(),
                         spacer(self.attr)) + semicolon(scope)
         else:
-            pragma = self.pragma + "\n" if self.pragma else ""
-            return pragma + decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                                      spacer(self.attr), self.init.gencode()) + semicolon(scope)
+            return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
+                             spacer(self.attr), self.init.gencode()) + semicolon(scope)
 
     def get_nonzero_columns(self):
         """If the declared array:
