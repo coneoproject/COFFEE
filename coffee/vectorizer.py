@@ -185,10 +185,10 @@ class LoopVectorizer(object):
             # (read only, read and write, incremented, etc.), different sort
             # of copies are made.
             first, last = s_access_modes[0], s_access_modes[-1]
-            if first[0] == 'READ':
+            if first[0] == READ:
                 copy, init = ast_c_make_copy(buf_sym, d.sym, old_rank, Assign)
                 self.loop_opt.header.children.insert(0, copy.children[0])
-            if last[0] == 'WRITE':
+            if last[0] == WRITE:
                 copy, init = ast_c_make_copy(d.sym, buf_sym, old_rank, last[1])
             self.loop_opt.header.children.append(copy.children[0])
             self.padded.append(d.sym)

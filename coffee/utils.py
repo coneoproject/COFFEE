@@ -293,7 +293,7 @@ def visit(node, parent):
                     # Found high-level optimisation
                     return (parent, fors, (opt_par[1], opt_par[3]))
 
-    def inspect(node, parent, mode=""):
+    def inspect(node, parent, mode=None):
         if isinstance(node, EmptyStatement):
             pass
         elif isinstance(node, (Block, Root)):
@@ -320,10 +320,10 @@ def visit(node, parent):
             info['decls'][node.sym.symbol] = node
             inspect(node.sym, node)
         elif isinstance(node, Symbol):
-            access_mode = ('READ', parent.__class__)
-            if mode in ['WRITE']:
+            access_mode = (READ, parent.__class__)
+            if mode and mode in [WRITE]:
                 info['symbols_written'][node.symbol] = info['cur_nest']
-                access_mode = ('WRITE', parent.__class__)
+                access_mode = (WRITE, parent.__class__)
             dep_itspace = node.loop_dep
             if node.symbol in info['symbols_written']:
                 dep_loops = info['symbols_written'][node.symbol]
@@ -343,7 +343,7 @@ def visit(node, parent):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:
                 info['exprs'][node] = expr
-            inspect(node.children[0], node, "WRITE")
+            inspect(node.children[0], node, WRITE)
             for child in node.children[1:]:
                 inspect(child, node)
         else:

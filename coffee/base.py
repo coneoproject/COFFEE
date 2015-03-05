@@ -906,7 +906,10 @@ class Access(object):
     _modes = ["READ", "WRITE", "RW", "INC", "DEC", "IMUL", "IDIV"]
 
     def __init__(self, mode):
-        self.mode = mode
+        self._mode = mode
+
+    def __eq__(self, other):
+        return self._mode == other._mode
 
 
 READ = Access("READ")
