@@ -236,6 +236,10 @@ class ASTKernel(object):
             decls, fors = self._visit_ast(self.ast, fors=[], decls={})
             loop_opts = [CPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
             for loop_opt in loop_opts:
+                # Only optimize compute-intensive expressions
+                if not loop_opt.exprs:
+                    continue
+
                 # 0) Expression Rewriting
                 if rewrite:
                     loop_opt.rewrite(rewrite)
