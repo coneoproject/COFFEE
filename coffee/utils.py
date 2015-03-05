@@ -221,6 +221,27 @@ def ast_c_make_alias(node1, node2):
     return node1
 
 
+def ast_c_make_copy(arr1, arr2, region, op):
+    """Create a piece of AST performing a copy from ``arr2`` to ``arr1``.
+    Return also an ``ArrayInit`` object indicating how ``arr1`` should be
+    initialized prior to the copy."""
+    init = ArrayInit("0.0")
+    if op == Assign:
+        init = EmptyStatement()
+
+    arr1, arr2 = dcopy(arr1), dcopy(arr2)
+    op = op(arr1, arr2)
+    rank = []
+    for i, r in enumerate(region):
+        itvar = "i%d" % i
+        rank.append(itvar)
+        if isinstance(init, ArrayInit):
+            init.values = "{%s}" % init.values
+        op = c_for(itvar, r, op, pragma="")
+    arr1.rank, arr2.rank = rank, rank
+    return op, init
+
+
 ###########################################################
 # Functions to visit and to query properties of AST nodes #
 ###########################################################
