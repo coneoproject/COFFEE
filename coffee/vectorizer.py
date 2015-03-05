@@ -189,7 +189,14 @@ class LoopVectorizer(object):
                 copy, init = ast_c_make_copy(buf_sym, d.sym, old_rank, Assign)
                 self.loop_opt.header.children.insert(0, copy.children[0])
             if last[0] == WRITE:
-                copy, init = ast_c_make_copy(d.sym, buf_sym, old_rank, last[1])
+                # If extra information (i.e., a pragma) is present telling that
+                # the argument does not need to be incremented because it does
+                # not contain any meaningful values, then we can safely write
+                # to it. This is an optimization to avoid increments when not
+                # necessarily required.
+                d_access_mode = [p for p in d.pragma if isinstance(p, Access)]
+                op = Assign if d_access_mode and d_access_mode[0] == WRITE else last[1]
+                copy, init = ast_c_make_copy(d.sym, buf_sym, old_rank, op)
             self.loop_opt.header.children.append(copy.children[0])
             self.padded.append(d.sym)
 
