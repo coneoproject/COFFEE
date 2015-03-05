@@ -377,7 +377,7 @@ def inner_loops(node):
     return loops
 
 
-def get_fun_decls(node, mode):
+def get_fun_decls(node, mode='kernel'):
     """Search the ``FunDecl`` node rooted in ``node``.
 
     :param mode: any string in ['kernel', 'all']. If ``kernel`` is passed, then
