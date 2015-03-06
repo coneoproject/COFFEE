@@ -295,6 +295,17 @@ class GreaterEq(BinExpr):
         super(GreaterEq, self).__init__(expr1, expr2, ">=")
 
 
+class Not(UnaryExpr):
+
+    """Compare an expression to ``NULL`` using the operator ``!``."""
+
+    def __init__(self, expr):
+        super(Not, self).__init__(expr)
+
+    def gencode(self, scope=False):
+        return "!%s" % self.children[0].gencode()
+
+
 class FunCall(Expr, Perfect):
 
     """Function call. """
