@@ -197,7 +197,7 @@ class LoopVectorizer(object):
                 d_access_mode = [p for p in d.pragma if isinstance(p, Access)]
                 op = Assign if d_access_mode and d_access_mode[0] == WRITE else last[1]
                 copy, init = ast_c_make_copy(d.sym, buf_sym, old_rank, op)
-            self.loop_opt.header.children.append(copy.children[0])
+                self.loop_opt.header.children.append(copy.children[0])
             self.padded.append(d.sym)
 
         # 4) Handle special nodes
