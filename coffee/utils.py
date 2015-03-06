@@ -390,7 +390,9 @@ def get_fun_decls(node, mode='kernel'):
     """
 
     def find_fun_decl(node):
-        if isinstance(node, FunDecl):
+        if isinstance(node, FlatBlock):
+            return
+        elif isinstance(node, FunDecl):
             return node
         for n in node.children:
             fundecl = find_fun_decl(n)
