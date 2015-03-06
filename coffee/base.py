@@ -665,6 +665,25 @@ class Switch(Statement):
                                for i, s in self.cases)) + "}"
 
 
+class If(Statement):
+    """If-else construct.
+
+    :param if_expr: The expression driving the jump
+    :param branches: A 2-tuple of AST nodes, respectively the 'if' and the 'else'
+                     branches
+    """
+
+    def __init__(self, if_expr, branches):
+        super(If, self).__init__(branches)
+        self.if_expr = if_expr
+
+    def gencode(self, scope=False):
+        else_branch = ""
+        if len(self.children) == 2:
+            else_branch = "else %s" % str(self.children[1])
+        return "if (%s) %s %s" % (self.if_expr, str(self.children[0]), else_branch)
+
+
 class FunDecl(Statement):
 
     """Function declaration.
