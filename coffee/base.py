@@ -91,10 +91,7 @@ class Node(object):
         self._pragma = pragma
 
     def gencode(self):
-        code = ""
-        for n in self.children:
-            code += n.gencode() + "\n"
-        return code
+        return "\n".join([n.gencode() for n in self.children])
 
     def __str__(self):
         return self.gencode()
@@ -144,8 +141,8 @@ class BinExpr(Expr):
         by the classic ``deepcopy`` method, is ignored."""
         return self.__class__(dcopy(self.children[0]), dcopy(self.children[1]))
 
-    def gencode(self):
-        return (" "+self.op+" ").join([n.gencode() for n in self.children])
+    def gencode(self, not_scope=True):
+        return (" "+self.op+" ").join([n.gencode(not_scope) for n in self.children])
 
 
 class UnaryExpr(Expr):
@@ -166,8 +163,8 @@ class UnaryExpr(Expr):
 class Neg(UnaryExpr):
 
     "Unary negation of an expression"
-    def gencode(self, scope=False):
-        return "-%s" % wrap(self.children[0].gencode()) + semicolon(scope)
+    def gencode(self, not_scope=False):
+        return "-%s" % wrap(self.children[0].gencode()) + semicolon(not_scope)
 
 
 class ArrayInit(Expr):
@@ -211,8 +208,8 @@ class Par(UnaryExpr):
 
     """Parenthesis object."""
 
-    def gencode(self):
-        return wrap(self.children[0].gencode())
+    def gencode(self, not_scope=True):
+        return wrap(self.children[0].gencode(not_scope))
 
 
 class Sum(BinExpr):
@@ -302,8 +299,8 @@ class Not(UnaryExpr):
     def __init__(self, expr):
         super(Not, self).__init__(expr)
 
-    def gencode(self, scope=False):
-        return "!%s" % self.children[0].gencode()
+    def gencode(self, not_scope=True):
+        return "!%s" % self.children[0].gencode(not_scope)
 
 
 class FunCall(Expr, Perfect):
@@ -314,9 +311,10 @@ class FunCall(Expr, Perfect):
         super(Expr, self).__init__(args)
         self.funcall = as_symbol(function_name)
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         return self.funcall.gencode() + \
-            wrap(",".join([n.gencode() for n in self.children]))
+            wrap(", ".join([n.gencode() for n in self.children])) + \
+            semicolon(not_scope)
 
 
 class Ternary(Expr):
@@ -325,8 +323,9 @@ class Ternary(Expr):
     def __init__(self, expr, true_stmt, false_stmt):
         super(Ternary, self).__init__([expr, true_stmt, false_stmt])
 
-    def gencode(self):
-        return ternary(*[c.gencode() for c in self.children])
+    def gencode(self, not_scope=True):
+        return ternary(*[c.gencode(True) for c in self.children]) + \
+            semicolon(not_scope)
 
 
 class Symbol(Expr):
@@ -348,7 +347,7 @@ class Symbol(Expr):
         self.offset = offset
         self.loop_dep = tuple([i for i in rank if not str(i).isdigit()])
 
-    def gencode(self):
+    def gencode(self, not_scope=True):
         points = ""
         if not self.offset:
             for p in self.rank:
@@ -371,7 +370,7 @@ class AVXSum(Sum):
 
     """Sum of two vector registers using AVX intrinsics."""
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=True):
         op1, op2 = self.children
         return "_mm256_add_pd (%s, %s)" % (op1.gencode(), op2.gencode())
 
@@ -380,7 +379,7 @@ class AVXSub(Sub):
 
     """Subtraction of two vector registers using AVX intrinsics."""
 
-    def gencode(self):
+    def gencode(self, not_scope=True):
         op1, op2 = self.children
         return "_mm256_add_pd (%s, %s)" % (op1.gencode(), op2.gencode())
 
@@ -389,7 +388,7 @@ class AVXProd(Prod):
 
     """Product of two vector registers using AVX intrinsics."""
 
-    def gencode(self):
+    def gencode(self, not_scope=True):
         op1, op2 = self.children
         return "_mm256_mul_pd (%s, %s)" % (op1.gencode(), op2.gencode())
 
@@ -398,7 +397,7 @@ class AVXDiv(Div):
 
     """Division of two vector registers using AVX intrinsics."""
 
-    def gencode(self):
+    def gencode(self, not_scope=True):
         op1, op2 = self.children
         return "_mm256_div_pd (%s, %s)" % (op1.gencode(), op2.gencode())
 
@@ -407,7 +406,7 @@ class AVXLoad(Symbol):
 
     """Load of values in a vector register using AVX intrinsics."""
 
-    def gencode(self):
+    def gencode(self, not_scope=True):
         points = ""
         if not self.offset:
             for p in self.rank:
@@ -424,7 +423,7 @@ class AVXSet(Symbol):
     """Replicate the symbol's value in all slots of a vector register
     using AVX intrinsics."""
 
-    def gencode(self):
+    def gencode(self, not_scope=True):
         points = ""
         for p in self.rank:
             points += point(p)
@@ -458,7 +457,7 @@ class FlatBlock(Statement, Perfect):
         Statement.__init__(self, pragma)
         self.children.append(code)
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         return self.children[0]
 
 
@@ -469,9 +468,9 @@ class Assign(Statement, Perfect):
     def __init__(self, sym, exp, pragma=None):
         super(Assign, self).__init__([sym, exp], pragma)
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         return assign(self.children[0].gencode(),
-                      self.children[1].gencode()) + semicolon(scope)
+                      self.children[1].gencode()) + semicolon(not_scope)
 
 
 class Incr(Statement, Perfect):
@@ -481,12 +480,12 @@ class Incr(Statement, Perfect):
     def __init__(self, sym, exp, pragma=None):
         super(Incr, self).__init__([sym, exp], pragma)
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         sym, exp = self.children
         if isinstance(exp, Symbol) and exp.symbol == 1:
-            return incr_by_1(sym.gencode()) + semicolon(scope)
+            return incr_by_1(sym.gencode()) + semicolon(not_scope)
         else:
-            return incr(sym.gencode(), exp.gencode()) + semicolon(scope)
+            return incr(sym.gencode(), exp.gencode()) + semicolon(not_scope)
 
 
 class Decr(Statement, Perfect):
@@ -495,12 +494,12 @@ class Decr(Statement, Perfect):
     def __init__(self, sym, exp, pragma=None):
         super(Decr, self).__init__([sym, exp], pragma)
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         sym, exp = self.children
         if isinstance(exp, Symbol) and exp.symbol == 1:
-            return decr_by_1(sym.gencode()) + semicolon(scope)
+            return decr_by_1(sym.gencode()) + semicolon(not_scope)
         else:
-            return decr(sym.gencode(), exp.gencode()) + semicolon(scope)
+            return decr(sym.gencode(), exp.gencode()) + semicolon(not_scope)
 
 
 class IMul(Statement, Perfect):
@@ -509,9 +508,9 @@ class IMul(Statement, Perfect):
     def __init__(self, sym, exp, pragma=None):
         super(IMul, self).__init__([sym, exp], pragma)
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         sym, exp = self.children
-        return imul(sym.gencode(), exp.gencode()) + semicolon(scope)
+        return imul(sym.gencode(), exp.gencode()) + semicolon(not_scope)
 
 
 class IDiv(Statement, Perfect):
@@ -520,9 +519,9 @@ class IDiv(Statement, Perfect):
     def __init__(self, sym, exp, pragma=None):
         super(IDiv, self).__init__([sym, exp], pragma)
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         sym, exp = self.children
-        return idiv(sym.gencode(), exp.gencode()) + semicolon(scope)
+        return idiv(sym.gencode(), exp.gencode()) + semicolon(not_scope)
 
 
 class Decl(Statement, Perfect):
@@ -561,7 +560,7 @@ class Decl(Statement, Perfect):
         """Return True if the declaration is a constant."""
         return 'const' in self.qual
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
 
         def spacer(v):
             if v:
@@ -571,10 +570,10 @@ class Decl(Statement, Perfect):
 
         if isinstance(self.init, EmptyStatement):
             return decl(spacer(self.qual), self.typ, self.sym.gencode(),
-                        spacer(self.attr)) + semicolon(scope)
+                        spacer(self.attr)) + semicolon(not_scope)
         else:
             return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                             spacer(self.attr), self.init.gencode()) + semicolon(scope)
+                             spacer(self.attr), self.init.gencode()) + semicolon(not_scope)
 
     def get_nonzero_columns(self):
         """If the declared array:
@@ -602,8 +601,8 @@ class Block(Statement):
             super(Block, self).__init__(stmts, pragma)
         self.open_scope = open_scope
 
-    def gencode(self, scope=False):
-        code = "".join([n.gencode(scope) for n in self.children])
+    def gencode(self, not_scope=False):
+        code = "".join([n.gencode(not_scope) for n in self.children])
         if self.open_scope:
             code = "{\n%s\n}\n" % indent(code)
         return code
@@ -650,7 +649,7 @@ class For(Statement):
     def increment(self):
         return self.incr.children[1].symbol
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         return "\n".join(self.pragma) + "\n" + for_loop(self.init.gencode(True),
                                                         self.cond.gencode(),
                                                         self.incr.gencode(True),
@@ -688,7 +687,7 @@ class If(Statement):
         super(If, self).__init__(branches)
         self.if_expr = if_expr
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         else_branch = ""
         if len(self.children) == 2:
             else_branch = "else %s" % str(self.children[1])
@@ -731,10 +730,10 @@ class AVXStore(Assign):
 
     """Store of values in a vector register using AVX intrinsics."""
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         op1 = self.children[0].gencode()
         op2 = self.children[1].gencode()
-        return "_mm256_store_pd (&%s, %s)" % (op1, op2) + semicolon(scope)
+        return "_mm256_store_pd (&%s, %s)" % (op1, op2) + semicolon(not_scope)
 
 
 class AVXLocalPermute(Statement):
@@ -746,10 +745,10 @@ class AVXLocalPermute(Statement):
         self.r = r
         self.mask = mask
 
-    def gencode(self, scope=True):
+    def gencode(self, not_scope=True):
         op = self.r.gencode()
         return "_mm256_permute_pd (%s, %s)" \
-            % (op, self.mask) + semicolon(scope)
+            % (op, self.mask) + semicolon(not_scope)
 
 
 class AVXGlobalPermute(Statement):
@@ -762,11 +761,11 @@ class AVXGlobalPermute(Statement):
         self.r2 = r2
         self.mask = mask
 
-    def gencode(self, scope=True):
+    def gencode(self, not_scope=True):
         op1 = self.r1.gencode()
         op2 = self.r2.gencode()
         return "_mm256_permute2f128_pd (%s, %s, %s)" \
-            % (op1, op2, self.mask) + semicolon(scope)
+            % (op1, op2, self.mask) + semicolon(not_scope)
 
 
 class AVXUnpackHi(Statement):
@@ -778,10 +777,10 @@ class AVXUnpackHi(Statement):
         self.r1 = r1
         self.r2 = r2
 
-    def gencode(self, scope=True):
+    def gencode(self, not_scope=True):
         op1 = self.r1.gencode()
         op2 = self.r2.gencode()
-        return "_mm256_unpackhi_pd (%s, %s)" % (op1, op2) + semicolon(scope)
+        return "_mm256_unpackhi_pd (%s, %s)" % (op1, op2) + semicolon(not_scope)
 
 
 class AVXUnpackLo(Statement):
@@ -793,18 +792,18 @@ class AVXUnpackLo(Statement):
         self.r1 = r1
         self.r2 = r2
 
-    def gencode(self, scope=True):
+    def gencode(self, not_scope=True):
         op1 = self.r1.gencode()
         op2 = self.r2.gencode()
-        return "_mm256_unpacklo_pd (%s, %s)" % (op1, op2) + semicolon(scope)
+        return "_mm256_unpacklo_pd (%s, %s)" % (op1, op2) + semicolon(not_scope)
 
 
 class AVXSetZero(Statement):
 
     """Set to 0 the entries of a vector register using AVX intrinsics."""
 
-    def gencode(self, scope=True):
-        return "_mm256_setzero_pd ()" + semicolon(scope)
+    def gencode(self, not_scope=True):
+        return "_mm256_setzero_pd ()" + semicolon(not_scope)
 
 
 # Linear Algebra classes
@@ -885,7 +884,7 @@ class PreprocessNode(Node):
     def __init__(self, prep):
         super(PreprocessNode, self).__init__([prep])
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=False):
         return self.children[0].gencode()
 
 
@@ -895,14 +894,11 @@ class PreprocessNode(Node):
 def indent(block):
     """Indent each row of the given string block with ``n*2`` spaces."""
     indentation = " " * 2
-    return indentation + ("\n" + indentation).join(block.split("\n"))
+    return "\n".join([indentation + s for s in block.split('\n')])
 
 
-def semicolon(scope):
-    if scope:
-        return ""
-    else:
-        return ";\n"
+def semicolon(not_scope):
+    return "" if not_scope else ";\n"
 
 
 def c_sym(const):
