@@ -561,13 +561,6 @@ class Decl(Statement, Perfect):
         return 'const' in self.qual
 
     def gencode(self, not_scope=False):
-
-        def spacer(v):
-            if v:
-                return " ".join(v) + " "
-            else:
-                return ""
-
         if isinstance(self.init, EmptyStatement):
             return decl(spacer(self.qual), self.typ, self.sym.gencode(),
                         spacer(self.attr)) + semicolon(not_scope)
@@ -899,6 +892,10 @@ def indent(block):
 
 def semicolon(not_scope):
     return "" if not_scope else ";\n"
+
+
+def spacer(v):
+    return " ".join(v) + " " if v else ""
 
 
 def c_sym(const):
