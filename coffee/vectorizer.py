@@ -168,7 +168,8 @@ class LoopVectorizer(object):
             buf_sym = buf_decl.sym
             buf_sym.symbol = "_%s" % buf_sym.symbol
             buf_sym.rank = new_rank
-            buf_decl.init = ArrayInit("0.0")
+            buf_decl.init = ArrayInit('%s0.0%s' % ('{'*len(new_rank),
+                                                   '}'*len(new_rank)))
             self.loop_opt.header.children.insert(0, buf_decl)
             # 2- Replace occurrences of symbol with the temporary buffer.
             # Also, determine how the temporary buffer is accessed.
