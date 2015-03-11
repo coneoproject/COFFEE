@@ -247,9 +247,10 @@ class ExpressionHoister(object):
     autovectorization. Note that this applies to constant sub-expressions
     as well, in which case hoisting after the outermost loop takes place."""
 
-    # Global counting the total number of expressions for which licm was licm
-    # was performed
-    GLOBAL_LICM_COUNTER = 0
+    # Track all expressions to which LICM has been applied
+    _expr_handled = []
+    # Temporary variables template
+    _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
 
     def __init__(self, stmt, expr_info, header, typ, decls, hoisted, expr_graph):
         """Initialize the ExpressionHoister."""
@@ -261,9 +262,12 @@ class ExpressionHoister(object):
         self.hoisted = hoisted
         self.expr_graph = expr_graph
 
-        # Count how many iterations of hoisting were performed. This is used to
-        # create sensible variable names
-        self.glb_counter = ExpressionHoister.GLOBAL_LICM_COUNTER
+        # Set counters to create meaningful and unique (temporary) variable names
+        try:
+            self.expr_id = self._expr_handled.index(stmt)
+        except ValueError:
+            self._expr_handled.append(stmt)
+            self.expr_id = self._expr_handled.index(stmt)
         self.counter = 0
 
         # Constants used by the extract method to charaterize sub-expressions
@@ -427,8 +431,12 @@ class ExpressionHoister(object):
                 # 2) Create the new invariant sub-expressions and temporaries
                 sym_rank, for_dep = (tuple([wl.size]), tuple([wl.itvar])) \
                     if wl else ((), ())
-                syms = [Symbol("LI_%s_%d_%s" % ("".join(dep).upper() if dep else "C",
-                        self.counter, i), sym_rank) for i in range(len(expr))]
+                syms = [Symbol(self._hoisted_sym % {
+                    'loop_dep': '_'.join(dep).upper() if dep else 'CONST',
+                    'expr_id': self.expr_id,
+                    'round': self.counter,
+                    'i': i
+                }, sym_rank) for i in range(len(expr))]
                 var_decl = [Decl(self.typ, _s) for _s in syms]
                 for_sym = [Symbol(_s.sym.symbol, for_dep) for _s in var_decl]
 
@@ -482,9 +490,6 @@ class ExpressionHoister(object):
             for i in var_decl:
                 self.hoisted.update_stmt(i.sym.symbol, **{'loop': inv_code[0],
                                                           'place': place})
-
-        # Increase the global counter for subsequent calls to licm
-        ExpressionHoister.GLOBAL_LICM_COUNTER += 1
 
 
 class ExpressionExpander(object):
