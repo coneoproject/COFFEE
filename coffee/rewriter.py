@@ -482,15 +482,11 @@ class ExpressionHoister(object):
                 new_for = [dcopy(wl)]
                 new_for[0].children[0] = Block(inv_for, open_scope=True)
                 inv_for = inv_code = new_for
-                new_var_decl = var_decl
             else:
                 inv_code = [None]
-                # Generated code style improvement
-                new_var_decl = [Block(var_decl, open_scope=False)]
-                inv_for = [Block(inv_for, open_scope=False)]
             # Insert the new nodes at the right level in the loop nest
             ofs = place.children.index(next_loop)
-            place.children[ofs:ofs] = new_var_decl + inv_for + [FlatBlock("\n")]
+            place.children[ofs:ofs] = var_decl + inv_for + [FlatBlock("\n")]
             # Update hoisted symbols metadata
             for i in var_decl:
                 self.hoisted.update_stmt(i.sym.symbol, **{'loop': inv_code[0],
