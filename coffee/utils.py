@@ -247,10 +247,9 @@ def ast_c_make_copy(arr1, arr2, region, op):
 ###########################################################
 
 
-def visit(node, parent):
+def visit(node, parent=None, search=None):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
-    * Function declarations - a list of all function declarations encountered
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
     * Declarations - a dictionary {variable name (str): declaration (AST node)}
     * Symbols - a dictionary {symbol (AST node): iter space (tuple of loop indices)}
@@ -258,13 +257,14 @@ def visit(node, parent):
     * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
     * Maximum depth - an integer representing the depth of the most depth loop nest
+    * Searched nodes - a dictionary {types of AST node: list of occurrences}
 
-    :arg node:   AST root node of the visit
-    :arg parent: parent node of ``node``
+    :param node: AST root node of the visit
+    :param parent: parent node of ``node``
+    :param search: type(s) of AST nodes to be searched and tracked in the visit
     """
 
     info = {
-        'fun_decls': [],
         'fors': [],
         'decls': {},
         'symbols': {},
@@ -272,8 +272,9 @@ def visit(node, parent):
         'symbol_refs': defaultdict(list),
         'exprs': {},
         'max_depth': 0,
-        'linalg_nodes': []
+        'search': defaultdict(list)
     }
+
     _inner_loops = inner_loops(node)
 
     def check_opts(node, parent, fors):
@@ -294,13 +295,15 @@ def visit(node, parent):
                     return (parent, fors, (opt_par[1], opt_par[3]))
 
     def inspect(node, parent, mode=None):
+        if search and isinstance(node, search):
+            info['search'][type(node)].append(node)
+
         if isinstance(node, EmptyStatement):
             pass
         elif isinstance(node, (Block, Root)):
             for n in node.children:
                 inspect(n, node)
         elif isinstance(node, FunDecl):
-            info['fun_decls'].append(node)
             for n in node.children:
                 inspect(n, node)
             for n in node.args:
@@ -337,8 +340,6 @@ def visit(node, parent):
         elif isinstance(node, FunCall):
             for child in node.children:
                 inspect(child, node)
-        elif isinstance(node, Linalg):
-            info['linalg_nodes'].append(node)
         elif isinstance(node, Perfect):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:
@@ -375,36 +376,6 @@ def inner_loops(node):
     loops = []
     find_iloops(node, loops)
     return loops
-
-
-def get_fun_decls(node, mode='kernel'):
-    """Search the ``FunDecl`` node rooted in ``node``.
-
-    :param mode: any string in ['kernel', 'all']. If ``kernel`` is passed, then
-                 only one ``FunDecl`` is expected in the tree rooted in ``node``
-                 (the name "kernel" is to denote that the tree represents a
-                 self-contained piece of code in a function); a search is performed
-                 and the corresponding node returned. If ``all`` is passed, the
-                 whole tree in inspected and all ``FunDecl`` nodes are returned
-                 in a list.
-    """
-
-    def find_fun_decl(node):
-        if isinstance(node, FlatBlock):
-            return
-        elif isinstance(node, FunDecl):
-            return node
-        for n in node.children:
-            fundecl = find_fun_decl(n)
-            if fundecl:
-                return fundecl
-
-    allowed = ['kernel', 'all']
-    if mode == 'kernel':
-        return find_fun_decl(node)
-    if mode == 'all':
-        return visit(node, None)['fun_decls']
-    raise RuntimeError("Only %s modes are allowed by `get_fun_decls`" % allowed)
 
 
 def is_perfect_loop(loop):

@@ -67,7 +67,7 @@ class Perfect(object):
     pass
 
 
-class Linalg(object):
+class LinAlg(object):
     """Dummy mixin class used to decorate classes which represent linear
     algebra operations."""
     pass
@@ -802,12 +802,12 @@ class AVXSetZero(Statement):
 # Linear Algebra classes
 
 
-class Invert(Statement, Perfect, Linalg):
+class Invert(Statement, Perfect, LinAlg):
     """In-place inversion of a square array."""
     def __init__(self, sym, dim, pragma=None):
         super(Invert, self).__init__([sym, dim, dim], pragma)
 
-    def gencode(self, scope=False):
+    def gencode(self, not_scope=True):
         sym, dim, lda = self.children
         return """{
   int n = %s;
@@ -823,7 +823,7 @@ class Invert(Statement, Perfect, Linalg):
 """ % (str(dim), str(lda), str(sym), str(sym))
 
 
-class Determinant1x1(Expr, Perfect, Linalg):
+class Determinant1x1(Expr, Perfect, LinAlg):
 
     """Determinant of a 1x1 square array."""
     def __init__(self, sym, pragma=None):
@@ -834,7 +834,7 @@ class Determinant1x1(Expr, Perfect, Linalg):
         return Symbol(sym.gencode(), (0, 0))
 
 
-class Determinant2x2(Expr, Perfect, Linalg):
+class Determinant2x2(Expr, Perfect, LinAlg):
 
     """Determinant of a 2x2 square array."""
     def __init__(self, sym, pragma=None):
@@ -847,7 +847,7 @@ class Determinant2x2(Expr, Perfect, Linalg):
                    Prod(Symbol(v, (0, 1)), Symbol(v, (1, 0))))
 
 
-class Determinant3x3(Expr, Perfect, Linalg):
+class Determinant3x3(Expr, Perfect, LinAlg):
 
     """Determinant of a 3x3 square array."""
     def __init__(self, sym, pragma=None):

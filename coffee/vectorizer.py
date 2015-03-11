@@ -142,7 +142,7 @@ class LoopVectorizer(object):
             if not (l.start % self.intr["dp_reg"] and l.size % self.intr["dp_reg"]):
                 l.pragma.add(self.comp["decl_aligned_for"])
 
-        info = visit(self.loop_opt.header, None)
+        info = visit(self.loop_opt.header, None, search=LinAlg)
 
         # 3) Padding
         symbols_mode = info['symbols_mode']
@@ -204,7 +204,7 @@ class LoopVectorizer(object):
             self.padded.append(d.sym)
 
         # 4) Handle special nodes
-        linalg_nodes = info['linalg_nodes']
+        linalg_nodes = info['search'][LinAlg]
         for n in linalg_nodes:
             if isinstance(n, Invert):
                 sym, _, lda = n.children
