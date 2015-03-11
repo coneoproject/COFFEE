@@ -50,30 +50,27 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt_info, decls, kernel_info, hoisted, expr_graph):
+    def __init__(self, stmt_info, decls, header, hoisted, expr_graph):
         """Initialize the ExpressionRewriter.
 
-        :arg stmt_info:   an AST node statement containing an expression and meta
-                          information (MetaExpr) related to the expression itself.
-                          including the iteration space it depends on.
-        :arg decls:       list of AST declarations of the various symbols in ``syms``.
-        :arg kernel_info: contains information about the AST nodes sorrounding the
-                          expression.
-        :arg hoisted:     dictionary that tracks hoisted expressions
-        :arg expr_graph:  expression graph that tracks symbol dependencies
+        :param stmt_info: an AST node statement containing an expression and meta
+                         information (MetaExpr) related to the expression itself.
+                         including the iteration space it depends on.
+        :param decls: list of AST declarations of the various symbols in ``syms``.
+        :param header: the parent Block of the loop in which ``stmt`` was found.
+        :param hoisted: dictionary that tracks hoisted expressions
+        :param expr_graph: expression graph that tracks symbol dependencies
         """
         self.stmt, self.expr_info = stmt_info
         self.decls = decls
-        self.header, self.kernel_decls = kernel_info
+        self.header = header
         self.hoisted = hoisted
         self.expr_graph = expr_graph
 
         # Expression Manipulators used by the Expression Rewriter
-        typ = self.kernel_decls[self.stmt.children[0].symbol][0].typ
         self.expr_hoister = ExpressionHoister(self.stmt,
                                               self.expr_info,
                                               self.header,
-                                              typ,
                                               self.decls,
                                               self.hoisted,
                                               self.expr_graph)
@@ -84,13 +81,13 @@ class ExpressionRewriter(object):
     def licm(self, merge_and_simplify=False, compact_tmps=False):
         """Perform generalized loop-invariant code motion.
 
-        :arg merge_and_simpliy: True if should try to merge the loops in which
-                                invariant expressions are evaluated, because they
-                                might be characterized by the same iteration space.
-                                In this process, computation which is redundant
-                                because performed in at least two merged loops, is
-                                eliminated.
-        :arg compact_tmps: True if temporaries accessed only once should be inlined.
+        :param merge_and_simpliy: True if should try to merge the loops in which
+                                  invariant expressions are evaluated, because they
+                                  might be characterized by the same iteration space.
+                                  In this process, computation which is redundant
+                                  because performed in at least two merged loops, is
+                                  eliminated.
+        :param compact_tmps: True if temporaries accessed only once should be inlined.
         """
         self.expr_hoister.licm()
 
@@ -252,12 +249,11 @@ class ExpressionHoister(object):
     # Temporary variables template
     _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
 
-    def __init__(self, stmt, expr_info, header, typ, decls, hoisted, expr_graph):
+    def __init__(self, stmt, expr_info, header, decls, hoisted, expr_graph):
         """Initialize the ExpressionHoister."""
         self.stmt = stmt
         self.expr_info = expr_info
         self.header = header
-        self.typ = typ
         self.decls = decls
         self.hoisted = hoisted
         self.expr_graph = expr_graph
@@ -377,6 +373,7 @@ class ExpressionHoister(object):
     def licm(self):
         """Perform loop-invariant code motion for the expression passed in at
         object construction time."""
+        expr_type = self.expr_info.type
 
         expr_loops = self.expr_info.loops
         dict_expr_loops = loops_as_dict(expr_loops)
@@ -438,7 +435,7 @@ class ExpressionHoister(object):
                     'round': self.counter,
                     'i': i
                 }, sym_rank) for i in range(len(expr))]
-                var_decl = [Decl(self.typ, _s) for _s in syms]
+                var_decl = [Decl(expr_type, _s) for _s in syms]
                 for_sym = [Symbol(_s.sym.symbol, for_dep) for _s in var_decl]
 
                 # 3) Create the new for loop containing invariant terms

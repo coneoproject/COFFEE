@@ -446,6 +446,29 @@ def count_occurrences(node, key=0, read_only=False):
     return counter
 
 
+def check_type(stmt, decls):
+    """Check the types of the ``stmt``'s LHS and RHS. If they match as expected,
+    return the type itself. Otherwise, an error is generated, suggesting an issue
+    in either the AST itself (i.e., a bug inherent the AST) or, possibly, in the
+    optimization process.
+
+    :param stmt: the AST node statement to be checked
+    :param decls: a dictionary from symbol identifiers (i.e., strings representing
+                  the name of a symbol) to Decl nodes
+    """
+    lhs_symbol = visit(stmt.children[0], stmt)['symbol_refs'].keys()[0]
+    rhs_symbols = visit(stmt.children[1], stmt)['symbol_refs'].keys()
+
+    lhs_decl = decls[lhs_symbol]
+    rhs_decls = [decls[s] for s in rhs_symbols if s in decls]
+
+    type = lambda d: d.typ.replace('*', '')
+    if any([type(lhs_decl) != type(rhs_decl) for rhs_decl in rhs_decls]):
+        raise RuntimeError("Non matching types in %s" % str(stmt))
+
+    return type(lhs_decl)
+
+
 #######################################################################
 # Functions to manipulate iteration spaces in various representations #
 #######################################################################

@@ -38,18 +38,24 @@ class MetaExpr(object):
 
     """Information container for a compute-intensive expression."""
 
-    def __init__(self, parent, loops_info, unit_stride_itvars):
+    def __init__(self, type, parent, loops_info, unit_stride_itvars):
         """Initialize the MetaExpr.
 
-        :arg parent: the parent block node in which the expression is embedded.
-        :arg loops_info:  the ordered tuple of (loop, parent) the expression
-                          depends on.
-        :arg unit_stride_itvars: the iteration variables along which the
-                                 expression performs unit_stride memory accesses.
+        :param type: the C type of the expression.
+        :param parent: the parent block node in which the expression is embedded.
+        :param loops_info: the ordered tuple of (loop, parent) the expression
+                           depends on.
+        :param unit_stride_itvars: the iteration variables along which the
+                                   expression performs unit_stride memory accesses.
         """
+        self._type = type
         self._parent = parent
         self._loops_info = loops_info
         self._unit_stride_itvars = unit_stride_itvars
+
+    @property
+    def type(self):
+        return self._type
 
     @property
     def loops(self):

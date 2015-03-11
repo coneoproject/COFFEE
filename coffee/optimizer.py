@@ -34,8 +34,7 @@
 from copy import deepcopy as dcopy
 
 from base import *
-from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
-from utils import set_itspace, ast_c_for
+from utils import *
 from expression import MetaExpr
 from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
@@ -51,10 +50,11 @@ class LoopOptimizer(object):
     def __init__(self, loop, header, kernel_decls):
         """Initialize the LoopOptimizer.
 
-        :arg loop:         root loop node o a loop nest.
-        :arg header:       parent of the root loop node
-        :arg kernel_decls: list of declarations of the variables that are visible
-                           within ``loop``."""
+        :param loop: root AST node of a loop nest
+        :param header: parent AST node of ``loop``
+        :param kernel_decls: list of variable declarations that are visible
+                             within ``loop``
+        """
         self.loop = loop
         self.header = header
         self.kernel_decls = kernel_decls
@@ -70,8 +70,11 @@ class LoopOptimizer(object):
         self.decls, self.exprs = ({}, {})
         for decl_str, decl in info['decls'].items():
             self.decls[decl_str] = (decl, plan.LOCAL_VAR)
+        all_decls = dict([(decl_str, decl_scope[0]) for decl_str, decl_scope
+                          in self.kernel_decls.items() + self.decls.items()])
         for stmt, expr_info in info['exprs'].items():
-            self.exprs[stmt] = MetaExpr(*expr_info)
+            expr_type = check_type(stmt, all_decls)
+            self.exprs[stmt] = MetaExpr(expr_type, *expr_info)
 
     def rewrite(self, level):
         """Rewrite a compute-intensive expression found in the loop nest so as to
@@ -84,25 +87,23 @@ class LoopOptimizer(object):
         4. Zero-valued columns avoidance
         5. Precomputation of integration-dependent terms
 
-        :arg level: The optimization level (0, 1, 2, 3, 4). The higher, the more
-                    invasive is the re-writing of the expression, trying to
-                    eliminate unnecessary floating point operations.
+        :param level: The optimization level (0, 1, 2, 3, 4). The higher, the more
+                      invasive is the re-writing of the expression, trying to
+                      eliminate unnecessary floating point operations.
 
-                    * level == 1: performs "basic" generalized loop-invariant \
-                                  code motion
-                    * level == 2: level 1 + expansion of terms, factorization of \
-                                  basis functions appearing multiple times in the \
-                                  same expression, and finally another run of \
-                                  loop-invariant code motion to move invariant \
-                                  sub-expressions exposed by factorization
-                    * level == 3: level 2 + avoid computing zero-columns
-                    * level == 4: level 3 + precomputation of read-only expressions \
-                                  out of the loop nest
+                      * level == 1: performs "basic" generalized loop-invariant \
+                                    code motion
+                      * level == 2: level 1 + expansion of terms, factorization of \
+                                    basis functions appearing multiple times in the \
+                                    same expression, and finally another run of \
+                                    loop-invariant code motion to move invariant \
+                                    sub-expressions exposed by factorization
+                      * level == 3: level 2 + avoid computing zero-columns
+                      * level == 4: level 3 + precomputation of read-only expressions \
+                                    out of the loop nest
         """
-
-        kernel_info = (self.header, self.kernel_decls)
         for stmt_info in self.exprs.items():
-            ew = ExpressionRewriter(stmt_info, self.decls, kernel_info,
+            ew = ExpressionRewriter(stmt_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             if level > 0:
                 ew.licm()
@@ -264,7 +265,7 @@ class CPULoopOptimizer(LoopOptimizer):
     def unroll(self, loop_uf):
         """Unroll loops enclosing expressions as specified by ``loop_uf``.
 
-        :arg loop_uf: dictionary from iteration spaces to unroll factors."""
+        :param loop_uf: dictionary from iteration spaces to unroll factors."""
 
         def update_expr(node, var, factor):
             """Add an offset ``factor`` to every iteration variable ``var`` in
