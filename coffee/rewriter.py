@@ -293,9 +293,10 @@ class ExpressionHoister(object):
         if isinstance(node, Symbol):
             return (self.symbols[node], self.INV, 1)
         if isinstance(node, FunCall):
-            arg_deps = flatten([self._extract_exprs(n, expr_dep, length)[0]
-                                for n in node.children])
-            return (tuple(set(arg_deps)), self.INV, length)
+            arg_deps = [self._extract_exprs(n, expr_dep, length) for n in node.children]
+            dep = tuple(set(flatten([dep for dep, _, _ in arg_deps])))
+            info = self.INV if all([i == self.INV for _, i, _ in arg_deps]) else self.HOI
+            return (dep, info, length)
         if isinstance(node, Par):
             return (self._extract_exprs(node.children[0], expr_dep, length))
 
