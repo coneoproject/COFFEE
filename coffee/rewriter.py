@@ -158,14 +158,18 @@ class ExpressionRewriter(object):
         # The heuristics here is that the expansion occurs along the iteration
         # variable which appears in more unique arrays. This will allow factorization
         # to be more effective.
-        itvars_occs = dict.fromkeys(self.expr_info.unit_stride_itvars, 0)
+        itvar_occs = dict.fromkeys(self.expr_info.unit_stride_itvars, 0)
         for _, itvar in count_occurrences(self.stmt.children[1]).keys():
-            if itvar and itvar[0] in itvars_occs:
-                itvars_occs[itvar[0]] += 1
+            if itvar and itvar[0] in itvar_occs:
+                itvar_occs[itvar[0]] += 1
+        itvar_exp = max(itvar_occs.iteritems(), key=operator.itemgetter(1))[0]
 
-        itvar_exp = max(itvars_occs.iteritems(), key=operator.itemgetter(1))[0]
-        ee = ExpressionExpander(self.hoisted, self.expr_graph)
-        ee.expand(self.stmt.children[1], self.stmt, itvars_occs, itvar_exp)
+        # Perform expansion
+        ee = ExpressionExpander(self.stmt, self.expr_info, self.hoisted,
+                                self.expr_graph, itvar_occs, itvar_exp)
+        ee.expand()
+
+        # Update known declarations
         self.decls.update(ee.expanded_decls)
         self._expanded = True
 
@@ -507,19 +511,35 @@ class ExpressionExpander(object):
     CONST = -1
     ITVAR = -2
 
-    def __init__(self, hoisted, expr_graph):
+    # Track all expanded expressions
+    _expr_handled = []
+    # Temporary variables template
+    _expanded_sym = "CONST_EXP_%(expr_id)d_%(i)d"
+
+    def __init__(self, stmt, expr_info, hoisted, expr_graph, itvar_occs, itvar_exp):
+        self.stmt = stmt
+        self.expr_info = expr_info
         self.hoisted = hoisted
         self.expr_graph = expr_graph
+        self.itvar_occs = itvar_occs
+        self.itvar_exp = itvar_exp
+
+        # Set counters to create meaningful and unique (temporary) variable names
+        try:
+            self.expr_id = self._expr_handled.index(stmt)
+        except ValueError:
+            self._expr_handled.append(stmt)
+            self.expr_id = self._expr_handled.index(stmt)
+
         self.expanded_decls = {}
         self.found_consts = {}
         self.expanded_syms = []
 
-    def _do_expand(self, sym, const, op):
+    def _make_expansion(self, sym, const, op):
         """Perform the actual expansion. If there are no dependencies, then
         the already hoisted expression is expanded. Otherwise, if the symbol to
         be expanded occurs multiple times in the expression, or it depends on
         other hoisted symbols that will also be expanded, create a new symbol."""
-
         old_expr = self.hoisted[sym.symbol].expr
         var_decl = self.hoisted[sym.symbol].decl
         loop = self.hoisted[sym.symbol].loop
@@ -532,8 +552,9 @@ class ExpressionExpander(object):
         if const_str in self.found_consts:
             const = dcopy(self.found_consts[const_str])
         elif not isinstance(const, Symbol):
-            const_sym = Symbol("const%d" % len(self.found_consts), ())
-            new_const_decl = Decl("double", dcopy(const_sym), const)
+            const_sym = Symbol(self._expanded_sym % {'expr_id': self.expr_id,
+                                                     'i': len(self.found_consts)})
+            new_const_decl = Decl(self.expr_info.type, dcopy(const_sym), const)
             # Keep track of the expansion
             self.expanded_decls[new_const_decl.sym.symbol] = (new_const_decl,
                                                               plan.LOCAL_VAR)
@@ -567,28 +588,25 @@ class ExpressionExpander(object):
         self.expr_graph.add_dependency(sym, new_expr, 0)
         return sym
 
-    def expand(self, node, parent, itvars_occs, itvar_exp):
-        """Perform the expansion of the expression rooted in ``node``. Terms are
-        expanded along the iteration variable ``itvar_exp``."""
-
+    def _expand(self, node, parent):
         if isinstance(node, Symbol):
             if not node.rank:
                 return ([node], self.CONST)
-            elif node.rank[-1] not in itvars_occs.keys():
+            elif node.rank[-1] not in self.itvar_occs.keys():
                 return ([node], self.CONST)
             else:
                 return ([node], self.ITVAR)
         elif isinstance(node, Par):
-            return self.expand(node.children[0], node, itvars_occs, itvar_exp)
+            return self._expand(node.children[0], node)
         elif isinstance(node, FunCall):
             # Functions are considered potentially expandable
             return ([node], self.CONST)
         elif isinstance(node, (Prod, Div)):
-            l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
-            r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
+            l_node, l_type = self._expand(node.children[0], node)
+            r_node, r_type = self._expand(node.children[1], node)
             if l_type == self.ITVAR and r_type == self.ITVAR:
                 # Found an expandable product
-                to_exp = l_node if l_node[0].rank[-1] == itvar_exp else r_node
+                to_exp = l_node if l_node[0].rank[-1] == self.itvar_exp else r_node
                 return (to_exp, self.ITVAR)
             elif l_type == self.CONST and r_type == self.CONST:
                 # Product of constants; they are both used for expansion (if any)
@@ -603,7 +621,7 @@ class ExpressionExpander(object):
                     # Perform the expansion
                     if sym.symbol not in self.hoisted:
                         raise RuntimeError("Expansion error: no symbol: %s" % sym.symbol)
-                    replacing = self._do_expand(sym, const, node.__class__)
+                    replacing = self._make_expansion(sym, const, node.__class__)
                     if replacing:
                         to_replace[str(sym)] = replacing
                 ast_replace(node, to_replace, copy=True)
@@ -619,8 +637,8 @@ class ExpressionExpander(object):
                                       else to_replace[str(e)] for e in expandable))
                 return (expandable, self.ITVAR)
         elif isinstance(node, (Sum, Sub)):
-            l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
-            r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
+            l_node, l_type = self._expand(node.children[0], node)
+            r_node, r_type = self._expand(node.children[1], node)
             if l_type == self.ITVAR and r_type == self.ITVAR:
                 return (l_node + r_node, self.ITVAR)
             elif l_type == self.CONST and r_type == self.CONST:
@@ -629,3 +647,8 @@ class ExpressionExpander(object):
                 return (None, self.CONST)
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
+
+    def expand(self):
+        """Perform the expansion of the expression rooted in ``self.stmt``.
+        Terms are expanded along the iteration variable ``self.itvar_exp``."""
+        self._expand(self.stmt.children[1], self.stmt)
