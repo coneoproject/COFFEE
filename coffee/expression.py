@@ -135,4 +135,4 @@ def copy_metaexpr(expr_info, **kwargs):
         else:
             new_loops_info.append(loop_info)
 
-    return MetaExpr(parent, new_loops_info, unit_stride_itvars)
+    return MetaExpr(expr_info.type, parent, new_loops_info, unit_stride_itvars)

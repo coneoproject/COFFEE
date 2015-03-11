@@ -334,7 +334,8 @@ class ExpressionFissioner(LoopScheduler):
 
             # Append the left-split expression, reusing existing loop nest
             expr_parent.children[index] = stmt_left
-            split = (stmt_left, MetaExpr(expr_parent,
+            split = (stmt_left, MetaExpr(expr_info.type,
+                                         expr_parent,
                                          expr_info.loops_info,
                                          expr_info.unit_stride_itvars))
 
@@ -357,7 +358,8 @@ class ExpressionFissioner(LoopScheduler):
                 expr_parent.children.insert(index, stmt_right)
                 new_unit_stride_innerloop_block = expr_parent
                 new_loops_info = expr_info.loops_info
-            splittable = (stmt_right, MetaExpr(new_unit_stride_innerloop_block,
+            splittable = (stmt_right, MetaExpr(expr_info.type,
+                                               new_unit_stride_innerloop_block,
                                                new_loops_info,
                                                expr_info.unit_stride_itvars))
             return (split, splittable)
