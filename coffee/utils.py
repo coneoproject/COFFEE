@@ -81,8 +81,8 @@ def unroll_factors(loops):
     a chance of auto-vectorizing them; 2) loops sizes must be a multiple of the
     unroll factor.
 
-    :arg:loops: list of for loops for which a suitable unroll factor has to be
-                determined.
+    :param loops: list of for loops for which a suitable unroll factor has to be
+                  determined.
     """
 
     loops_unroll = OrderedDict()
@@ -475,14 +475,14 @@ def count_occurrences(node, key=0, read_only=False):
 
         ``{a: 2, b: 1, c: 1}``
 
-    :arg key: This can be any value in [0, 1, 2]. The keys used in the returned
-              dictionary can be:
-
-              * ``key == 0``: a tuple (symbol name, symbol rank)
-              * ``key == 1``: the symbol name
-              * ``key == 2``: a string representation of the symbol
-    :arg read_only: True if only variables on the right-hand side of a statement
-                    should be counted; False if any appearance should be counted.
+    :param node: Root of the visited AST
+    :param key: This can be any value in [0, 1, 2]. The keys used in the returned
+                dictionary can be:
+                * ``key == 0``: a tuple (symbol name, symbol rank)
+                * ``key == 1``: the symbol name
+                * ``key == 2``: a string representation of the symbol
+    :param read_only: True if only variables on the right-hand side of a statement
+                      should be counted; False if any appearance should be counted.
     """
 
     def count(node, counter):

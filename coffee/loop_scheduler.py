@@ -58,17 +58,16 @@ class LoopScheduler(object):
 
 class SSALoopMerger(LoopScheduler):
 
-    """Analyze data dependencies and iteration spaces, then merge fusable
-    loops.
+    """Analyze data dependencies and iteration spaces, then merge fusible loops.
     Statements must be in "soft" SSA form: they can be declared and initialized
     at declaration time, then they can be assigned a value in only one place."""
 
     def __init__(self, root, expr_graph):
         """Initialize the SSALoopMerger.
 
-        :arg expr_graph: the ExpressionGraph tracking all data dependencies
-                         involving identifiers that appear in ``root``.
-        :arg root: the node where loop scheduling takes place."""
+        :param expr_graph: the ExpressionGraph tracking all data dependencies
+                           involving identifiers that appear in ``root``.
+        :param root: the node where loop scheduling takes place."""
         self.root = root
         self.expr_graph = expr_graph
         self.merged_loops = []
@@ -224,7 +223,7 @@ class SSALoopMerger(LoopScheduler):
               A[i] = B[i] + C[i]
               D[i] = A[i]
 
-        Note this last step is not done by compilers like intel's (version 14).
+        Note this last step is not done by compilers like Intel's (version 14).
         """
 
         def replace_expr(node, parent, parent_idx, itvar, hoisted_expr):
@@ -261,7 +260,7 @@ class ExpressionFissioner(LoopScheduler):
     def __init__(self, cut):
         """Initialize the ExpressionFissioner.
 
-        :arg cut: number of operands requested to fission expressions."""
+        :param cut: number of operands requested to fission expressions."""
         self.cut = cut
 
     def _split_sum(self, node, parent, is_left, found, sum_count):
@@ -373,14 +372,14 @@ class ExpressionFissioner(LoopScheduler):
         Return a dictionary of all of the split chunks, in which each entry has
         the same format of ``stmt_info``.
 
-        :arg stmt_info:  the expression that needs to be split. This is given as
-                         a tuple of two elements: the former is the expression
-                         root node; the latter includes info about the expression,
-                         particularly iteration variables of the enclosing loops,
-                         the enclosing loops themselves, and the parent block.
-        :arg copy_loops: true if the split expressions should be placed in two
-                         separate, adjacent loop nests (iterating, of course,
-                         along the same iteration space); false, otherwise."""
+        :param stmt_info: the expression that needs to be split. This is given as
+                          a tuple of two elements: the former is the expression
+                          root node; the latter includes info about the expression,
+                          particularly iteration variables of the enclosing loops,
+                          the enclosing loops themselves, and the parent block.
+        :param copy_loops: true if the split expressions should be placed in two
+                           separate, adjacent loop nests (iterating, of course,
+                           along the same iteration space); false, otherwise."""
 
         split_stmts = {}
         splittable_stmt = stmt_info
@@ -415,12 +414,12 @@ class ZeroLoopScheduler(LoopScheduler):
     def __init__(self, exprs, expr_graph, decls):
         """Initialize the ZeroLoopScheduler.
 
-        :arg exprs: the expressions for which the zero-elimination is performed.
-        :arg expr_graph: the ExpressionGraph tracking all data dependencies involving
-                         identifiers that appear in ``root``.
-        :arg decls: lists of array declarations. A 2-tuple is expected: the first
-                    element is the list of kernel declarations; the second element
-                    is the list of hoisted temporaries declarations.
+        :param exprs: the expressions for which the zero-elimination is performed.
+        :param expr_graph: the ExpressionGraph tracking all data dependencies involving
+                           identifiers that appear in ``root``.
+        :param decls: lists of array declarations. A 2-tuple is expected: the first
+                      element is the list of kernel declarations; the second element
+                      is the list of hoisted temporaries declarations.
         """
         self.exprs = exprs
         self.expr_graph = expr_graph
@@ -573,10 +572,9 @@ class ZeroLoopScheduler(LoopScheduler):
         such that:
         ((<for i>, <for j>), root) -> {A: (i, (nz_along_i)), (j, (nz_along_j))}
 
-        :arg node:      the node being currently inspected for tracking zero
-                        blocks
-        :arg parent:    the parent node of ``node``
-        :arg loop_nest: tuple of for loops enclosing ``node``
+        :param node: the node being currently inspected for tracking zero blocks
+        :param parent: the parent node of ``node``
+        :param loop_nest: tuple of for loops enclosing ``node``
         """
         if isinstance(node, (Assign, Incr, Decr)):
             symbol = node.children[0].symbol

@@ -90,6 +90,7 @@ class ExpressionRewriter(object):
         :param compact_tmps: True if temporaries accessed only once should be inlined.
         """
         self.expr_hoister.licm()
+        stmt_hoisted = self.expr_hoister._expr_handled
 
         # Try to merge the hoisted loops, because they might have the same
         # iteration space (call to merge()), and also possibly share some
@@ -103,14 +104,15 @@ class ExpressionRewriter(object):
 
         # Remove temporaries created yet accessed only once
         if compact_tmps:
-            stmt_occs = count_occurrences(self.stmt, key=1, read_only=True)
+            stmt_occs = {k:v for d in [count_occurrences(stmt, key=1, read_only=True)
+                         for stmt in stmt_hoisted] for k, v in d.items()}
             for l in self.hoisted.all_loops:
                 l_occs = count_occurrences(l, key=0, read_only=True)
                 to_replace, to_delete = {}, []
                 for sym_rank, sym_occs in l_occs.items():
-                    # If the symbol appears once is a potential candidate for
-                    # being removed. It is actually removed if it does't appear
-                    # in the expression from which was extracted. Symbols appearing
+                    # If the symbol appears once, then it is a potential candidate
+                    # for removal. It is actually removed if it does't appear in
+                    # the expression from which was extracted. Symbols appearing
                     # more than once are removed if they host an expression made
                     # of just one symbol
                     sym, rank = sym_rank
