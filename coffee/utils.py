@@ -109,20 +109,23 @@ def postprocess(node):
         end = None
         decls = {}
         blockable = []
+        _processed = []
 
-    process = Process()
-
-    def reset():
-        process.start = None
-        process.end = None
-        process.decls = {}
-        process.blockable = []
+        @staticmethod
+        def mark(node):
+            if Process.start is not None:
+                Process._processed.append((node, Process.start, Process.end,
+                                           Process.decls, Process.blockable))
+            Process.start = None
+            Process.end = None
+            Process.decls = {}
+            Process.blockable = []
 
     def init_decl(stmt):
         if not isinstance(stmt, Assign):
             return False
         lhs, rhs = stmt.children
-        decl = process.decls.get(lhs.symbol)
+        decl = Process.decls.get(lhs.symbol)
         if decl:
             decl.init = rhs
             return True
@@ -130,39 +133,36 @@ def postprocess(node):
 
     def update(node, parent):
         index = parent.children.index(node)
-        if process.start is None:
-            process.start = index
-        process.end = index
+        if Process.start is None:
+            Process.start = index
+        Process.end = index
         if not init_decl(node):
-            process.blockable.append(node)
+            Process.blockable.append(node)
 
-    def make_block(node):
-        start, end = process.start, process.end
-        if start is not None:
-            node.children[start:end+1] = [Block(process.blockable, open_scope=False)]
-        reset()
+    def make_blocks():
+        for node, start, end, _, blockable in reversed(Process._processed):
+            node.children[start:end+1] = [Block(blockable, open_scope=False)]
 
     def _postprocess(node, parent):
         if isinstance(node, FlatBlock) and str(node).isspace():
             update(node, parent)
         elif isinstance(node, (For, If, Switch, FunCall, FunDecl, FlatBlock, LinAlg,
-                             Block, Root)):
-            # A group of statements can be blockified either on the entry point
-            # or on the exit point of a new scope
-            make_block(parent)
+                               Block, Root)):
+            Process.mark(parent)
             for n in node.children:
                 _postprocess(n, node)
-            make_block(node)
+            Process.mark(node)
         elif isinstance(node, Decl):
-            if not (node.init and not isinstance(node.init, EmptyStatement)):
-                process.decls[node.sym.symbol] = node
+            if not (node.init and not isinstance(node.init, EmptyStatement)) and \
+                    not node.sym.rank:
+                Process.decls[node.sym.symbol] = node
             update(node, parent)
         elif isinstance(node, (Assign, Incr, Decr, IMul, IDiv)):
             update(node, parent)
-        else:
-            reset()
 
     _postprocess(node, None)
+    make_blocks()
+
 
 #####################################
 # Functions to manipulate AST nodes #
