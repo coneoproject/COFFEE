@@ -512,9 +512,9 @@ class Invert(Statement, Perfect, Linalg):
   int info;
 
   dgetrf_(&n,&n,%s,&lda,ipiv,&info);
-  dgetri_(&n,A,&lda,ipiv,work,&lwork,&info);
+  dgetri_(&n,%s,&lda,ipiv,work,&lwork,&info);
 }
-""" % (str(dim), str(lda), str(sym))
+""" % (str(dim), str(lda), str(sym), str(sym))
 
 
 class Decl(Statement, Perfect):
