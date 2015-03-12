@@ -330,11 +330,11 @@ def visit(node, parent=None, search=None):
 
     info = {
         'fors': [],
-        'decls': {},
-        'symbols': {},
-        'symbols_mode': {},
+        'decls': OrderedDict(),
+        'symbols': OrderedDict(),
+        'symbols_mode': OrderedDict(),
         'symbol_refs': defaultdict(list),
-        'exprs': {},
+        'exprs': OrderedDict(),
         'max_depth': 0,
         'search': defaultdict(list)
     }

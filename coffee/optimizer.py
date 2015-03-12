@@ -31,8 +31,6 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from copy import deepcopy as dcopy
-
 from base import *
 from utils import *
 from expression import MetaExpr
@@ -67,7 +65,7 @@ class LoopOptimizer(object):
 
         # Inspect the loop nest and collect info
         info = visit(self.loop, self.header)
-        self.decls, self.exprs = ({}, {})
+        self.decls, self.exprs = (OrderedDict(), OrderedDict())
         for decl_str, decl in info['decls'].items():
             self.decls[decl_str] = (decl, plan.LOCAL_VAR)
         all_decls = dict([(decl_str, decl_scope[0]) for decl_str, decl_scope
