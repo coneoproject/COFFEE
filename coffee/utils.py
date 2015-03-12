@@ -100,6 +100,70 @@ def unroll_factors(loops):
     return loops_unroll
 
 
+def postprocess(node):
+    """Rearrange the Nodes in the AST rooted in ``node`` to improve the code quality
+    when unparsing the tree."""
+
+    class Process:
+        start = None
+        end = None
+        decls = {}
+        blockable = []
+
+    process = Process()
+
+    def reset():
+        process.start = None
+        process.end = None
+        process.decls = {}
+        process.blockable = []
+
+    def init_decl(stmt):
+        if not isinstance(stmt, Assign):
+            return False
+        lhs, rhs = stmt.children
+        decl = process.decls.get(lhs.symbol)
+        if decl:
+            decl.init = rhs
+            return True
+        return False
+
+    def update(node, parent):
+        index = parent.children.index(node)
+        if process.start is None:
+            process.start = index
+        process.end = index
+        if not init_decl(node):
+            process.blockable.append(node)
+
+    def make_block(node):
+        start, end = process.start, process.end
+        if start is not None:
+            node.children[start:end+1] = [Block(process.blockable, open_scope=False)]
+        reset()
+
+    def _postprocess(node, parent):
+        if isinstance(node, FlatBlock) and str(node).isspace():
+            update(node, parent)
+        elif isinstance(node, (For, If, Switch, FunCall, FunDecl, FlatBlock, LinAlg,
+                             Block, Root)):
+            # A group of statements can be blockified either on the entry point
+            # or on the exit point of a new scope
+            make_block(parent)
+            for n in node.children:
+                _postprocess(n, node)
+            make_block(node)
+        elif isinstance(node, Decl):
+            if not (node.init and not isinstance(node.init, EmptyStatement)):
+                process.decls[node.sym.symbol] = node
+            update(node, parent)
+        elif isinstance(node, (Assign, Incr, Decr, IMul, IDiv)):
+            update(node, parent)
+        else:
+            reset()
+
+    _postprocess(node, None)
+
 #####################################
 # Functions to manipulate AST nodes #
 #####################################

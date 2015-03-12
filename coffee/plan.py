@@ -34,7 +34,7 @@
 """COFFEE's optimization plan constructor."""
 
 from base import *
-from utils import increase_stack, unroll_factors, flatten, bind
+from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer
 from autotuner import Autotuner
@@ -410,6 +410,9 @@ class ASTKernel(object):
 
         # Increase stack size if too much space is used on the stack
         increase_stack(loop_opts)
+
+        # Post processing of the AST ensures higher-quality code
+        postprocess(self.ast)
 
     def gencode(self):
         """Generate a string representation of the AST."""
