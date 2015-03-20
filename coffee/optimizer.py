@@ -408,7 +408,7 @@ class GPULoopOptimizer(LoopOptimizer):
 
         info = visit(self.loop, self.header)
         fors_list = info['fors']
-        syms = info['symbols']
+        symbols = info['symbols_dep']
 
         itspace_vrs = set()
         for fors in fors_list:
@@ -421,7 +421,6 @@ class GPULoopOptimizer(LoopOptimizer):
                 parent.remove(node)
                 itspace_vrs.add(node.itvar)
 
-        from utils import any_in
-        accessed_vrs = [s for s in syms if any_in(s.rank, itspace_vrs)]
+        accessed_vrs = [s for s in symbols if any_in(s.rank, itspace_vrs)]
 
         return (itspace_vrs, accessed_vrs)

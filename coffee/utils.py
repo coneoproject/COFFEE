@@ -316,8 +316,8 @@ def visit(node, parent=None, search=None):
 
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
     * Declarations - a dictionary {variable name (str): declaration (AST node)}
-    * Symbols - a dictionary {symbol (AST node): iter space (tuple of loop indices)}
-    * Symbols access mode - a dictionary {symbol (AST node): access mode (WRITE, ...)}
+    * Symbols (dependencies) - a dictionary {symbol (AST node): [loops] it depends on}
+    * Symbols (access mode) - a dictionary {symbol (AST node): access mode (WRITE, ...)}
     * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
     * Maximum depth - an integer representing the depth of the most depth loop nest
@@ -331,7 +331,7 @@ def visit(node, parent=None, search=None):
     info = {
         'fors': [],
         'decls': OrderedDict(),
-        'symbols': OrderedDict(),
+        'symbols_dep': OrderedDict(),
         'symbols_mode': OrderedDict(),
         'symbol_refs': defaultdict(list),
         'exprs': OrderedDict(),
@@ -387,15 +387,18 @@ def visit(node, parent=None, search=None):
             info['decls'][node.sym.symbol] = node
             inspect(node.sym, node)
         elif isinstance(node, Symbol):
+            cur_nest = info['cur_nest']
+            # First, assume it's READ-only...
             access_mode = (READ, parent.__class__)
+            dep = [l for l, _ in cur_nest if l.itvar in node.rank]
             if mode and mode in [WRITE]:
-                info['symbols_written'][node.symbol] = info['cur_nest']
+                # ...adjust if actually a WRITE...
+                info['symbols_written'][node.symbol] = cur_nest
                 access_mode = (WRITE, parent.__class__)
-            dep_itspace = node.loop_dep
             if node.symbol in info['symbols_written']:
-                dep_loops = info['symbols_written'][node.symbol]
-                dep_itspace = tuple(l[0].itvar for l in dep_loops)
-            info['symbols'][node] = dep_itspace
+                # ...Finally update loop dependencies if not read-only
+                dep = tuple(l for l, _ in info['symbols_written'][node.symbol])
+            info['symbols_dep'][node] = dep
             info['symbols_mode'][node] = access_mode
             info['symbol_refs'][node.symbol].append((node, parent))
         elif isinstance(node, Expr):

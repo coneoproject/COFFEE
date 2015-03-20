@@ -345,7 +345,6 @@ class Symbol(Expr):
         self.symbol = symbol
         self.rank = rank
         self.offset = offset
-        self.loop_dep = tuple([i for i in rank if not str(i).isdigit()])
 
     def gencode(self, not_scope=True):
         points = ""

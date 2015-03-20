@@ -164,7 +164,7 @@ class LoopVectorizer(object):
                 continue
             # With padding, the computation runs on a /temporary/ padded
             # array, that in the follow we call buffer
-            # 1- Create and insert the temporary buffer at the top of the AST
+            # A- Create and insert the temporary buffer at the top of the AST
             buf_decl = dcopy(d)
             buf_sym = buf_decl.sym
             buf_sym.symbol = "_%s" % buf_sym.symbol
@@ -173,7 +173,7 @@ class LoopVectorizer(object):
                                                    '}'*len(new_rank)))
             padded_buf_syms[d.sym] = buf_sym
             self.loop_opt.header.children.insert(0, buf_decl)
-            # 2- Replace occurrences of symbol with the temporary buffer.
+            # B- Replace occurrences of symbol with the temporary buffer.
             # Also, determine how the temporary buffer is accessed.
             s_access_modes = []
             for s_ref, _ in symbol_refs[d.sym.symbol]:
@@ -183,7 +183,7 @@ class LoopVectorizer(object):
                 # by the way the AST is visited. In particular, we can expect
                 # them to be in order with the control flow.
                 s_access_modes.append(symbols_mode[s_ref])
-            # 3- Create and append the loop nest(s) for the copy into or from
+            # C- Create and append the loop nest(s) for the copy into or from
             # the temporary buffer. Depending on how the symbol is accessed
             # (read only, read and write, incremented, etc.), different sort
             # of copies are made.
