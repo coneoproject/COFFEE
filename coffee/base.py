@@ -901,15 +901,18 @@ def c_sym(const):
     return Symbol(const, ())
 
 
-def c_for(var, to, code, pragma="#pragma pyop2 itspace"):
+def c_for(var, to, code, pragma="#pragma pyop2 itspace", init=None):
     i = c_sym(var)
+    init = init or c_sym(0)
     end = c_sym(to)
     if type(code) == str:
         code = FlatBlock(code)
-    if type(code) is not Block:
+    elif type(code) == list:
+        code = Block(code, open_scope=True)
+    elif type(code) is not Block:
         code = Block([code], open_scope=True)
     return Block(
-        [For(Decl("int", i, c_sym(0)), Less(i, end), Incr(i, c_sym(1)),
+        [For(Decl("int", i, init), Less(i, end), Incr(i, c_sym(1)),
              code, pragma)], open_scope=True)
 
 
@@ -936,7 +939,7 @@ class Access(object):
 
 READ = Access("READ")
 WRITE = Access("WRITE")
-Rw = Access("RW")
+RW = Access("RW")
 INC = Access("INC")
 DEC = Access("DEC")
 IMUL = Access("IMUL")

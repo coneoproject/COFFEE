@@ -55,10 +55,9 @@ class LoopVectorizer(object):
     def alignment(self, decl_scope):
         """Align all data structures accessed in the loop nest to the size in
         bytes of the vector length."""
-
-        for d, s in decl_scope.values():
-            if d.sym.rank and s != ap.PARAM_VAR:
-                d.attr.append(self.comp["align"](self.intr["alignment"]))
+        for decl, scope in decl_scope.values():
+            if decl.sym.rank and scope != ap.PARAM_VAR:
+                decl.attr.append(self.comp["align"](self.intr["alignment"]))
 
     def padding(self, decl_scope):
         """Pad all data structures accessed in the loop nest to the nearest
@@ -67,25 +66,168 @@ class LoopVectorizer(object):
         enforces data alignment of multi-dimensional arrays, add suitable
         pragmas to inner loops to inform the backend compiler about this
         property."""
+        info = visit(self.loop_opt.header, None, search=LinAlg)
+        symbols_dep = info['symbols_dep']
+        symbols_mode = info['symbols_mode']
+        symbol_refs = info['symbol_refs']
+        used_syms = [s.symbol for s in symbols_mode.keys()]
+        decl_scope = {s: ds for s, ds in decl_scope.items() if s in used_syms}
 
-        iloops = inner_loops(self.loop_opt.header)
-        adjusted_loops = []
-        # 1) Bound adjustment
-        # Bound adjustment consists of modifying the start point and the
+        # 0) Under some circumstances, do not apply padding
+        # A- Loop increments must be equal to 1, because at the moment the
+        #    machinery for ensuring the correctness of the transformation for
+        #    non-uniform and non-unitary increments is missing
+        for nest in info['fors']:
+            if any(l.increment != 1 for l, _ in nest):
+                return
+
+        # Heuristically assuming that the fastest varying dimension is the
+        # innermost (e.g., in A[x][y][z], z is the innermost dimension), padding
+        # occurs along such dimension
+        p_dim = -1
+      
+        # 1) Pad arrays by extending the innermost dimension. For example, if we
+        # assume a vector length of 4 and the following input code:
+        #
+        # void foo(int A[10][10]):
+        #   int B[10] = ...
+        #   for i = 0 to 10:
+        #     for j = 0 to 10:
+        #       A[i][j] = B[i][j]
+        #
+        # Then after padding we get:
+        #
+        # void foo(int A[10][10]):
+        #   int _A[10][12] = {{0.0}};
+        #   int B[10][12] = ...
+        #   for i = 0 to 10:
+        #     for j = 0 to 12:
+        #       _A[i][j] = B[i][j]
+        #
+        #   for i = 0 to 10:
+        #     for j = 0 to 10:
+        #       A[i][j] = _A[i][j]
+        #
+        # Also, extra care is taken in presence of offsets (e.g. A[i+3][j+3] ...)
+        for decl, scope in decl_scope.values():
+            if not decl.sym.rank:
+                continue
+            if scope == ap.LOCAL_VAR:
+                p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
+                if p_rank == decl.sym.rank:
+                    continue
+                decl.sym.rank = p_rank
+                self.padded.append(decl.sym)
+                continue
+            # Examined symbol is a FunDecl argument
+            # With padding, the computation runs on a /temporary/ padded array
+            # ('_A' in the example above), in the following referred to as 'buffer'.
+            #
+            # A- analyze /how/ the examined FunDecl argument is accessed; that is,
+            #    if it's read, written, or incremented; the iteration space; and the
+            #    actual data space (i.e., which entries are eventually accessed)
+            itspace, p_dataspace = [], []
+            s_refs, b_refs = [], []
+            for s_ref, _ in symbol_refs[decl.sym.symbol]:
+                if s_ref is decl.sym or not s_ref.rank:
+                    continue
+                s_refs.append(dcopy(s_ref))
+                # Track the iteration space of /s_ref/
+                s_itspace = itspace_from_for([l for l in symbols_dep[s_ref]
+                                              if l.itvar in s_ref.rank])
+                s_itspace = [(start, end) for start, end, _ in s_itspace]
+                itspace.append(s_itspace)
+                # Track the data space of /s_ref/ and analyze offsets to ensure
+                # the safeness of padding. Offsets can be adjusted to exploit
+                # the padded region
+                s_p_dataspace = s_itspace[p_dim]
+                if s_ref.offset:
+                    ofs = s_ref.offset[p_dim][-1]
+                    if not type(ofs) == int:
+                        raise RuntimeError("Illegal padding with non-static offsets")
+                    if ofs > 0:
+                        s_p_dataspace = tuple(i+ofs for i in s_p_dataspace)
+                        new_ofs = (s_ref.offset[p_dim][0], vect_roundup(ofs))
+                        s_ref.offset = s_ref.offset[:p_dim] + (new_ofs,)
+                p_dataspace.append(s_p_dataspace)
+                b_refs.append(s_ref)
+            itspace = [itspace_merge(r)[0] for r in zip(*itspace)]
+            if len(itspace_merge(p_dataspace)) > 1:
+                raise RuntimeError("Illegal padding with non-contiguous data space")
+            p_dataspace = [list(s_p_dataspace) for s_p_dataspace in set(p_dataspace)]
+            p_dataspace = sorted(p_dataspace)
+            # B- Determine the rank of the temporary buffer
+            shift = vect_roundup(p_dataspace[0][0]) - p_dataspace[0][0]
+            for s_p_dataspace in p_dataspace:
+                s_p_dataspace[0] += shift
+                s_p_dataspace[1] += shift
+                p_ofs = vect_roundup(s_p_dataspace[1])
+                shift += p_ofs - s_p_dataspace[1]
+                s_p_dataspace[1] = p_ofs
+            p_rank = decl.sym.rank[:p_dim] + (p_dataspace[-1][p_dim],)
+            if p_rank == decl.sym.rank:
+                continue
+            # C- Create the temporary buffer and insert it at the top of the AST
+            buf_decl = dcopy(decl)
+            buf_sym = buf_decl.sym
+            buf_sym.symbol = "_%s" % buf_sym.symbol
+            buf_sym.rank = p_rank
+            buf_decl.init = ArrayInit('%s0.0%s' % ('{'*len(p_rank), '}'*len(p_rank)))
+            self.loop_opt.header.children.insert(0, buf_decl)
+            # D- Replace any symbol occurrences with the temporary buffer
+            s_access_modes = []
+            for s_ref, _ in symbol_refs[decl.sym.symbol]:
+                if s_ref is decl.sym:
+                    continue
+                s_ref.symbol = buf_sym.symbol
+                s_access_modes.append(symbols_mode[s_ref])
+            # E- Create and append a loop nest(s) for copying data into/from
+            # the temporary buffer. Depending on how the symbol is accessed
+            # (read only, read and write, incremented, etc.), different sort
+            # of copies are made
+            first, last = s_access_modes[0], s_access_modes[-1]
+            if first[0] == READ:
+                copy, init = ast_c_make_copy(b_refs, s_refs, itspace, Assign)
+                self.loop_opt.header.children.insert(0, copy.children[0])
+            if last[0] == WRITE:
+                # If extra information (i.e., a pragma) is present telling that
+                # the argument does not need to be incremented because it does
+                # not contain any meaningful values, then we can safely write
+                # to it. This is an optimization to avoid increments when not
+                # necessarily required
+                d_access_mode = [p for p in decl.pragma if isinstance(p, Access)]
+                op = Assign if d_access_mode and d_access_mode[0] == WRITE else last[1]
+                copy, init = ast_c_make_copy(s_refs, b_refs, itspace, op)
+                self.loop_opt.header.children.append(copy.children[0])
+            # Update global data structures
+            self.padded.append(decl.sym)
+            decl_scope[buf_sym.symbol] = (buf_decl, ap.LOCAL_VAR)
+
+        # 2) Padding, handle special nodes
+        linalg_nodes = info['search'][LinAlg]
+        for n in linalg_nodes:
+            if isinstance(n, Invert):
+                _, _, lda = n.children
+                lda.symbol = vect_roundup(lda.symbol)
+
+        # 3) Bounds adjustment
+        # Bounds adjustment consists of modifying the start point and the
         # end point of an innermost loop (i.e. its bounds) and the offsets
         # of all of its statements such that the memory accesses are aligned
         # to the vector length.
-        # Bound adjustment of a loop is safe iff:
-        # 1- all statements's lhs in the loop body have as fastest varying
+        # Bounds adjustment of a loop is safe iff:
+        # A- all statements's lhs in the loop body have as fastest varying
         #    dimension the iteration variable of the innermost loop
-        # 2- the extra iterations fall either in a padded region, which will
-        #    be discarded by the kernel called, or in a zero-valued region.
-        #    This must be checked for every statement in the loop.
+        # B- the extra iterations fall either in a padded region or in a
+        #    zero-valued region; this must be checked for every statement
+        #    in the loop.
+        iloops = inner_loops(self.loop_opt.header)
+        adjusted_loops = []
         for l in iloops:
             adjust = True
             loop_size = 0
             lvar = l.itvar
-            # Condition 1
+            # Condition A
             for stmt in l.children[0].children:
                 sym = stmt.children[0]
                 if sym.rank:
@@ -93,7 +235,7 @@ class LoopVectorizer(object):
                 if not (sym.rank and sym.rank[-1] == lvar):
                     adjust = False
                     break
-            # Condition 2
+            # Condition B
             alignable_stmts = []
             nz_in_l = self.loop_opt.nz_in_fors.get(l, [])
             # Note that if nz_in_l is None, the full iteration space is traversed,
@@ -134,86 +276,13 @@ class LoopVectorizer(object):
                 if self.comp.get('force_simdization'):
                     l.pragma.add(self.comp['force_simdization'])
 
-        # 2) Adding pragma alignment is safe iff
-        # 1- the start point of the loop is a multiple of the vector length
-        # 2- the size of the loop is a multiple of the vector length (note that
+        # 4) Adding pragma alignment is safe iff
+        # A- the start point of the loop is a multiple of the vector length
+        # B- the size of the loop is a multiple of the vector length (note that
         #    at this point, we have already checked the loop increment is 1)
         for l in adjusted_loops:
             if not (l.start % self.intr["dp_reg"] and l.size % self.intr["dp_reg"]):
                 l.pragma.add(self.comp["decl_aligned_for"])
-
-        info = visit(self.loop_opt.header, None, search=LinAlg)
-
-        # 3) Padding
-        symbols_mode = info['symbols_mode']
-        symbol_refs = info['symbol_refs']
-        used_syms = [s.symbol for s in symbols_mode.keys()]
-        acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
-        padded_buf_syms = {}
-        for d, s in acc_decls:
-            if not d.sym.rank:
-                continue
-            if s != ap.PARAM_VAR:
-                d.sym.rank = d.sym.rank[:-1] + (vect_roundup(d.sym.rank[-1]),)
-                self.padded.append(d.sym)
-                continue
-            # Examined symbol is a FunDecl argument
-            old_rank = d.sym.rank
-            new_rank = tuple([vect_roundup(r) for r in d.sym.rank])
-            if old_rank == new_rank:
-                continue
-            # With padding, the computation runs on a /temporary/ padded
-            # array, that in the follow we call buffer
-            # A- Create and insert the temporary buffer at the top of the AST
-            buf_decl = dcopy(d)
-            buf_sym = buf_decl.sym
-            buf_sym.symbol = "_%s" % buf_sym.symbol
-            buf_sym.rank = new_rank
-            buf_decl.init = ArrayInit('%s0.0%s' % ('{'*len(new_rank),
-                                                   '}'*len(new_rank)))
-            padded_buf_syms[d.sym] = buf_sym
-            self.loop_opt.header.children.insert(0, buf_decl)
-            # B- Replace occurrences of symbol with the temporary buffer.
-            # Also, determine how the temporary buffer is accessed.
-            s_access_modes = []
-            for s_ref, _ in symbol_refs[d.sym.symbol]:
-                if s_ref is not d.sym:
-                    s_ref.symbol = buf_sym.symbol
-                # Note that the order access modes appear is exactly dictated
-                # by the way the AST is visited. In particular, we can expect
-                # them to be in order with the control flow.
-                s_access_modes.append(symbols_mode[s_ref])
-            # C- Create and append the loop nest(s) for the copy into or from
-            # the temporary buffer. Depending on how the symbol is accessed
-            # (read only, read and write, incremented, etc.), different sort
-            # of copies are made.
-            first, last = s_access_modes[0], s_access_modes[-1]
-            if first[0] == READ:
-                copy, init = ast_c_make_copy(buf_sym, d.sym, old_rank, Assign)
-                self.loop_opt.header.children.insert(0, copy.children[0])
-            if last[0] == WRITE:
-                # If extra information (i.e., a pragma) is present telling that
-                # the argument does not need to be incremented because it does
-                # not contain any meaningful values, then we can safely write
-                # to it. This is an optimization to avoid increments when not
-                # necessarily required.
-                d_access_mode = [p for p in d.pragma if isinstance(p, Access)]
-                op = Assign if d_access_mode and d_access_mode[0] == WRITE else last[1]
-                copy, init = ast_c_make_copy(d.sym, buf_sym, old_rank, op)
-                self.loop_opt.header.children.append(copy.children[0])
-            self.padded.append(d.sym)
-
-        # 4) Handle special nodes
-        linalg_nodes = info['search'][LinAlg]
-        for n in linalg_nodes:
-            if isinstance(n, Invert):
-                sym, _, lda = n.children
-                lda.symbol = vect_roundup(lda.symbol)
-                # Disgusting hack, replace the symbol name with the
-                # padded name.
-                for k, v in padded_buf_syms.iteritems():
-                    if sym.symbol == k.symbol:
-                        sym.symbol = v.symbol
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar
@@ -236,7 +305,6 @@ class LoopVectorizer(object):
           unroll-and-jam factor. Note that factor is just a suggestion to the
           compiler, which can freely decide to use a higher or lower value.
         """
-
         layout = None
         for stmt, expr_info in self.loop_opt.exprs.items():
             parent = expr_info.parent
@@ -393,7 +461,6 @@ class OuterProduct():
                     variables. Updated every time a new scalar variable is
                     encountered.
         """
-
         if isinstance(node, Symbol):
             if node.rank and self.loops[0].itvar == node.rank[-1]:
                 # The symbol depends on the outer loop dimension, so add offset
@@ -459,7 +526,6 @@ class OuterProduct():
                       memory are performed, or `OP_REGISTER_INC`, by means of
                       which left hand side's values are read from registers.
         """
-
         code = []
         t_regs = [Symbol(r, ()) for r in regs.get_tensor()]
         n_regs = len(t_regs)
@@ -508,7 +574,6 @@ class OuterProduct():
 
     def generate(self, rows):
         """Generate the outer-product intrinsics-based vectorisation code. """
-
         cols = self.intr["dp_reg"]
 
         # Determine order of loops w.r.t. the local tensor entries.
