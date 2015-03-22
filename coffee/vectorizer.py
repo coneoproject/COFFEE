@@ -50,7 +50,6 @@ class LoopVectorizer(object):
         self.loop_opt = loop_opt
         self.intr = intrinsics
         self.comp = compiler
-        self.padded = []
 
     def alignment(self, decl_scope):
         """Align all data structures accessed in the loop nest to the size in
@@ -117,7 +116,6 @@ class LoopVectorizer(object):
                 if p_rank == decl.sym.rank:
                     continue
                 decl.sym.rank = p_rank
-                self.padded.append(decl.sym)
                 continue
             # Examined symbol is a FunDecl argument
             # With padding, the computation runs on a /temporary/ padded array
@@ -200,7 +198,6 @@ class LoopVectorizer(object):
                 copy, init = ast_c_make_copy(s_refs, b_refs, itspace, op)
                 self.loop_opt.header.children.append(copy.children[0])
             # Update global data structures
-            self.padded.append(decl.sym)
             decl_scope[buf_sym.symbol] = (buf_decl, ap.LOCAL_VAR)
 
         # 2) Padding, handle special nodes
