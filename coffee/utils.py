@@ -292,14 +292,13 @@ def ast_c_make_copy(arr1, arr2, itspace, op):
     init = ArrayInit("0.0")
     if op == Assign:
         init = EmptyStatement()
-    rank = []
+    rank = ()
     for i, (start, end) in enumerate(itspace):
-        itvar = "i%d" % i
-        rank.append(itvar)
+        rank += ("i%d" % i,)
     arr1, arr2 = dcopy(arr1), dcopy(arr2)
     body = []
     for a1, a2 in zip(arr1, arr2):
-        a1.rank, a2.rank = rank, rank
+        a1.rank, a2.rank = rank, a2.rank[:-len(rank)] + rank
         body.append(op(a1, a2))
     for i, (start, end) in enumerate(itspace):
         if isinstance(init, ArrayInit):
