@@ -403,6 +403,8 @@ def visit(node, parent=None, search=None):
             info['symbols_dep'][node] = dep
             info['symbols_mode'][node] = access_mode
             info['symbol_refs'][node.symbol].append((node, parent))
+            for r in node.rank + node.offset:
+                inspect(r, node)
         elif isinstance(node, Expr):
             for child in node.children:
                 inspect(child, node)
