@@ -587,7 +587,8 @@ class Block(Statement):
     """Block of statements."""
 
     def __init__(self, stmts, pragma=None, open_scope=False):
-        if stmts and isinstance(stmts[0], Block):
+        if len(stmts) == 1 and isinstance(stmts[0], Block):
+            # Avoid nesting of blocks
             super(Block, self).__init__(stmts[0].children, pragma)
         else:
             super(Block, self).__init__(stmts, pragma)
