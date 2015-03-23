@@ -362,7 +362,7 @@ def visit(node, parent=None, search=None):
 
     def inspect(node, parent, mode=None):
         if search and isinstance(node, search):
-            info['search'][search].append(node)
+            info['search'][type(node)].append(node)
 
         if isinstance(node, EmptyStatement):
             pass

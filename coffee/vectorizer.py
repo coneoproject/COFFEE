@@ -201,11 +201,9 @@ class LoopVectorizer(object):
             decl_scope[buf_sym.symbol] = (buf_decl, ap.LOCAL_VAR)
 
         # 2) Padding, handle special nodes
-        linalg_nodes = info['search'][LinAlg]
-        for n in linalg_nodes:
-            if isinstance(n, Invert):
-                _, _, lda = n.children
-                lda.symbol = vect_roundup(lda.symbol)
+        for n in info['search'][Invert]:
+            _, _, lda = n.children
+            lda.symbol = vect_roundup(lda.symbol)
 
         # 3) Bounds adjustment
         # Bounds adjustment consists of modifying the start point and the
