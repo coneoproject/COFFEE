@@ -610,7 +610,9 @@ class For(Statement):
 
     def __init__(self, init, cond, incr, body, pragma=None):
         # If the body is a plain list, cast it to a Block.
-        if not isinstance(body, Node):
+        if not isinstance(body, Block):
+            if not isinstance(body, list):
+                body = [body]
             body = Block(body, open_scope=True)
 
         super(For, self).__init__([body], pragma)
