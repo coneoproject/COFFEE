@@ -355,9 +355,10 @@ def visit(node, parent=None, search=None):
                 delim = opts[2].find('(')
                 opt_name = opts[2][:delim].replace(" ", "")
                 opt_par = opts[2][delim:].replace(" ", "")
+                opt_par = tuple(opt_par.strip('()').split(','))
                 if opt_name == "assembly":
                     # Found high-level optimisation
-                    return (parent, fors, (opt_par[1], opt_par[3]))
+                    return (parent, fors, opt_par)
 
     def inspect(node, parent, mode=None):
         if search and isinstance(node, search):

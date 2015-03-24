@@ -227,6 +227,9 @@ class ExpressionRewriter(object):
         occurrences = count_occurrences(self.stmt.children[1], key=2)
         find_prod(self.stmt.children[1], occurrences, to_distr)
 
+        if not to_distr:
+            return
+
         # Create the new expression
         new_prods = []
         for d in to_distr.values():
