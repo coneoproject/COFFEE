@@ -725,6 +725,7 @@ class AVXLocalPermute(Statement):
     The intrinsic function used is ``_mm256_permute_pd``."""
 
     def __init__(self, r, mask):
+        super(AVXLocalPermute, self).__init__()
         self.r = r
         self.mask = mask
 
@@ -740,6 +741,7 @@ class AVXGlobalPermute(Statement):
     The intrinsic function used is ``_mm256_permute2f128_pd``."""
 
     def __init__(self, r1, r2, mask):
+        super(AVXGlobalPermute, self).__init__()
         self.r1 = r1
         self.r2 = r2
         self.mask = mask
@@ -757,6 +759,7 @@ class AVXUnpackHi(Statement):
     The intrinsic function used is ``_mm256_unpackhi_pd``."""
 
     def __init__(self, r1, r2):
+        super(AVXUnpackHi, self).__init__()
         self.r1 = r1
         self.r2 = r2
 
@@ -772,6 +775,7 @@ class AVXUnpackLo(Statement):
     The intrinsic function used is ``_mm256_unpacklo_pd``."""
 
     def __init__(self, r1, r2):
+        super(AVXUnpackLo, self).__init__()
         self.r1 = r1
         self.r2 = r2
 
