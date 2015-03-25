@@ -132,7 +132,7 @@ class LoopVectorizer(object):
                     adjusted_loops.append(l)
                 # Successful bound adjustment allows forcing simdization
                 if self.comp.get('force_simdization'):
-                    l.pragma.append(self.comp['force_simdization'])
+                    l.pragma.add(self.comp['force_simdization'])
 
         # 2) Adding pragma alignment is safe iff
         # 1- the start point of the loop is a multiple of the vector length
@@ -140,7 +140,7 @@ class LoopVectorizer(object):
         #    at this point, we have already checked the loop increment is 1)
         for l in adjusted_loops:
             if not (l.start % self.intr["dp_reg"] and l.size % self.intr["dp_reg"]):
-                l.pragma.append(self.comp["decl_aligned_for"])
+                l.pragma.add(self.comp["decl_aligned_for"])
 
         info = visit(self.loop_opt.header, None)
 

@@ -254,8 +254,8 @@ def visit(node, parent):
     def check_opts(node, parent, fors):
         """Check if node is associated with some pragmas. If that is the case,
         it saves info about the node to speed the transformation process up."""
-        if node.pragma:
-            opts = node.pragma[0].split(" ", 2)
+        for pragma in node.pragma:
+            opts = pragma.split(" ", 2)
             if len(opts) < 3:
                 return
             if opts[1] == "pyop2":
