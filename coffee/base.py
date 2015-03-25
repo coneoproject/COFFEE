@@ -496,27 +496,6 @@ class IDiv(Statement, Perfect):
         return idiv(sym.gencode(), exp.gencode()) + semicolon(scope)
 
 
-class Invert(Statement, Perfect, Linalg):
-    """In-place inversion of a square array."""
-    def __init__(self, sym, dim, pragma=None):
-        super(Invert, self).__init__([sym, dim, dim], pragma)
-
-    def gencode(self, scope=False):
-        sym, dim, lda = self.children
-        return """{
-  int n = %s;
-  int lda = %s;
-  int ipiv[n];
-  int lwork = n*n;
-  double work[lwork];
-  int info;
-
-  dgetrf_(&n,&n,%s,&lda,ipiv,&info);
-  dgetri_(&n,A,&lda,ipiv,work,&lwork,&info);
-}
-""" % (str(dim), str(lda), str(sym))
-
-
 class Decl(Statement, Perfect):
 
     """Declaration of a symbol.
@@ -780,6 +759,74 @@ class AVXSetZero(Statement):
 
     def gencode(self, scope=True):
         return "_mm256_setzero_pd ()" + semicolon(scope)
+
+
+# Linear Algebra classes
+
+
+class Invert(Statement, Perfect, Linalg):
+    """In-place inversion of a square array."""
+    def __init__(self, sym, dim, pragma=None):
+        super(Invert, self).__init__([sym, dim, dim], pragma)
+
+    def gencode(self, scope=False):
+        sym, dim, lda = self.children
+        return """{
+  int n = %s;
+  int lda = %s;
+  int ipiv[n];
+  int lwork = n*n;
+  double work[lwork];
+  int info;
+
+  dgetrf_(&n,&n,%s,&lda,ipiv,&info);
+  dgetri_(&n,%s,&lda,ipiv,work,&lwork,&info);
+}
+""" % (str(dim), str(lda), str(sym), str(sym))
+
+
+class Determinant1x1(Expr, Perfect, Linalg):
+
+    """Determinant of a 1x1 square array."""
+    def __init__(self, sym, pragma=None):
+        super(Determinant1x1, self).__init__([sym, 2, 2])
+
+    def gencode(self, scope=False):
+        sym, dim, lda = self.children
+        return Symbol(sym.gencode(), (0, 0))
+
+
+class Determinant2x2(Expr, Perfect, Linalg):
+
+    """Determinant of a 2x2 square array."""
+    def __init__(self, sym, pragma=None):
+        super(Determinant2x2, self).__init__([sym, 2, 2])
+
+    def gencode(self, scope=False):
+        sym, dim, lda = self.children
+        v = sym.gencode()
+        return Sub(Prod(Symbol(v, (0, 0)), Symbol(v, (1, 1))),
+                   Prod(Symbol(v, (0, 1)), Symbol(v, (1, 0))))
+
+
+class Determinant3x3(Expr, Perfect, Linalg):
+
+    """Determinant of a 3x3 square array."""
+    def __init__(self, sym, pragma=None):
+        super(Determinant3x3, self).__init__([sym, 2, 2])
+
+    def gencode(self, scope=False):
+        sym, dim, lda = self.children
+        v = sym.gencode()
+        a0 = Par(Sub(Prod(Symbol(v, (1, 1)), Symbol(v, (2, 2))),
+                     Prod(Symbol(v, (1, 2)), Symbol(v, (2, 1)))))
+        a1 = Par(Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 2))),
+                     Prod(Symbol(v, (1, 2)), Symbol(v, (2, 0)))))
+        a2 = Par(Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 1))),
+                     Prod(Symbol(v, (1, 1)), Symbol(v, (2, 0)))))
+        return Sum(Sub(Prod(Symbol(v, (0, 0)), a0),
+                       Prod(Symbol(v, (0, 1)), a1)),
+                   Prod(Symbol(v, (0, 2)), a2))
 
 
 # Extra ###
