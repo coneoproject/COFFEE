@@ -474,7 +474,7 @@ class OuterProduct():
             # Store in memory
             sym = tensor.symbol
             rank = tensor.rank
-            ofs = ((1, ofs), (1, 0))
+            ofs = ((1, 0), (1, ofs), (1, 0))
             load = self.intr["symbol_load"](sym, rank, ofs)
             return self.intr["store"](Symbol(sym, rank, ofs),
                                       self.intr["add"](load, out_reg))
@@ -496,11 +496,11 @@ class OuterProduct():
         t_regs = [Symbol(r, ()) for r in regs.get_tensor()]
         n_regs = len(t_regs)
 
-        # Determine tensor symbols
+        # Create tensor symbols
         tensor_syms = []
         for i in range(n_regs):
-            rank = (tensor.rank[0] + "+" + str(i), tensor.rank[1])
-            tensor_syms.append(Symbol(tensor.symbol, rank))
+            ofs = ((1, 0), (1, i), (1, 0))
+            tensor_syms.append(Symbol(tensor.symbol, tensor.rank, ofs))
 
         # Load LHS values from memory
         if mode == self.OP_STORE_IN_MEM:
@@ -509,8 +509,6 @@ class OuterProduct():
                 code.append(Decl(self.intr["decl_var"], j, load_sym))
 
         # In-register restoration of the tensor
-        # TODO: AVX only at the present moment
-        # TODO: here some __m256 vars could not be declared if rows < 4
         perm = self.intr["g_perm"]
         uphi = self.intr["unpck_hi"]
         uplo = self.intr["unpck_lo"]
