@@ -203,14 +203,9 @@ int main()
   c = 0;
 """
     _debug_template = """
-  // First discard padded region, then check output
-  double A_%(iter)s_debug[%(rows)s][%(cols)s] = {{0.0}};
-  for (int i_0 = 0; i_0 < %(rows)s; i_0++)
-    for (int i_1 = 0; i_1 < %(cols)s; i_1++)
-      A_%(iter)s_debug[i_0][i_1] = A_%(iter)s[i_0][i_1];
-  if(%(call_debug)s(A_0, A_%(iter)s_debug, out))
+  if(%(call_debug)s(A_0, A_%(iter)s, out))
   {
-    fprintf(out, "COFFEE Warning: code variants 0 and %%d differ\\n", %(iter)s);
+    fprintf(out, "COFFEE Warning: code variants 0 and %(iter)s differ\\n");
   }
 """
     _filename = "autotuning_code"
@@ -397,13 +392,15 @@ See %s for more info about the error""" % logfile)
 
             # Coefficients
             coeffs_syms = [f.sym.symbol.replace('*', '') for f in fun_decl.args[2:]]
-            coeffs_types = [f.typ for f in fun_decl.args[2:]]
+            coeffs_types = [f.typ.replace('*', '') for f in fun_decl.args[2:]]
             coeffs_decl = ["%s " % t + f + "_%d[%d][1]" % (i, coeffs_size[f]) for t, f
                            in zip(coeffs_types, coeffs_syms)]
 
             # Adjust kernel's signature
+            fun_decl.args[1].typ = "double"
             fun_decl.args[1].sym = Symbol(coords_sym, ("%d" % coords_size, 1))
             for d, f in zip(fun_decl.args[2:], coeffs_syms):
+                d.typ = "double"
                 d.sym = Symbol(f, ("%d" % coeffs_size[f], 1))
 
             # Adjust symbols names for kernel invokation
@@ -445,8 +442,6 @@ See %s for more info about the error""" % logfile)
             if not used_opts.get('blas'):
                 debug_code.append(Autotuner._debug_template % {
                     'iter': i,
-                    'rows': lt_rows,
-                    'cols': lt_cols,
                     'call_debug': "compare_2d"
                 })
 

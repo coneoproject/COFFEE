@@ -297,9 +297,12 @@ class ASTKernel(object):
 
             return loop_opts
 
+        kernels = visit(self.ast, None, search=FunDecl)['search'][FunDecl]
         if opts.get('autotune'):
             if not (compiler and intrinsics):
                 raise RuntimeError("Must initialize COFFEE prior to autotuning")
+            if len(kernels) > 1:
+                raise RuntimeError("Cannot autotune if multiple functions are present")
             # Set granularity of autotuning
             resolution = autotune_resolution
             autotune_configs = autotune_all
@@ -312,10 +315,10 @@ class ASTKernel(object):
             variants = []
             autotune_configs_uf = []
             tunable = True
-            original_ast = dcopy(kernel)
+            original_ast = dcopy(self.ast)
             for opt, params in autotune_configs:
                 # Generate basic kernel variants
-                loop_opts = _generate_cpu_code(self, kernel, **params)
+                loop_opts = _generate_cpu_code(self, self.ast, **params)
                 if not loop_opts:
                     # No expressions, nothing to tune
                     tunable = False
@@ -323,8 +326,8 @@ class ASTKernel(object):
                 # Increase the stack size, if needed
                 increase_stack(loop_opts)
                 # Add the base variant to the autotuning process
-                variants.append((kernel, params))
-                kernel = dcopy(original_ast)
+                variants.append((self.ast, params))
+                self.ast = dcopy(original_ast)
 
                 # Calculate variants characterized by different unroll factors,
                 # determined heuristically
@@ -352,9 +355,9 @@ class ASTKernel(object):
 
             # On top of some of the basic kernel variants, apply unroll/unroll-and-jam
             for _, params in autotune_configs_uf:
-                loop_opts = _generate_cpu_code(self, kernel, **params)
-                variants.append((kernel, params))
-                kernel = dcopy(original_ast)
+                loop_opts = _generate_cpu_code(self, self.ast, **params)
+                variants.append((self.ast, params))
+                self.ast = dcopy(original_ast)
 
             if tunable:
                 # Determine the fastest kernel implementation
@@ -407,7 +410,6 @@ class ASTKernel(object):
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
-        kernels = visit(self.ast, None, search=FunDecl)['search'][FunDecl]
         for kernel in kernels:
             # Generate a specific code version
             loop_opts = _generate_cpu_code(self, kernel, **params)
