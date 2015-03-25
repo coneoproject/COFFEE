@@ -644,6 +644,14 @@ class For(Statement):
     def increment(self):
         return self.incr.children[1].symbol
 
+    @property
+    def body(self):
+        return self.children[0].children
+
+    @body.setter
+    def body(self, new_body):
+        self.children[0].children = new_body
+
     def gencode(self, not_scope=False):
         return "\n".join(self.pragma) + "\n" + for_loop(self.init.gencode(True),
                                                         self.cond.gencode(),
@@ -708,6 +716,14 @@ class FunDecl(Statement):
         self.name = name
         self.args = args
         self.headers = headers or []
+
+    @property
+    def body(self):
+        return self.children[0].children
+
+    @body.setter
+    def body(self, new_body):
+        self.children[0].children = new_body
 
     def gencode(self):
         headers = "" if not self.headers else \

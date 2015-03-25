@@ -186,9 +186,9 @@ class LoopOptimizer(object):
             elif isinstance(node, For):
                 # Precompute and/or Vector-expand inner statements
                 new_children = []
-                for n in node.children[0].children:
+                for n in node.body:
                     precompute_stmt(n, precomputed, new_children)
-                node.children[0].children = new_children
+                node.body = new_children
                 new_outer_block.append(node)
             else:
                 raise RuntimeError("Precompute error: unexpteced node: %s" % str(node))
@@ -209,7 +209,7 @@ class LoopOptimizer(object):
                     do_not_precompute.add(l.decl)
                     do_not_precompute.add(l.loop)
         to_remove, precomputed_block, precomputed_syms = ([], [], {})
-        for i in self.loop.children[0].children:
+        for i in self.loop.body:
             if i in flatten(self.expr_unit_stride_loops):
                 break
             elif i not in do_not_precompute:
@@ -217,7 +217,7 @@ class LoopOptimizer(object):
                 to_remove.append(i)
         # Remove precomputed statements
         for i in to_remove:
-            self.loop.children[0].children.remove(i)
+            self.loop.body.remove(i)
 
         # Wrap hoisted for/assignments/increments within a loop
         new_outer_block = []
@@ -416,7 +416,7 @@ class GPULoopOptimizer(LoopOptimizer):
                 if '#pragma pyop2 itspace' not in node.pragma:
                     continue
                 parent = parent.children
-                for n in node.children[0].children:
+                for n in node.body:
                     parent.insert(parent.index(node), n)
                 parent.remove(node)
                 itspace_vrs.add(node.itvar)

@@ -244,7 +244,7 @@ class SSALoopMerger(LoopScheduler):
 
         hoisted_expr = {}
         for loop in self.merged_loops:
-            block = loop.children[0].children
+            block = loop.body
             for stmt in block:
                 sym, expr = stmt.children
                 replace_expr(expr.children[0], expr, 0, loop.itvar, hoisted_expr)
@@ -342,7 +342,7 @@ class ExpressionFissioner(LoopScheduler):
             if copy_loops:
                 # Create a new loop nest
                 new_unit_stride_outerloop = dcopy(unit_stride_outerloop)
-                new_unit_stride_innerloop = new_unit_stride_outerloop.children[0].children[0]
+                new_unit_stride_innerloop = new_unit_stride_outerloop.body[0]
                 new_unit_stride_innerloop_block = new_unit_stride_innerloop.children[0]
                 new_unit_stride_innerloop_block.children[0] = stmt_right
                 new_unit_stride_outerloop_info = (new_unit_stride_outerloop,

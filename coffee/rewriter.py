@@ -130,7 +130,7 @@ class ExpressionRewriter(object):
                     to_replace[str(Symbol(sym, rank))] = expr
                     to_delete.append(sym)
 
-                for stmt in l.children[0].children:
+                for stmt in l.body:
                     symbol, expr = stmt.children
                     sym = symbol.symbol
                     ast_replace(expr, to_replace, copy=True)
@@ -579,7 +579,7 @@ class ExpressionExpander(object):
         new_var_decl = dcopy(var_decl)
         new_var_decl.sym.symbol = sym.symbol
         # Append new expression and declaration
-        loop.children[0].children.append(new_node)
+        loop.body.append(new_node)
         place.children.insert(place.children.index(var_decl), new_var_decl)
         self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, plan.LOCAL_VAR)
         self.expanded_syms.append(new_var_decl.sym)

@@ -196,7 +196,7 @@ class LoopVectorizer(object):
             adjust = True
             # Condition A- all lvalues must have as fastest varying dimension the
             # one dictated by the innermost loop
-            for stmt in l.children[0].children:
+            for stmt in l.body:
                 sym = stmt.children[0]
                 if not (sym.rank and sym.rank[-1] == l.itvar):
                     adjust = False
@@ -603,9 +603,9 @@ class OuterProduct():
             # Initialiser
             for r in regs.get_tensor():
                 decl = Decl(self.intr["decl_var"], Symbol(r, ()), self.intr["setzero"])
-                self.loops[1].children[0].children.insert(0, decl)
+                self.loops[1].body.insert(0, decl)
             # Tensor layout
-            self.loops[1].children[0].children.extend(layout)
+            self.loops[1].body.extend(layout)
             layout = None
 
         return (stmt, layout)

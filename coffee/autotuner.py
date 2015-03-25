@@ -414,9 +414,8 @@ See %s for more info about the error""" % logfile)
 
             # Remove any static const declaration from the kernel (they are declared
             # just once at the beginning of the file, to reduce code size)
-            fun_body = fun_decl.children[0].children
-            global_decls = "\n".join([str(s) for s in fun_body if is_global(s)])
-            fun_decl.children[0].children = [s for s in fun_body if not is_global(s)]
+            global_decls = "\n".join([str(s) for s in fun_decl.body if is_global(s)])
+            fun_decl.body = [s for s in fun_decl.body if not is_global(s)]
 
             # Initialize coefficients (if any)
             init_coeffs = ""
