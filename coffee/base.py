@@ -408,9 +408,9 @@ class Statement(Node):
     def __init__(self, children=None, pragma=None):
         super(Statement, self).__init__(children)
         if not pragma:
-            pragma = []
+            pragma = set()
         elif isinstance(pragma, str):
-            pragma = [pragma]
+            pragma = set([pragma])
         self.pragma = pragma
 
 
