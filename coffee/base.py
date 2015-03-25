@@ -785,6 +785,50 @@ class Invert(Statement, Perfect, Linalg):
 """ % (str(dim), str(lda), str(sym), str(sym))
 
 
+class Determinant1x1(Expr, Perfect, Linalg):
+
+    """Determinant of a 1x1 square array."""
+    def __init__(self, sym, pragma=None):
+        super(Determinant1x1, self).__init__([sym, 2, 2])
+
+    def gencode(self, scope=False):
+        sym, dim, lda = self.children
+        return Symbol(sym.gencode(), (0, 0))
+
+
+class Determinant2x2(Expr, Perfect, Linalg):
+
+    """Determinant of a 2x2 square array."""
+    def __init__(self, sym, pragma=None):
+        super(Determinant2x2, self).__init__([sym, 2, 2])
+
+    def gencode(self, scope=False):
+        sym, dim, lda = self.children
+        v = sym.gencode()
+        return Sub(Prod(Symbol(v, (0, 0)), Symbol(v, (1, 1))),
+                   Prod(Symbol(v, (0, 1)), Symbol(v, (1, 0))))
+
+
+class Determinant3x3(Expr, Perfect, Linalg):
+
+    """Determinant of a 3x3 square array."""
+    def __init__(self, sym, pragma=None):
+        super(Determinant3x3, self).__init__([sym, 2, 2])
+
+    def gencode(self, scope=False):
+        sym, dim, lda = self.children
+        v = sym.gencode()
+        a0 = Par(Sub(Prod(Symbol(v, (1, 1)), Symbol(v, (2, 2))),
+                     Prod(Symbol(v, (1, 2)), Symbol(v, (2, 1)))))
+        a1 = Par(Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 2))),
+                     Prod(Symbol(v, (1, 2)), Symbol(v, (2, 0)))))
+        a2 = Par(Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 1))),
+                     Prod(Symbol(v, (1, 1)), Symbol(v, (2, 0)))))
+        return Sum(Sub(Prod(Symbol(v, (0, 0)), a0),
+                       Prod(Symbol(v, (0, 1)), a1)),
+                   Prod(Symbol(v, (0, 2)), a2))
+
+
 # Extra ###
 
 
