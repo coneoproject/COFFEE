@@ -50,17 +50,17 @@ class LoopOptimizer(object):
 
         :param loop: root AST node of a loop nest
         :param header: parent AST node of ``loop``
-        :param kernel_decls: list of variable declarations that are visible
-                             within ``loop``
+        :param kernel_decls: list of Decl objects accessible in ``loop``
         """
         self.loop = loop
         self.header = header
         self.kernel_decls = kernel_decls
-        # Track nonzero regions accessed in the various loops
-        self.nz_in_fors = {}
-        # Expression graph tracking data dependencies
+
+        # Track nonzero regions accessed in the loop nest
+        self.nonzero_info = {}
+        # Track data dependencies
         self.expr_graph = ExpressionGraph()
-        # Dictionary contaning various information about hoisted expressions
+        # Track hoisted expressions
         self.hoisted = StmtTracker()
 
         # Inspect the loop nest and collect info
@@ -120,7 +120,7 @@ class LoopOptimizer(object):
         zls = ZeroLoopScheduler(self.exprs, self.expr_graph,
                                 (self.kernel_decls, self.hoisted))
         zls.reschedule()
-        self.nz_in_fors = zls.nz_in_fors
+        self.nonzero_info = zls.nonzero_info
 
     def precompute(self, mode=0):
         """Precompute statements out of ``self.loop``, which implies scalar

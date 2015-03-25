@@ -428,7 +428,7 @@ class ZeroLoopScheduler(LoopScheduler):
         self.nz_in_syms = {}
         # Track blocks accessed for evaluating symbols in the various for loops
         # rooted in root
-        self.nz_in_fors = OrderedDict()
+        self.nonzero_info = OrderedDict()
 
     def _get_nz_bounds(self, node):
         if isinstance(node, Symbol):
@@ -556,7 +556,7 @@ class ZeroLoopScheduler(LoopScheduler):
         If A is modified by some statements rooted in ``node``, then
         ``self.nz_in_syms["A"]`` will be modified accordingly.
 
-        This method also updates ``self.nz_in_fors``, which maps loop nests to
+        This method also updates ``self.nonzero_info``, which maps loop nests to
         the enclosed symbols' non-zero blocks. For example, given the following
         code: ::
 
@@ -568,7 +568,7 @@ class ZeroLoopScheduler(LoopScheduler):
               B = ...
         }
 
-        Once traversed the AST, ``self.nz_in_fors`` will contain a (key, value)
+        Once traversed the AST, ``self.nonzero_info`` will contain a (key, value)
         such that:
         ((<for i>, <for j>), root) -> {A: (i, (nz_along_i)), (j, (nz_along_j))}
 
@@ -609,9 +609,9 @@ class ZeroLoopScheduler(LoopScheduler):
                 key = loop_nest
                 itvar_nz_bounds = dict([(k, v) for k, v in itvar_nz_bounds.items()
                                         if k in [l.itvar for l in loop_nest]])
-                if key not in self.nz_in_fors:
-                    self.nz_in_fors[key] = []
-                self.nz_in_fors[key].append((node, itvar_nz_bounds))
+                if key not in self.nonzero_info:
+                    self.nonzero_info[key] = []
+                self.nonzero_info[key].append((node, itvar_nz_bounds))
         if isinstance(node, For):
             self._track_nz_blocks(node.children[0], node, loop_nest + (node,))
         if isinstance(node, (Root, Block)):
@@ -671,9 +671,9 @@ class ZeroLoopScheduler(LoopScheduler):
         """
 
         new_exprs = {}
-        new_nz_in_fors = {}
+        _nonzero_info = {}
         track_exprs = {}
-        for loop, stmt_itspaces in self.nz_in_fors.items():
+        for loop, stmt_itspaces in self.nonzero_info.items():
             fissioned_loops = defaultdict(list)
             # Fission the loops on an intermediate representation
             for stmt, stmt_itspace in stmt_itspaces:
@@ -705,13 +705,13 @@ class ZeroLoopScheduler(LoopScheduler):
                                                            'loops_info': loops_info})
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              **{'loop': loops_info[0][0], 'place': root})
-                new_nz_in_fors[loops_info[-1][0]] = stmt_ofs
+                _nonzero_info[loops_info[-1][0]] = stmt_ofs
                 # Append the created loops to the root
                 index = root.children.index(loop[0])
                 root.children.insert(index, loops_info[0][0])
             root.children.remove(loop[0])
 
-        self.nz_in_fors = new_nz_in_fors
+        self.nonzero_info = _nonzero_info
         return new_exprs
 
     def reschedule(self):

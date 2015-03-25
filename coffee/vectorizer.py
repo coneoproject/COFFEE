@@ -188,36 +188,29 @@ class LoopVectorizer(object):
             # Update the global data structure
             decl_scope[buffer.sym.symbol] = (buffer, ap.LOCAL_VAR)
 
-        # 2) Bounds adjustment
-        # Bounds adjustment consists of modifying the start point and the
-        # end point of an innermost loop (i.e. its bounds) and the offsets
-        # of all of its statements such that the memory accesses are aligned
-        # to the vector length.
-        # Bounds adjustment of a loop is safe iff:
-        # A- all statements's lhs in the loop body have as fastest varying
-        #    dimension the iteration variable of the innermost loop
-        # B- the extra iterations fall either in a padded region or in a
-        #    zero-valued region; this must be checked for every statement
-        #    in the loop.
+        # 2) Adjust the bounds (i.e. /start/ and /end/ points) of innermost loops
+        # such that memory accesses get aligned to the vector length. Safe iff:
         iloops = inner_loops(self.loop_opt.header)
         adjusted_loops = []
         for l in iloops:
             adjust = True
-            # Condition A
+            # Condition A- all lvalues must have as fastest varying dimension the
+            # one dictated by the innermost loop
             for stmt in l.children[0].children:
                 sym = stmt.children[0]
                 if not (sym.rank and sym.rank[-1] == l.itvar):
                     adjust = False
                     break
-            # Condition B
+            # Condition B- the extra iterations induced by bounds adjustment must
+            # not alter the result. This is the case if they fall either in a padded
+            # region or in a zero-valued region
+            nonzero_info_l = self.loop_opt.nonzero_info.get(l, [])
+            # If nonzero_info_l is None, the whole iteration space is traversed;
+            # this means that there is no trace of offsets in the statements
+            # enclosed by /l/, so bound adjustment is definitely safe.
             alignable_stmts = []
-            nz_in_l = self.loop_opt.nz_in_fors.get(l, [])
-            # Note that if nz_in_l is None, the full iteration space is traversed,
-            # from the beginning to the end, so no offsets are used and it's ok
-            # to adjust the top bound of the loop over the region that is going
-            # to be padded, at least for this statememt
             read_regions = defaultdict(list)
-            for stmt, ofs in nz_in_l:
+            for stmt, ofs in nonzero_info_l:
                 expr = dcopy(stmt.children[1])
                 ast_update_ofs(expr, dict([(l.itvar, 0)]))
                 l_ofs = dict(ofs)[l.itvar]
@@ -231,19 +224,19 @@ class LoopVectorizer(object):
                 read_regions[str(expr)].append((start_point, end_point))
             for rr in read_regions.values():
                 if len(itspace_merge(rr)) < len(rr):
-                    # Bound adjustment cause overlapping, so give up
+                    # Bound adjustment causes overlapping, so give up
                     adjust = False
                     break
             # Conditions checked, if both passed then adjust loop and offsets
             if adjust:
                 # Adjust end point
-                l.cond.children[1] = c_sym(vect_roundup(l.end))
+                l.cond.children[1] = Symbol(vect_roundup(l.end))
                 # Adjust start points
                 for stmt, ofs in alignable_stmts:
                     ast_update_ofs(stmt, ofs)
                 # If all statements were successfully aligned, then put a
                 # suitable pragma to tell the compiler
-                if len(alignable_stmts) == len(nz_in_l):
+                if len(alignable_stmts) == len(nonzero_info_l):
                     adjusted_loops.append(l)
                 # Successful bound adjustment allows forcing simdization
                 if self.comp.get('force_simdization'):
