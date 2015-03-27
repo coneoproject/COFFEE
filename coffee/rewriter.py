@@ -188,13 +188,18 @@ class ExpressionRewriter(object):
             A[i]*(B[j] + C[j])."""
 
         def find_prod(node, occs, to_distr):
-            if isinstance(node, Par):
+            if isinstance(node, Symbol):
+                return
+            elif isinstance(node, Par):
                 find_prod(node.children[0], occs, to_distr)
             elif isinstance(node, Sum):
-                find_prod(node.children[0], occs, to_distr)
-                find_prod(node.children[1], occs, to_distr)
+                left, right = (node.children[0], node.children[1])
+                find_prod(left, occs, to_distr)
+                find_prod(right, occs, to_distr)
             elif isinstance(node, Prod):
                 left, right = (node.children[0], node.children[1])
+                find_prod(left, occs, to_distr)
+                find_prod(right, occs, to_distr)
                 l_str, r_str = (str(left), str(right))
                 if occs[l_str] > 1 and occs[r_str] > 1:
                     if occs[l_str] > occs[r_str]:
@@ -215,11 +220,9 @@ class ExpressionRewriter(object):
                     dist = l_str
                     target = (left, right)
                 else:
-                    raise RuntimeError("Distribute error: symbol not found")
+                    return
                 to_distr[dist].append(target)
 
-        # Expansion ensures the expression to be in a form like:
-        # tensor[i][j] += A[i]*B[j] + C[i]*D[j] + A[i]*E[j] + ...
         if not self._expanded:
             raise RuntimeError("Distribute error: expansion required first.")
 
@@ -430,7 +433,10 @@ class ExpressionHoister(object):
                     next_loop = outermost_loop
                 elif len(dep) == 1 and not is_outermost_perfect:
                     place, wl = dict_expr_loops[dep[0]].children[0], None
-                    next_loop = od_find_next(dict_expr_loops, dep[0])
+                    if len(dict_expr_loops) > 1:
+                        next_loop = od_find_next(dict_expr_loops, dep[0])
+                    else:
+                        next_loop = place.children[-1]
                 else:
                     dep_block = dict_expr_loops[dep[-2]].children[0]
                     place, wl = dep_block, dict_expr_loops[dep[-1]]
