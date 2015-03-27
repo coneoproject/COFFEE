@@ -106,6 +106,8 @@ class LoopOptimizer(object):
             if level > 0:
                 ew.licm()
             if level > 1:
+                if not stmt_info[1].unit_stride_loops:
+                    continue
                 ew.expand()
                 ew.distribute()
                 ew.licm(merge_and_simplify=True, compact_tmps=True)

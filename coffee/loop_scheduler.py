@@ -528,7 +528,7 @@ class ZeroLoopScheduler(LoopScheduler):
                 return dict(zip(itvars, nz_bounds))
             else:
                 return {}
-        elif isinstance(node, Par):
+        elif isinstance(node, (Par, FunCall)):
             return self._track_expr_nz_columns(node.children[0])
         else:
             itvar_nz_bounds_l = self._track_expr_nz_columns(node.children[0])
@@ -726,13 +726,19 @@ class ZeroLoopScheduler(LoopScheduler):
         roots, new_exprs = set(), {}
         elf = ExpressionFissioner(1)
         for expr in self.exprs.items():
+            stmt, expr_info = expr
             # First, split expressions into separate loop nests, based on sum's
             # associativity. This exposes more opportunities for restructuring loops,
             # since different summands may have contiguous regions of zero-valued
             # columns in different positions
-            new_exprs.update(elf.fission(expr, False))
-            roots.add(expr[1].unit_stride_loops_parents[0])
-            self.exprs.pop(expr[0])
+            if expr_info.unit_stride_loops:
+                new_exprs.update(elf.fission(expr, False))
+	        roots.add(expr_info.unit_stride_loops_parents[0])
+		self.exprs.pop(stmt)
+            elif expr_info.slow_loops:
+                roots.add(expr_info.slow_loops_parents[0])
+            else:
+                raise RuntimeError("Expressions...")
 
             if len(roots) > 1:
                 warning("Found multiple roots while performing zero-elimination")
