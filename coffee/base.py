@@ -82,13 +82,8 @@ class Node(object):
 
     def __init__(self, children=None, pragma=None):
         self.children = map(as_symbol, children) if children else []
-
         # Pragmas are used to attach semantical information to nodes
-        if not pragma:
-            pragma = set()
-        elif isinstance(pragma, str):
-            pragma = set([pragma])
-        self._pragma = pragma
+        self._pragma = self._format_pragma(pragma)
 
     def gencode(self):
         return "\n".join([n.gencode() for n in self.children])
@@ -96,16 +91,25 @@ class Node(object):
     def __str__(self):
         return self.gencode()
 
+    def _format_pragma(self, pragma):
+        if pragma is None:
+            return set()
+        elif isinstance(pragma, (str, Access)):
+            return set([pragma])
+        elif isinstance(pragma, tuple):
+            return set(pragma)
+        elif isinstance(pragma, set):
+            return pragma
+        else:
+            raise TypeError("Type '%s' cannot be used as Node pragma" % type(pragma))
+
     @property
     def pragma(self):
         return self._pragma
 
     @pragma.setter
-    def pragma(self, pragma):
-        if isinstance(pragma, list):
-            self._pragma = set(pragma)
-        else:
-            self._pragma.add(pragma)
+    def pragma(self, _pragma):
+        self._pragma = self._format_pragma(_pragma)
 
 
 class Root(Node):
