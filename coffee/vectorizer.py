@@ -149,6 +149,7 @@ class LoopVectorizer(object):
         symbol_refs = info['symbol_refs']
         used_syms = [s.symbol for s in symbols_mode.keys()]
         acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
+        padded_buf_syms = {}
         for d, s in acc_decls:
             if not d.sym.rank:
                 continue
@@ -170,6 +171,7 @@ class LoopVectorizer(object):
             buf_sym.rank = new_rank
             buf_decl.init = ArrayInit('%s0.0%s' % ('{'*len(new_rank),
                                                    '}'*len(new_rank)))
+            padded_buf_syms[d.sym] = buf_sym
             self.loop_opt.header.children.insert(0, buf_decl)
             # 2- Replace occurrences of symbol with the temporary buffer.
             # Also, determine how the temporary buffer is accessed.
@@ -205,8 +207,13 @@ class LoopVectorizer(object):
         linalg_nodes = info['linalg_nodes']
         for n in linalg_nodes:
             if isinstance(n, Invert):
-                _, _, lda = n.children
+                sym, _, lda = n.children
                 lda.symbol = vect_roundup(lda.symbol)
+                # Disgusting hack, replace the symbol name with the
+                # padded name.
+                for k, v in padded_buf_syms.iteritems():
+                    if sym.symbol == k.symbol:
+                        sym.symbol = v.symbol
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar
