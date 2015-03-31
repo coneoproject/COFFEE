@@ -36,7 +36,7 @@ from utils import is_perfect_loop
 
 class MetaExpr(object):
 
-    """Information container for a compute-intensive expression."""
+    """Metadata container for a compute-intensive expression."""
 
     def __init__(self, type, parent, loops_info, unit_stride_itvars):
         """Initialize the MetaExpr.
@@ -45,8 +45,8 @@ class MetaExpr(object):
         :param parent: the parent block node in which the expression is embedded.
         :param loops_info: the ordered tuple of (loop, parent) the expression
                            depends on.
-        :param unit_stride_itvars: the iteration variables along which the
-                                   expression performs unit_stride memory accesses.
+        :param unit_stride_itvars: the unite-stride loop dimensions, as iteration
+                                   variables, along which writes are performed.
         """
         self._type = type
         self._parent = parent

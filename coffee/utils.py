@@ -348,14 +348,10 @@ def visit(node, parent=None, search=None):
             opts = pragma.split(" ", 2)
             if len(opts) < 3:
                 return
-            if opts[1] == "coffee":
-                delim = opts[2].find('(')
-                opt_name = opts[2][:delim].replace(" ", "")
-                opt_par = opts[2][delim:].replace(" ", "")
-                opt_par = tuple(opt_par.strip('()').split(','))
-                if opt_name == "expression":
-                    # Found high-level optimisation
-                    return (parent, fors, opt_par)
+            if opts[1] == 'coffee' and opts[2] == 'expression':
+                # Found high-level optimisation
+                unit_stride_itvars = node.children[0].rank
+                return (parent, fors, unit_stride_itvars)
 
     def inspect(node, parent, mode=None):
         if search and isinstance(node, search):
