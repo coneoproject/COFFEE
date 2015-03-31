@@ -343,20 +343,17 @@ def visit(node, parent=None, search=None):
     _inner_loops = inner_loops(node)
 
     def check_opts(node, parent, fors):
-        """Check if node is associated with some pragmas. If that is the case,
-        it saves info about the node to speed the transformation process up."""
+        """Track high-level information."""
         for pragma in node.pragma:
             opts = pragma.split(" ", 2)
             if len(opts) < 3:
                 return
-            if opts[1] == "pyop2":
-                if opts[2] == "integration":
-                    return
+            if opts[1] == "coffee":
                 delim = opts[2].find('(')
                 opt_name = opts[2][:delim].replace(" ", "")
                 opt_par = opts[2][delim:].replace(" ", "")
                 opt_par = tuple(opt_par.strip('()').split(','))
-                if opt_name == "assembly":
+                if opt_name == "expression":
                     # Found high-level optimisation
                     return (parent, fors, opt_par)
 

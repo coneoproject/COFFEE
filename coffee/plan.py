@@ -108,7 +108,7 @@ class ASTKernel(object):
     def plan_gpu(self):
         """Transform the kernel suitably for GPU execution.
 
-        Loops decorated with a ``pragma pyop2 itspace`` are hoisted out of
+        Loops decorated with a ``pragma coffee itspace`` are hoisted out of
         the kernel. The list of arguments in the function signature is
         enriched by adding iteration variables of hoisted loops. Size of
         kernel's non-constant tensors modified in hoisted loops are modified
@@ -118,7 +118,7 @@ class ASTKernel(object):
 
             void foo (int A[3]) {
               int B[3] = {...};
-              #pragma pyop2 itspace
+              #pragma coffee itspace
               for (int i = 0; i < 3; i++)
                 A[i] = B[i];
             }

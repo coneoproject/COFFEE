@@ -468,6 +468,6 @@ See %s for more info about the error""" % logfile)
 
         # Clean code from spurious pragmas
         code_template = '\n'.join(l for l in code_template.split("\n")
-                                  if not l.strip().startswith('#pragma pyop2'))
+                                  if not l.strip().startswith('#pragma coffee'))
 
         return self._run(code_template)

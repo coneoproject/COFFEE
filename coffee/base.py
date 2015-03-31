@@ -924,7 +924,7 @@ def c_sym(const):
     return Symbol(const, ())
 
 
-def c_for(var, to, code, pragma="#pragma pyop2 itspace", init=None):
+def c_for(var, to, code, pragma="#pragma coffee itspace", init=None):
     i = c_sym(var)
     init = init or c_sym(0)
     end = c_sym(to)

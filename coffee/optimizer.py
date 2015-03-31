@@ -406,7 +406,7 @@ class GPULoopOptimizer(LoopOptimizer):
     def extract(self):
         """Remove the fully-parallel loops of the loop nest. No data dependency
         analysis is performed; rather, these are the loops that are marked with
-        ``pragma pyop2 itspace``."""
+        ``pragma coffee itspace``."""
 
         info = visit(self.loop, self.header)
         fors_list = info['fors']
@@ -415,7 +415,7 @@ class GPULoopOptimizer(LoopOptimizer):
         itspace_vrs = set()
         for fors in fors_list:
             for node, parent in reversed(fors):
-                if '#pragma pyop2 itspace' not in node.pragma:
+                if '#pragma coffee itspace' not in node.pragma:
                     continue
                 parent = parent.children
                 for n in node.body:
