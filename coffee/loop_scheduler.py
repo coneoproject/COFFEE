@@ -732,8 +732,8 @@ class ZeroLoopScheduler(LoopScheduler):
             # columns in different positions
             if expr_info.unit_stride_loops:
                 new_exprs.update(elf.fission(expr, False))
-	        roots.add(expr_info.unit_stride_loops_parents[0])
-		self.exprs.pop(stmt)
+                roots.add(expr_info.unit_stride_loops_parents[0])
+                self.exprs.pop(stmt)
             elif expr_info.slow_loops:
                 roots.add(expr_info.slow_loops_parents[0])
             else:
