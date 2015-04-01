@@ -411,19 +411,19 @@ class ZeroLoopScheduler(LoopScheduler):
           B[i] = E[i]*F[i]
     """
 
-    def __init__(self, exprs, expr_graph, decls):
+    def __init__(self, exprs, expr_graph, decls, hoisted):
         """Initialize the ZeroLoopScheduler.
 
         :param exprs: the expressions for which the zero-elimination is performed.
         :param expr_graph: the ExpressionGraph tracking all data dependencies involving
                            identifiers that appear in ``root``.
-        :param decls: lists of array declarations. A 2-tuple is expected: the first
-                      element is the list of kernel declarations; the second element
-                      is the list of hoisted temporaries declarations.
+        :param decls: lists of declarations visible to ``exprs``.
+        :param hoisted: dictionary that tracks hoisted sub-expressions
         """
         self.exprs = exprs
         self.expr_graph = expr_graph
-        self.decls, self.hoisted = decls
+        self.decls = decls
+        self.hoisted = hoisted
         # Track zero blocks in each symbol accessed in the computation rooted in root
         self.nz_in_syms = {}
         # Track blocks accessed for evaluating symbols in the various for loops

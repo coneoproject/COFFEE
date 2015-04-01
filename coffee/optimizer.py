@@ -111,8 +111,7 @@ class LoopOptimizer(object):
         # the iteration spaces of the enclosing loops accordingly.
         if not any([d.get_nonzero_columns() for d in self.decls.values()]):
             return
-
-        zls = ZeroLoopScheduler(self.exprs, self.expr_graph, (self.decls, self.hoisted))
+        zls = ZeroLoopScheduler(self.exprs, self.expr_graph, self.decls, self.hoisted)
         zls.reschedule()
         self.nonzero_info = zls.nonzero_info
 
