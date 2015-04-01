@@ -353,7 +353,7 @@ def visit(node, parent=None, search=None):
                 unit_stride_itvars = node.children[0].rank
                 return (parent, fors, unit_stride_itvars)
 
-    def inspect(node, parent, mode=None):
+    def inspect(node, parent, **kwargs):
         if search and isinstance(node, search):
             info['search'][type(node)].append(node)
 
@@ -366,7 +366,7 @@ def visit(node, parent=None, search=None):
             for n in node.children:
                 inspect(n, node)
             for n in node.args:
-                inspect(n, node)
+                inspect(n, node, scope='EXTERNAL')
         elif isinstance(node, For):
             info['cur_nest'].append((node, parent))
             inspect(node.children[0], node)
@@ -379,19 +379,16 @@ def visit(node, parent=None, search=None):
         elif isinstance(node, Par):
             inspect(node.children[0], node)
         elif isinstance(node, Decl):
+            node.scope = kwargs.get('scope', 'LOCAL')
             info['decls'][node.sym.symbol] = node
             inspect(node.sym, node)
         elif isinstance(node, Symbol):
             cur_nest = info['cur_nest']
-            # First, assume it's READ-only...
-            access_mode = (READ, parent.__class__)
+            access_mode = (kwargs.get('mode', READ), parent.__class__)
             dep = [l for l, _ in cur_nest if l.itvar in node.rank]
-            if mode and mode in [WRITE]:
-                # ...adjust if actually a WRITE...
+            if access_mode[0] == WRITE:
                 info['symbols_written'][node.symbol] = cur_nest
-                access_mode = (WRITE, parent.__class__)
             if node.symbol in info['symbols_written']:
-                # ...Finally update loop dependencies if not read-only
                 dep = tuple(l for l, _ in info['symbols_written'][node.symbol])
             info['symbols_dep'][node] = dep
             info['symbols_mode'][node] = access_mode
@@ -406,7 +403,7 @@ def visit(node, parent=None, search=None):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:
                 info['exprs'][node] = expr
-            inspect(node.children[0], node, WRITE)
+            inspect(node.children[0], node, mode=WRITE)
             for child in node.children[1:]:
                 inspect(child, node)
         else:
