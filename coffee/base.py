@@ -539,11 +539,6 @@ class Decl(Statement, Perfect):
 
         static const double FE0[3][3] __attribute__(align(32)) = {{...}};"""
 
-    # The scope is ``EXTERNAL`` when the Decl is an argument of the kernel (i.e.,
-    # when it appears in the list of declarations of a /FunDecl/ object). It's
-    # otherwise ``LOCAL``.
-    _scopes = ['LOCAL', 'EXTERNAL']
-
     def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None, pragma=None):
         super(Decl, self).__init__(pragma=pragma)
         self.typ = typ
@@ -576,8 +571,8 @@ class Decl(Statement, Perfect):
 
     @scope.setter
     def scope(self, val):
-        if val not in Decl._scopes:
-            raise RuntimeError("Only %s are valid scopes" % Decl._scopes)
+        if val not in Scope._scopes:
+            raise RuntimeError("Only %s are valid scopes" % Scope._scopes)
         self._scope = val
 
     def gencode(self, not_scope=False):
@@ -968,8 +963,6 @@ def c_flat_for(code, parent):
 
 class Access(object):
 
-    _modes = ["READ", "WRITE", "RW", "INC", "DEC", "IMUL", "IDIV"]
-
     def __init__(self, mode):
         self._mode = mode
 
@@ -984,3 +977,26 @@ INC = Access("INC")
 DEC = Access("DEC")
 IMUL = Access("IMUL")
 IDIV = Access("IDIV")
+Access._modes = [READ, WRITE, RW, INC, DEC, IMUL, IDIV]
+
+
+# Scope of a declaration ##
+
+class Scope(object):
+
+    """An ``EXTERNAL`` scope means the /Decl/ is an argument of a kernel (i.e.,
+    when it appears in the list of declarations of a /FunDecl/ object). Otherwise,
+    a ``LOCAL`` scope indicates the /Decl/ is within the body of a kernel."""
+
+    def __init__(self, scope):
+        self._scope = scope
+
+    def __eq__(self, other):
+        return self._scope == other._scope
+
+    def __str__(self):
+        return self._scope
+
+LOCAL = Scope("LOCAL")
+EXTERNAL = Scope("EXTERNAL")
+Scope._scopes = [LOCAL, EXTERNAL]

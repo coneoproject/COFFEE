@@ -366,7 +366,7 @@ def visit(node, parent=None, search=None):
             for n in node.children:
                 inspect(n, node)
             for n in node.args:
-                inspect(n, node, scope='EXTERNAL')
+                inspect(n, node, scope=EXTERNAL)
         elif isinstance(node, For):
             info['cur_nest'].append((node, parent))
             inspect(node.children[0], node)
@@ -379,7 +379,7 @@ def visit(node, parent=None, search=None):
         elif isinstance(node, Par):
             inspect(node.children[0], node)
         elif isinstance(node, Decl):
-            node.scope = kwargs.get('scope', 'LOCAL')
+            node.scope = kwargs.get('scope', LOCAL)
             info['decls'][node.sym.symbol] = node
             inspect(node.sym, node)
         elif isinstance(node, Symbol):
