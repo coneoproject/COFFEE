@@ -188,28 +188,30 @@ class LoopVectorizer(object):
             # Update the global data structure
             decl_scope[buffer.sym.symbol] = (buffer, ap.LOCAL_VAR)
 
-        # 2) Adjust the bounds (i.e. /start/ and /end/ points) of innermost loops
-        # such that memory accesses get aligned to the vector length. Safe iff:
+        # 2) Try adjusting the bounds (i.e. /start/ and /end/ points) of innermost
+        # loops such that memory accesses get aligned to the vector length
         iloops = inner_loops(self.loop_opt.header)
         adjusted_loops = []
         for l in iloops:
             adjust = True
-            # Condition A- all lvalues must have as fastest varying dimension the
-            # one dictated by the innermost loop
             for stmt in l.body:
                 sym = stmt.children[0]
+                # Cond A- all lvalues must have as fastest varying dimension the
+                # one dictated by the innermost loop
                 if not (sym.rank and sym.rank[-1] == l.itvar):
                     adjust = False
                     break
-            # Condition B- the extra iterations induced by bounds adjustment must
-            # not alter the result. This is the case if they fall either in a padded
+                # Cond B- all lvalues must be paddable; that is, they cannot be
+                # kernel parameters
+                if sym.symbol in decl_scope and decl_scope[sym.symbol][1] == ap.PARAM_VAR:
+                    adjust = False
+                    break
+            # Cond C- the extra iterations induced by bounds adjustment must not
+            # alter the result. This is the case if they fall either in a padded
             # region or in a zero-valued region
-            nonzero_info_l = self.loop_opt.nonzero_info.get(l, [])
-            # If nonzero_info_l is None, the whole iteration space is traversed;
-            # this means that there is no trace of offsets in the statements
-            # enclosed by /l/, so bound adjustment is definitely safe.
             alignable_stmts = []
             read_regions = defaultdict(list)
+            nonzero_info_l = self.loop_opt.nonzero_info.get(l, [])
             for stmt, ofs in nonzero_info_l:
                 expr = dcopy(stmt.children[1])
                 ast_update_ofs(expr, dict([(l.itvar, 0)]))
