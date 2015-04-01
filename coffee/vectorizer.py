@@ -64,27 +64,26 @@ class LoopVectorizer(object):
     def __init__(self, loop_opt):
         self.loop_opt = loop_opt
 
-    def alignment(self, decl_scope):
+    def alignment(self):
         """Align all data structures accessed in the loop nest to the size in
         bytes of the vector length."""
-        for decl, scope in decl_scope.values():
-            if decl.sym.rank and scope != plan.PARAM_VAR:
+        for decl in self.loop_opt.decls.values():
+            if decl.sym.rank and decl.scope != EXTERNAL:
                 decl.attr.append(plan.compiler["align"](plan.isa["alignment"]))
 
-    def padding(self, decl_scope):
+    def padding(self):
         """Pad all data structures accessed in the loop nest to the nearest
         multiple of the vector length. Adjust trip counts and bounds of all
         innermost loops where padded arrays are written to. Since padding
         enforces data alignment of multi-dimensional arrays, add suitable
         pragmas to inner loops to inform the backend compiler about this
         property."""
+        decls = self.loop_opt.decls
         info = visit(self.loop_opt.header, None, search=LinAlg)
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']
         to_invert = info['search'][Invert][0] if info['search'][Invert] else None
-        used_syms = [s.symbol for s in symbols_mode.keys()]
-        decl_scope = {s: ds for s, ds in decl_scope.items() if s in used_syms}
 
         # 0) Under some circumstances, do not apply padding
         # A- Loop increments must be equal to 1, because at the moment the
@@ -122,11 +121,11 @@ class LoopVectorizer(object):
         #       A[i][j] = _A[i][j]
         #
         # Also, extra care is taken in presence of offsets (e.g. A[i+3][j+3] ...)
-        for decl, scope in decl_scope.values():
+        for decl in decls.values():
             if not decl.sym.rank:
                 continue
             p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
-            if scope == plan.LOCAL_VAR:
+            if decl.scope == LOCAL:
                 if p_rank == decl.sym.rank:
                     continue
                 decl.sym.rank = p_rank
@@ -160,6 +159,7 @@ class LoopVectorizer(object):
             #    vectorization, so we create it and insert it at the top of the AST
             buffer = Decl(decl.typ, Symbol('_%s' % decl.sym.symbol, buf_rank),
                           ArrayInit('%s0.0%s' % ('{'*len(buf_rank), '}'*len(buf_rank))))
+            buffer.scope = LOCAL
             self.loop_opt.header.children.insert(0, buffer)
             # C- Replace all FunDecl argument occurrences in the body with the buffer
             itspace_binding = defaultdict(list)
@@ -199,7 +199,7 @@ class LoopVectorizer(object):
                     else:
                         self.loop_opt.header.children.append(copy.children[0])
             # Update the global data structure
-            decl_scope[buffer.sym.symbol] = (buffer, plan.LOCAL_VAR)
+            decls[buffer.sym.symbol] = buffer
 
         # 2) Try adjusting the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
@@ -216,7 +216,7 @@ class LoopVectorizer(object):
                     break
                 # Cond B- all lvalues must be paddable; that is, they cannot be
                 # kernel parameters
-                if sym.symbol in decl_scope and decl_scope[sym.symbol][1] == plan.PARAM_VAR:
+                if sym.symbol in decls and decls[sym.symbol].scope == EXTERNAL:
                     adjust = False
                     break
             # Cond C- the extra iterations induced by bounds adjustment must not

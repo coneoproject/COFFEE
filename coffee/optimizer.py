@@ -33,7 +33,6 @@
 
 from base import *
 from utils import *
-from expression import MetaExpr
 from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
@@ -45,16 +44,18 @@ class LoopOptimizer(object):
 
     """Loop optimizer class."""
 
-    def __init__(self, loop, header, kernel_decls):
+    def __init__(self, loop, header, decls, exprs):
         """Initialize the LoopOptimizer.
 
         :param loop: root AST node of a loop nest
         :param header: parent AST node of ``loop``
-        :param kernel_decls: list of Decl objects accessible in ``loop``
+        :param decls: list of Decl objects accessible in ``loop``
+        :param exprs: list of expressions to be optimized
         """
         self.loop = loop
         self.header = header
-        self.kernel_decls = kernel_decls
+        self.decls = decls
+        self.exprs = exprs
 
         # Track nonzero regions accessed in the loop nest
         self.nonzero_info = {}
@@ -62,17 +63,6 @@ class LoopOptimizer(object):
         self.expr_graph = ExpressionGraph()
         # Track hoisted expressions
         self.hoisted = StmtTracker()
-
-        # Inspect the loop nest and collect info
-        info = visit(self.loop, self.header)
-        self.decls, self.exprs = (OrderedDict(), OrderedDict())
-        for decl_str, decl in info['decls'].items():
-            self.decls[decl_str] = (decl, plan.LOCAL_VAR)
-        all_decls = dict([(decl_str, decl_scope[0]) for decl_str, decl_scope
-                          in self.kernel_decls.items() + self.decls.items()])
-        for stmt, expr_info in info['exprs'].items():
-            expr_type = check_type(stmt, all_decls)
-            self.exprs[stmt] = MetaExpr(expr_type, *expr_info)
 
     def rewrite(self, level):
         """Rewrite a compute-intensive expression found in the loop nest so as to
@@ -119,8 +109,10 @@ class LoopOptimizer(object):
         # Search for zero-valued columns and restructure the iteration spaces;
         # the ZeroLoopScheduler analyzes statements "one by one", and changes
         # the iteration spaces of the enclosing loops accordingly.
-        zls = ZeroLoopScheduler(self.exprs, self.expr_graph,
-                                (self.kernel_decls, self.hoisted))
+        if not any([d.get_nonzero_columns() for d in self.decls.values()]):
+            return
+
+        zls = ZeroLoopScheduler(self.exprs, self.expr_graph, (self.decls, self.hoisted))
         zls.reschedule()
         self.nonzero_info = zls.nonzero_info
 

@@ -44,6 +44,7 @@ from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
 from autotuner import Autotuner
+from expression import MetaExpr
 
 from copy import deepcopy as dcopy
 import itertools
@@ -67,40 +68,8 @@ class ASTKernel(object):
         self.ast = ast
         # Used in case of autotuning
         self.include_dirs = include_dirs
-
-        # Kernel properties
-        # True if sparse arrays are present
-        self._is_block_sparse = False
         # True if successful conversion to blas operations
         self.blas = False
-
-    def _visit_ast(self, node, parent=None, fors=None, decls=None):
-        """Return lists of:
-
-        * Declarations within the kernel
-        * Loop nests
-        * Dense Linear Algebra Blocks
-
-        that will be exploited at plan creation time."""
-
-        if isinstance(node, Decl):
-            decls[node.sym.symbol] = (node, LOCAL_VAR)
-            self._is_block_sparse = self._is_block_sparse or node.get_nonzero_columns()
-            return (decls, fors)
-        elif isinstance(node, For):
-            fors.append((node, parent))
-            return (decls, fors)
-        elif isinstance(node, FunDecl):
-            self.fundecl = node
-            for d in node.args:
-                decls[d.sym.symbol] = (d, PARAM_VAR)
-        elif isinstance(node, (FlatBlock, PreprocessNode, Symbol)):
-            return (decls, fors)
-
-        for c in node.children:
-            self._visit_ast(c, node, fors, decls)
-
-        return (decls, fors)
 
     def plan_gpu(self):
         """Transform the kernel suitably for GPU execution.
@@ -127,39 +96,42 @@ class ASTKernel(object):
             }
         """
 
-        decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-        loop_opts = [GPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
-        for loop_opt in loop_opts:
-            itspace_vrs, accessed_vrs = loop_opt.extract()
+        # The optimization passes are performed individually (i.e., "locally") for
+        # each function (or "kernel") found in the provided AST
+        kernels = visit(self.ast, search=FunDecl, stop_on_search=True)['search'][FunDecl]
+        for kernel in kernels:
+            info = visit(kernel)
+            decls = info['decls']
+            nests = set(nest[0] for nest in info['fors'])
+            loop_opts = [GPULoopOptimizer(l, header, decls) for l, header in nests]
+            for loop_opt in loop_opts:
+                itspace_vrs, accessed_vrs = loop_opt.extract()
 
-            for v in accessed_vrs:
-                # Change declaration of non-constant iteration space-dependent
-                # parameters by shrinking the size of the iteration space
-                # dimension to 1
-                decl = set(
-                    [d for d in self.fundecl.args if d.sym.symbol == v.symbol])
-                dsym = decl.pop().sym if len(decl) > 0 else None
-                if dsym and dsym.rank:
-                    dsym.rank = tuple([1 if i in itspace_vrs else j
-                                       for i, j in zip(v.rank, dsym.rank)])
+                for v in accessed_vrs:
+                    # Change declaration of non-constant iteration space-dependent
+                    # parameters by shrinking the size of the iteration space
+                    # dimension to 1
+                    decl = set(
+                        [d for d in kernel.args if d.sym.symbol == v.symbol])
+                    dsym = decl.pop().sym if len(decl) > 0 else None
+                    if dsym and dsym.rank:
+                        dsym.rank = tuple([1 if i in itspace_vrs else j
+                                           for i, j in zip(v.rank, dsym.rank)])
 
-                # Remove indices of all iteration space-dependent and
-                # kernel-dependent variables that are accessed in an itspace
-                v.rank = tuple([0 if i in itspace_vrs and dsym else i
-                                for i in v.rank])
+                    # Remove indices of all iteration space-dependent and
+                    # kernel-dependent variables that are accessed in an itspace
+                    v.rank = tuple([0 if i in itspace_vrs and dsym else i
+                                    for i in v.rank])
 
-            # Add iteration space arguments
-            self.fundecl.args.extend([Decl("int", c_sym("%s" % i))
-                                     for i in itspace_vrs])
+                # Add iteration space arguments
+                kernel.args.extend([Decl("int", c_sym("%s" % i)) for i in itspace_vrs])
 
-        # Clean up the kernel removing variable qualifiers like 'static'
-        for decl in decls.values():
-            d, place = decl
-            d.qual = [q for q in d.qual if q not in ['static', 'const']]
+            # Clean up the kernel removing variable qualifiers like 'static'
+            for decl in decls.values():
+                d, place = decl
+                d.qual = [q for q in d.qual if q not in ['static', 'const']]
 
-        if hasattr(self, 'fundecl'):
-            self.fundecl.pred = [q for q in self.fundecl.pred
-                                 if q not in ['static', 'inline']]
+            kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
 
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
@@ -230,21 +202,24 @@ class ASTKernel(object):
             if permute and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Outer-product vectorization needs no permute")
 
-            decls, fors = self._visit_ast(kernel, fors=[], decls={})
-            loop_opts = [CPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
-            for loop_opt in loop_opts:
-                # Only optimize compute-intensive expressions
-                if not loop_opt.exprs:
-                    continue
+            info = visit(kernel)
+            decls = info['decls']
+            # Structure up expressions and related metadata
+            nests = defaultdict(OrderedDict)
+            for stmt, expr_info in info['exprs'].items():
+                _, nest, _ = expr_info
+                nests[nest[0]].update({stmt: MetaExpr(check_type(stmt, decls), *expr_info)})
+            loop_opts = [CPULoopOptimizer(nest[0], nest[1], decls, exprs)
+                         for nest, exprs in nests.items()]
 
+            for loop_opt in loop_opts:
                 # 0) Expression Rewriting
                 if rewrite:
                     loop_opt.rewrite(rewrite)
 
                 # 1) Dead-operations elimination
                 if dead_ops_elimination:
-                    if self._is_block_sparse:
-                        loop_opt.eliminate_zeros()
+                    loop_opt.eliminate_zeros()
 
                 # 2) Splitting
                 if split:
@@ -268,10 +243,10 @@ class ASTKernel(object):
                     vect = LoopVectorizer(loop_opt)
                     if ap:
                         # Data alignment
-                        vect.alignment(decls)
+                        vect.alignment()
                         # Padding
                         if not toblas:
-                            vect.padding(decls)
+                            vect.padding()
                     if v_type and v_type != VectStrategy.AUTO:
                         if isa['inst_set'] == 'SSE':
                             raise RuntimeError("SSE vectorization not supported")
@@ -284,16 +259,14 @@ class ASTKernel(object):
                     self.blas = loop_opt.blas(toblas)
 
             # Ensure kernel is always marked static inline
-            if hasattr(self, 'fundecl'):
-                # Remove either or both of static and inline (so that we get the order right)
-                self.fundecl.pred = [q for q in self.fundecl.pred
-                                     if q not in ['static', 'inline']]
-                self.fundecl.pred.insert(0, 'inline')
-                self.fundecl.pred.insert(0, 'static')
+            # Remove either or both of static and inline (so that we get the order right)
+            kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
+            kernel.pred.insert(0, 'inline')
+            kernel.pred.insert(0, 'static')
 
             return loop_opts
 
-        kernels = visit(self.ast, None, search=FunDecl)['search'][FunDecl]
+        kernels = visit(self.ast, search=FunDecl, stop_on_search=True)['search'][FunDecl]
         if opts.get('autotune'):
             if not (compiler and isa):
                 raise RuntimeError("Must initialize COFFEE prior to autotuning")

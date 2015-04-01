@@ -454,17 +454,18 @@ class ExpressionHoister(object):
                     'round': self.counter,
                     'i': i
                 }, sym_rank) for i in range(len(expr))]
-                var_decl = [Decl(expr_type, _s) for _s in syms]
-                for_sym = [Symbol(_s.sym.symbol, for_dep) for _s in var_decl]
+                var_decl = [Decl(expr_type, s) for s in syms]
+                for_sym = [Symbol(d.sym.symbol, for_dep) for d in var_decl]
 
                 # 3) Create the new for loop containing invariant terms
                 _expr = [Par(dcopy(e)) if not isinstance(e, Par)
                          else dcopy(e) for e in expr]
-                inv_for = [Assign(_s, e) for _s, e in zip(dcopy(for_sym), _expr)]
+                inv_for = [Assign(s, e) for s, e in zip(dcopy(for_sym), _expr)]
 
-                # 4) Update the lists of decls
-                self.decls.update(dict(zip([d.sym.symbol for d in var_decl],
-                                           [(v, plan.LOCAL_VAR) for v in var_decl])))
+                # 4) Update the dictionary of known declarations
+                for d in var_decl:
+                    d.scope = LOCAL
+                    self.decls[d.sym.symbol] = d
 
                 # 5) Replace invariant sub-trees with the proper tmp variable
                 n_replaced = dict(zip([str(s) for s in for_sym], [0]*len(for_sym)))
@@ -567,8 +568,8 @@ class ExpressionExpander(object):
                                                      'i': len(self.found_consts)})
             new_const_decl = Decl(self.expr_info.type, dcopy(const_sym), const)
             # Keep track of the expansion
-            self.expanded_decls[new_const_decl.sym.symbol] = (new_const_decl,
-                                                              plan.LOCAL_VAR)
+            new_const_decl.scope = LOCAL
+            self.expanded_decls[new_const_decl.sym.symbol] = new_const_decl
             self.expanded_syms.append(new_const_decl.sym)
             self.found_consts[const_str] = const_sym
             self.expr_graph.add_dependency(const_sym, const, False)
@@ -592,7 +593,7 @@ class ExpressionExpander(object):
         # Append new expression and declaration
         loop.body.append(new_node)
         place.children.insert(place.children.index(var_decl), new_var_decl)
-        self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, plan.LOCAL_VAR)
+        self.expanded_decls[new_var_decl.sym.symbol] = new_var_decl
         self.expanded_syms.append(new_var_decl.sym)
         # Update tracked information
         self.hoisted[sym.symbol] = (new_expr, new_var_decl, loop, place)

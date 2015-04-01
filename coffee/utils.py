@@ -59,9 +59,7 @@ def increase_stack(loop_opts):
     size = 0
     for loop_opt in loop_opts:
         decls = loop_opt.decls.values()
-        if decls:
-            size += sum([reduce(operator.mul, d.sym.rank) for d in zip(*decls)[0]
-                         if d.sym.rank])
+        size += sum([reduce(operator.mul, d.sym.rank) for d in decls if d.sym.rank])
 
     if size*double_size > stack_size:
         # Increase the stack size if the kernel's stack size seems to outreach

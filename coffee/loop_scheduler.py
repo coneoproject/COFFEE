@@ -423,7 +423,7 @@ class ZeroLoopScheduler(LoopScheduler):
         """
         self.exprs = exprs
         self.expr_graph = expr_graph
-        self.kernel_decls, self.hoisted = decls
+        self.decls, self.hoisted = decls
         # Track zero blocks in each symbol accessed in the computation rooted in root
         self.nz_in_syms = {}
         # Track blocks accessed for evaluating symbols in the various for loops
@@ -624,16 +624,15 @@ class ZeroLoopScheduler(LoopScheduler):
 
         # Initialize a dict mapping symbols to their zero columns with the info
         # already available in the kernel's declarations
-        for i, j in self.kernel_decls.items():
-            nz_col_bounds = j[0].get_nonzero_columns()
+        for s, d in self.decls.items():
+            nz_col_bounds = d.get_nonzero_columns()
             if nz_col_bounds:
                 # Note that nz_bounds are stored as second element of a 2-tuple,
                 # because the declared array is two-dimensional, in which the
                 # second dimension represents the columns
-                self.nz_in_syms[i] = (((0, j[0].sym.rank[0] - 1),),
-                                      (nz_col_bounds,))
+                self.nz_in_syms[s] = (((0, d.sym.rank[0]-1),), (nz_col_bounds,))
             else:
-                self.nz_in_syms[i] = tuple(((0, r-1),) for r in j[0].size)
+                self.nz_in_syms[s] = tuple(((0, r-1),) for r in d.size)
 
         # If zeros were not found, then just give up
         if not self.nz_in_syms:
