@@ -47,14 +47,13 @@ class LinearAlgebra(object):
     def __init__(self, outer_loop, header, kernel_decls):
         """Initialize a LinearAlgebra object.
 
-        :arg outer_loop:   AST root loop node from which the search for potential
-                           linear algebra operations starts
-        :arg header:       parent of ``outer_loop``
+        :arg outer_loop: the AST loop within which linear algebra operations
+                         are sought
+        :arg header: parent of ``outer_loop``
         :arg kernel_decls: list of declarations used in the AST"""
-
-        self.kernel_decls = kernel_decls
-        self.header = header
         self.outer_loop = outer_loop
+        self.header = header
+        self.kernel_decls = kernel_decls
 
     def transform(self, library):
         """Transform perfect loop nests representing matrix-matrix multiplies into

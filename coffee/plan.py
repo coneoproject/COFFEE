@@ -33,6 +33,12 @@
 
 """COFFEE's optimization plan constructor."""
 
+# The following global variables capture the internal state of COFFEE
+compiler = {}
+isa = {}
+blas = {}
+initialized = False
+
 from base import *
 from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
@@ -69,13 +75,11 @@ class ASTKernel(object):
         # Used in case of autotuning
         self.include_dirs = include_dirs
 
-        # Track applied optimizations
-        self.blas = False
-        self.ap = False
-
-        # Properties of the kernel operation:
-        # True if the kernel contains sparse arrays
+        # Kernel properties
+        # True if sparse arrays are present
         self._is_block_sparse = False
+        # True if successful conversion to blas operations
+        self.blas = False
 
     def _visit_ast(self, node, parent=None, fors=None, decls=None):
         """Return lists of:
@@ -209,22 +213,22 @@ class ASTKernel(object):
             v_type, v_param = vectorize if vectorize else (None, None)
             ap = kwargs.get('align_pad')
             split = kwargs.get('split')
-            blas = kwargs.get('blas')
+            toblas = kwargs.get('blas')
             unroll = kwargs.get('unroll')
             permute = kwargs.get('permute')
             precompute = kwargs.get('precompute')
             dead_ops_elimination = kwargs.get('dead_ops_elimination')
 
             # Combining certain optimizations is meaningless/forbidden.
-            if unroll and blas:
+            if unroll and toblas:
                 raise RuntimeError("Cannot unroll and then convert to BLAS")
-            if permute and blas:
+            if permute and toblas:
                 raise RuntimeError("Cannot permute and then convert to BLAS")
             if permute and not precompute:
                 raise RuntimeError("Cannot permute without precomputation")
             if rewrite == 3 and split:
                 raise RuntimeError("Split forbidden when avoiding zero-columns")
-            if rewrite == 3 and blas:
+            if rewrite == 3 and toblas:
                 raise RuntimeError("BLAS forbidden when avoiding zero-columns")
             if rewrite == 3 and v_type and v_type != AUTOVECT:
                 raise RuntimeError("Zeros removal only supports auto-vectorization")
@@ -268,24 +272,23 @@ class ASTKernel(object):
                 # 4) Vectorization
                 if initialized:
                     decls = dict(decls.items() + loop_opt.decls.items())
-                    vect = LoopVectorizer(loop_opt, intrinsics, compiler)
+                    vect = LoopVectorizer(loop_opt)
                     if ap:
                         # Data alignment
                         vect.alignment(decls)
                         # Padding
-                        if not blas:
+                        if not toblas:
                             vect.padding(decls)
-                            self.ap = True
                     if v_type and v_type != AUTOVECT:
-                        if intrinsics['inst_set'] == 'SSE':
+                        if isa['inst_set'] == 'SSE':
                             raise RuntimeError("SSE vectorization not supported")
                         # Specialize vectorization for the memory access pattern
                         # of the expression
                         vect.specialize(v_type, v_param)
 
                 # 5) Conversion into blas calls
-                if blas:
-                    self.blas = loop_opt.blas(blas)
+                if toblas:
+                    self.blas = loop_opt.blas(toblas)
 
             # Ensure kernel is always marked static inline
             if hasattr(self, 'fundecl'):
@@ -299,7 +302,7 @@ class ASTKernel(object):
 
         kernels = visit(self.ast, None, search=FunDecl)['search'][FunDecl]
         if opts.get('autotune'):
-            if not (compiler and intrinsics):
+            if not (compiler and isa):
                 raise RuntimeError("Must initialize COFFEE prior to autotuning")
             if len(kernels) > 1:
                 raise RuntimeError("Cannot autotune if multiple functions are present")
@@ -309,8 +312,8 @@ class ASTKernel(object):
             if opts['autotune'] == 'minimal':
                 resolution = 1
                 autotune_configs = autotune_min
-            elif blas_interface:
-                library = ('blas', blas_interface['name'])
+            elif blas:
+                library = ('blas', blas['name'])
                 autotune_configs.append(('blas', dict(blas_config.items() + [library])))
             variants = []
             autotune_configs_uf = []
@@ -361,8 +364,7 @@ class ASTKernel(object):
 
             if tunable:
                 # Determine the fastest kernel implementation
-                autotuner = Autotuner(variants, self.include_dirs, compiler,
-                                      intrinsics, blas_interface)
+                autotuner = Autotuner(variants, self.include_dirs, compiler, isa, blas)
                 fastest = autotuner.tune(resolution)
                 all_params = autotune_configs + autotune_configs_uf
                 name, params = all_params[fastest]
@@ -376,9 +378,9 @@ class ASTKernel(object):
         elif opts.get('blas'):
             # Conversion into blas requires a specific set of transformations
             # in order to identify and extract matrix multiplies.
-            if not blas_interface:
+            if not blas:
                 raise RuntimeError("Must set PYOP2_BLAS to convert into BLAS calls")
-            params = dict(blas_config.items() + [('blas', blas_interface['name'])])
+            params = dict(blas_config.items() + [('blas', blas['name'])])
         elif opts.get('Ofast'):
             params = {
                 'rewrite': 2,
@@ -424,26 +426,20 @@ class ASTKernel(object):
         """Generate a string representation of the AST."""
         return self.ast.gencode()
 
-# These global variables capture the internal state of COFFEE
-intrinsics = {}
-compiler = {}
-blas_interface = {}
-initialized = False
 
-
-def init_coffee(isa, comp, blas):
+def init_coffee(_isa, _compiler, _blas):
     """Initialize COFFEE."""
 
-    global intrinsics, compiler, blas_interface, initialized
-    intrinsics = _init_isa(isa)
-    compiler = _init_compiler(comp)
-    blas_interface = _init_blas(blas)
-    if intrinsics and compiler:
+    global isa, compiler, blas, initialized
+    isa = _init_isa(_isa)
+    compiler = _init_compiler(_compiler)
+    blas = _init_blas(_blas)
+    if isa and compiler:
         initialized = True
 
 
 def _init_isa(isa):
-    """Set the intrinsics instruction set. """
+    """Set the instruction set architecture (isa)."""
 
     if isa == 'sse':
         return {
