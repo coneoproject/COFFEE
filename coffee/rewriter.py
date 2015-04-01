@@ -38,7 +38,6 @@ import operator
 from base import *
 from utils import *
 from loop_scheduler import SSALoopMerger
-import plan
 
 
 class ExpressionRewriter(object):

@@ -37,7 +37,6 @@ from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
-import plan
 
 
 class LoopOptimizer(object):
