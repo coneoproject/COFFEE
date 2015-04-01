@@ -36,9 +36,8 @@ from copy import deepcopy as dcopy
 import operator
 
 from base import *
+from utils import *
 from loop_scheduler import SSALoopMerger
-from utils import visit, is_perfect_loop, count_occurrences, ast_c_sum
-from utils import ast_replace, loops_as_dict, od_find_next, flatten
 import plan
 
 
