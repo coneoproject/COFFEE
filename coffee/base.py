@@ -539,6 +539,11 @@ class Decl(Statement, Perfect):
 
         static const double FE0[3][3] __attribute__(align(32)) = {{...}};"""
 
+    # The scope is ``EXTERNAL`` when the Decl is an argument of the kernel (i.e.,
+    # when it appears in the list of declarations of a /FunDecl/ object). It's
+    # otherwise ``LOCAL``.
+    _scopes = ['LOCAL', 'EXTERNAL']
+
     def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None, pragma=None):
         super(Decl, self).__init__(pragma=pragma)
         self.typ = typ
@@ -562,6 +567,18 @@ class Decl(Statement, Perfect):
     def is_const(self):
         """Return True if the declaration is a constant."""
         return 'const' in self.qual
+
+    @property
+    def scope(self):
+        if not hasattr(self, '_scope'):
+            raise RuntimeError("Declaration scope available only after a tree visit")
+        return self._scope
+
+    @scope.setter
+    def scope(self, val):
+        if val not in Decl._scopes:
+            raise RuntimeError("Only %s are valid scopes" % Decl._scopes)
+        self._scope = val
 
     def gencode(self, not_scope=False):
         if isinstance(self.init, EmptyStatement):
