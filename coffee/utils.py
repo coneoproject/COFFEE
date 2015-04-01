@@ -424,7 +424,7 @@ def inner_loops(node):
     def find_iloops(node, loops):
         if isinstance(node, Perfect):
             return False
-        elif isinstance(node, (Block, Root)):
+        elif isinstance(node, (Block, Root, FunDecl)):
             return any([find_iloops(s, loops) for s in node.children])
         elif isinstance(node, For):
             found = find_iloops(node.children[0], loops)
