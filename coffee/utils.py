@@ -312,7 +312,7 @@ def ast_c_make_copy(arr1, arr2, itspace, op):
 ###########################################################
 
 
-def visit(node, parent=None, search=None):
+def visit(node, parent=None, search=None, stop_on_search=False):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
@@ -327,6 +327,8 @@ def visit(node, parent=None, search=None):
     :param node: AST root node of the visit
     :param parent: parent node of ``node``
     :param search: type(s) of AST nodes to be searched and tracked in the visit
+    :param stop_on_search: True if the tree visit should stop going in depth once
+                           found a node being searched, False otherwise.
     """
 
     info = {
@@ -356,6 +358,8 @@ def visit(node, parent=None, search=None):
     def inspect(node, parent, **kwargs):
         if search and isinstance(node, search):
             info['search'][type(node)].append(node)
+            if stop_on_search:
+                return
 
         if isinstance(node, EmptyStatement):
             pass
