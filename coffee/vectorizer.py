@@ -288,7 +288,7 @@ class LoopVectorizer(object):
                 # There must be exactly two unit-strided dimensions
                 continue
 
-            op = OuterProduct(stmt, unit_stride_loops, self.intr, self.loop_opt)
+            op = OuterProduct(stmt, unit_stride_loops, self.intr, 'STORE')
 
             # Vectorisation
             unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
@@ -339,18 +339,13 @@ class LoopVectorizer(object):
 
 class OuterProduct():
 
-    """Generate outer product vectorisation of a statement. """
+    """Generate an intrinsics-based outer product vectorisation of a statement."""
 
-    OP_STORE_IN_MEM = 0
-    OP_REGISTER_INC = 1
-
-    def __init__(self, stmt, loops, intr, nest):
+    def __init__(self, stmt, loops, intr, mode):
         self.stmt = stmt
         self.intr = intr
-        # Outer product loops
         self.loops = loops
-        # The whole loop nest in which outer product loops live
-        self.nest = nest
+        self.mode = mode
 
     class Alloc(object):
 
@@ -395,12 +390,12 @@ class OuterProduct():
         """Return a list of vector variable declarations representing
         loads, sets, broadcasts.
 
-        :arg vrs:   Dictionary that associates scalar variables to vector.
-                    variables, for which it will be generated a corresponding
-                    intrinsics load/set/broadcast.
-        :arg decls: List of scalar variables for which an intrinsics load/
-                    set/broadcast has already been generated. Used to avoid
-                    regenerating the same line. Can be updated.
+        :arg vrs: dictionary that associates scalar variables to vector.
+                  variables, for which it will be generated a corresponding
+                  intrinsics load/set/broadcast.
+        :arg decls: list of scalar variables for which an intrinsics load/
+                    set/broadcast has already been generated, possibly updated
+                    by this method.
         """
         stmt = []
         for node, reg in vrs.items():
@@ -415,19 +410,15 @@ class OuterProduct():
 
     def _vect_expr(self, node, ofs, regs, decls, vrs):
         """Turn a scalar expression into its intrinsics equivalent.
-        Also return dicts of allocated vector variables.
 
-        :arg node:  AST Expression which is inspected to generate an equivalent
-                    intrinsics-based representation.
-        :arg ofs:   Contains the offset of the entry in the left hand side that
-                    is being computed.
-        :arg regs:  Register allocator.
-        :arg decls: List of scalar variables for which an intrinsics load/
-                    set/broadcast has already been generated. Used to determine
-                    which vector variable contains a certain scalar, if any.
-        :arg vrs:   Dictionary that associates scalar variables to vector
-                    variables. Updated every time a new scalar variable is
-                    encountered.
+        :arg node: AST expression to be vectorized.
+        :arg ofs: contains the offset of the entry in the left hand side that
+                  is being vectorized.
+        :arg regs: register allocator.
+        :arg decls: list of scalar variables for which an intrinsics load/
+                    set/broadcast has already been generated.
+        :arg vrs: dictionary that associates scalar variables to vector variables.
+                  Updated every time a new scalar variable is encountered.
         """
         if isinstance(node, Symbol):
             if node.rank and self.loops[0].itvar == node.rank[-1]:
@@ -458,21 +449,16 @@ class OuterProduct():
             elif isinstance(node, Div):
                 return self.intr["div"](left, right)
 
-    def _incr_tensor(self, tensor, ofs, regs, out_reg, mode):
+    def _incr_tensor(self, tensor, ofs, regs, out_reg):
         """Add the right hand side contained in out_reg to tensor.
 
-        :arg tensor:  The left hand side of the expression being vectorized.
-        :arg ofs:     Contains the offset of the entry in the left hand side that
-                      is being computed.
-        :arg regs:    Register allocator.
-        :arg out_reg: Register variable containing the left hand side.
-        :arg mode:    It can be either `OP_STORE_IN_MEM`, for which stores in
-                      memory are performed, or `OP_REGISTER_INC`, by means of
-                      which left hand side's values are accumulated in a register.
-                      Usually, `OP_REGISTER_INC` is not recommended unless the
-                      loop sizes are extremely small.
+        :arg tensor: the left hand side of the expression being vectorized.
+        :arg ofs: contains the offset of the entry in the left hand side that
+                  is being computed.
+        :arg regs: register allocator.
+        :arg out_reg: register variable containing the left hand side.
         """
-        if mode == self.OP_STORE_IN_MEM:
+        if self.mode == 'STORE':
             # Store in memory
             sym = tensor.symbol
             rank = tensor.rank
@@ -480,19 +466,16 @@ class OuterProduct():
             load = self.intr["symbol_load"](sym, rank, ofs)
             return self.intr["store"](Symbol(sym, rank, ofs),
                                       self.intr["add"](load, out_reg))
-        elif mode == self.OP_REGISTER_INC:
+        elif self.mode == 'MOVE':
             # Accumulate on a vector register
             reg = Symbol(regs.get_tensor()[ofs], ())
             return Assign(reg, self.intr["add"](reg, out_reg))
 
-    def _restore_layout(self, regs, tensor, mode):
+    def _restore_layout(self, regs, tensor):
         """Restore the storage layout of the tensor.
 
-        :arg regs:    Register allocator.
-        :arg tensor:  The left hand side of the expression being vectorized.
-        :arg mode:    It can be either `OP_STORE_IN_MEM`, for which load/stores in
-                      memory are performed, or `OP_REGISTER_INC`, by means of
-                      which left hand side's values are read from registers.
+        :arg regs: register allocator.
+        :arg tensor: the left hand side of the expression being vectorized.
         """
         code = []
         t_regs = [Symbol(r, ()) for r in regs.get_tensor()]
@@ -505,12 +488,12 @@ class OuterProduct():
             tensor_syms.append(Symbol(tensor.symbol, tensor.rank, ofs))
 
         # Load LHS values from memory
-        if mode == self.OP_STORE_IN_MEM:
+        if self.mode == 'STORE':
             for i, j in zip(tensor_syms, t_regs):
                 load_sym = self.intr["symbol_load"](i.symbol, i.rank)
                 code.append(Decl(self.intr["decl_var"], j, load_sym))
 
-        # In-register restoration of the tensor
+        # In-register restoration of the tensor layout
         perm = self.intr["g_perm"]
         uphi = self.intr["unpck_hi"]
         uplo = self.intr["unpck_lo"]
@@ -539,25 +522,30 @@ class OuterProduct():
         return code
 
     def generate(self, rows):
-        """Generate the outer-product intrinsics-based vectorisation code. """
+        """Generate the outer-product intrinsics-based vectorisation code.
+
+        By default, the tensor computed by the outer product vectorization is
+        kept in memory, so the layout is restored by means of explicit load and
+        store instructions. The resulting code will therefore look like: ::
+
+        for ...
+          for j
+            for k
+              for ...
+                A[j][k] = ...intrinsics-based outer product along ``j-k``...
+        for j
+          for k
+            A[j][k] = ...intrinsics-based code for layout restoration...
+
+        The other possibility would be to keep the computed values in temporaries
+        after a suitable permutation of the loops in the nest; this variant can be
+        activated by passing ``mode='MOVE'``, but it is not recommended unless
+        loops are very small *and* a suitable permutation of the nest has been
+        chosen to minimize register spilling.
+        """
         cols = self.intr["dp_reg"]
-
-        # Determine order of loops w.r.t. the local tensor entries.
-        # If j-k are the inner loops and A[j][k], then increments of
-        # A are performed within the k loop, otherwise we would lose too many
-        # vector registers for keeping tmp values. On the other hand, if i is
-        # the innermost loop (i.e. loop nest is j-k-i), stores in memory are
-        # done outside of ip, i.e. immediately before the outer product's
-        # inner loop terminates.
-        if self.loops[1] in inner_loops(self.loops[0]):
-            mode = self.OP_STORE_IN_MEM
-            tensor_size = cols
-        else:
-            mode = self.OP_REGISTER_INC
-            tensor_size = rows
-
-        tensor = self.stmt.children[0]
-        expr = self.stmt.children[1]
+        tensor, expr = self.stmt.children
+        tensor_size = cols
 
         # Get source-level variables
         regs = self.Alloc(self.intr, tensor_size)
@@ -566,9 +554,7 @@ class OuterProduct():
         self.loops[0].incr.children[1] = c_sym(rows)
         self.loops[1].incr.children[1] = c_sym(cols)
 
-        stmt = []
-        decls = {}
-        vrs = {}
+        stmts, decls, vrs = [], {}, {}
         rows_per_col = rows / cols
         rows_to_peel = rows % cols
         peeling = 0
@@ -583,23 +569,23 @@ class OuterProduct():
                 # Vectorize, declare allocated variables, increment tensor
                 ofs = j * cols
                 v_expr = self._vect_expr(expr, ofs, regs, decls, vrs)
-                stmt.extend(self._vect_mem(vrs, decls))
-                incr = self._incr_tensor(tensor, i + ofs, regs, v_expr, mode)
-                stmt.append(incr)
+                stmts.extend(self._vect_mem(vrs, decls))
+                incr = self._incr_tensor(tensor, i + ofs, regs, v_expr)
+                stmts.append(incr)
             # Register shuffles
             if rows_per_col + (rows_to_peel - peeling) > 0:
-                stmt.extend(self._swap_reg(i, vrs))
+                stmts.extend(self._swap_reg(i, vrs))
 
         # Set initialising and tensor layout code
-        layout = self._restore_layout(regs, tensor, mode)
-        if mode == self.OP_STORE_IN_MEM:
+        layout = self._restore_layout(regs, tensor)
+        if self.mode == 'STORE':
             # Tensor layout
             layout_loops = dcopy(self.loops)
             layout_loops[0].incr.children[1] = c_sym(cols)
             layout_loops[0].children = [Block([layout_loops[1]], open_scope=True)]
             layout_loops[1].children = [Block(layout, open_scope=True)]
             layout = layout_loops[0]
-        elif mode == self.OP_REGISTER_INC:
+        elif self.mode == 'MOVE':
             # Initialiser
             for r in regs.get_tensor():
                 decl = Decl(self.intr["decl_var"], Symbol(r, ()), self.intr["setzero"])
@@ -608,7 +594,7 @@ class OuterProduct():
             self.loops[1].body.extend(layout)
             layout = None
 
-        return (stmt, layout)
+        return (stmts, layout)
 
 
 # Utility functions
