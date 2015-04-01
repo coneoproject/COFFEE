@@ -42,19 +42,12 @@ initialized = False
 from base import *
 from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
-from vectorizer import LoopVectorizer
+from vectorizer import LoopVectorizer, VectStrategy
 from autotuner import Autotuner
 
 from copy import deepcopy as dcopy
 import itertools
 import operator
-
-# Possibile optimizations
-AUTOVECT = 1        # Auto-vectorization
-V_OP_PADONLY = 2    # Outer-product vectorization + extra operations
-V_OP_PEEL = 3       # Outer-product vectorization + peeling
-V_OP_UAJ = 4        # Outer-product vectorization + unroll-and-jam
-V_OP_UAJ_EXTRA = 5  # Outer-product vectorization + unroll-and-jam + extra iters
 
 # Track the scope of a variable in the kernel
 LOCAL_VAR = 0  # Variable declared and used within the kernel
@@ -186,7 +179,7 @@ class ASTKernel(object):
         autotune_min = [('rewrite', {'rewrite': 1, 'align_pad': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (V_OP_UAJ, 1)})]
+                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 1)})]
         autotune_all = [('base', {}),
                         ('base', {'rewrite': 1, 'align_pad': True}),
                         ('rewrite', {'rewrite': 2, 'align_pad': True}),
@@ -199,11 +192,11 @@ class ASTKernel(object):
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 4}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (V_OP_UAJ, 1)}),
+                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 1)}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (V_OP_UAJ, 2)}),
+                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2)}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (V_OP_UAJ, 3)})]
+                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 3)})]
 
         def _generate_cpu_code(self, kernel, **kwargs):
             """Generate kernel code according to the various optimization options."""
@@ -230,11 +223,11 @@ class ASTKernel(object):
                 raise RuntimeError("Split forbidden when avoiding zero-columns")
             if rewrite == 3 and toblas:
                 raise RuntimeError("BLAS forbidden when avoiding zero-columns")
-            if rewrite == 3 and v_type and v_type != AUTOVECT:
+            if rewrite == 3 and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Zeros removal only supports auto-vectorization")
-            if unroll and v_type and v_type != AUTOVECT:
+            if unroll and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Outer-product vectorization needs no unroll")
-            if permute and v_type and v_type != AUTOVECT:
+            if permute and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Outer-product vectorization needs no permute")
 
             decls, fors = self._visit_ast(kernel, fors=[], decls={})
@@ -279,7 +272,7 @@ class ASTKernel(object):
                         # Padding
                         if not toblas:
                             vect.padding(decls)
-                    if v_type and v_type != AUTOVECT:
+                    if v_type and v_type != VectStrategy.AUTO:
                         if isa['inst_set'] == 'SSE':
                             raise RuntimeError("SSE vectorization not supported")
                         # Specialize vectorization for the memory access pattern
@@ -385,7 +378,7 @@ class ASTKernel(object):
             params = {
                 'rewrite': 2,
                 'align_pad': True,
-                'vectorize': (V_OP_UAJ, 2),
+                'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2),
                 'precompute': 1
             }
         elif opts.get('O3'):

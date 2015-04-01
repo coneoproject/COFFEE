@@ -31,8 +31,6 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""COFFEE's SIMD vectorizer"""
-
 from math import ceil
 from copy import deepcopy as dcopy
 from collections import defaultdict
@@ -42,9 +40,26 @@ from utils import *
 import plan
 
 
-class LoopVectorizer(object):
+class VectStrategy():
 
-    """ Expression vectorizer class."""
+    """Supported vectorization modes."""
+
+    # Generate scalar code suitable to compiler auto-vectorization
+    AUTO = 1
+    # Specialized (intrinsics-based) vectorization using padding
+    SPEC_PADD = 2
+    # Specialized (intrinsics-based) vectorization using peel loop
+    SPEC_PEEL = 3
+    # Specialized (intrinsics-based) vectorization composed with unroll-and-jam
+    # of outer loops, padding (to enforce data alignment), and peeling of padded
+    # iterations.
+    SPEC_UAJ_PADD = 4
+    # Specialized (intrinsics-based) vectorization composed with unroll-and-jam
+    # of outer loops and padding (to enforce data alignment).
+    SPEC_UAJ_PADD_FULL = 5
+
+
+class LoopVectorizer(object):
 
     def __init__(self, loop_opt):
         self.loop_opt = loop_opt
@@ -261,15 +276,8 @@ class LoopVectorizer(object):
 
         * AVX
 
-        The parameter ``opts`` can be used to drive the transformation process:
-
-        * ``opts = V_OP_PADONLY`` : no peeling, just use padding
-        * ``opts = V_OP_PEEL`` : peeling for autovectorisation
-        * ``opts = V_OP_UAJ`` : set unroll_and_jam as specified by ``factor``
-        * ``opts = V_OP_UAJ_EXTRA`` : as above, but extra iters avoid remainder
-          loop factor is an additional parameter to specify things like
-          unroll-and-jam factor. Note that factor is just a suggestion to the
-          compiler, which can freely decide to use a higher or lower value.
+        The parameter ``opts`` can be used to drive the transformation process by
+        specifying one of the vectorization strategies in :class:`VectStrategy`.
         """
         layout = None
         for stmt, expr_info in self.loop_opt.exprs.items():
@@ -289,27 +297,28 @@ class LoopVectorizer(object):
             op = OuterProduct(stmt, unit_stride_loops, 'STORE')
 
             # Vectorisation
-            unroll_factor = factor if opts in [plan.V_OP_UAJ, plan.V_OP_UAJ_EXTRA] else 1
+            vs = VectStrategy
+            unroll_factor = factor if opts in [vs.SPEC_UAJ_PADD, vs.SPEC_UAJ_PADD_FULL] else 1
             rows_per_it = vect_len*unroll_factor
-            if opts == plan.V_OP_UAJ:
+            if opts == vs.SPEC_UAJ_PADD:
                 if rows_per_it <= rows:
                     body, layout = op.generate(rows_per_it)
                 else:
                     # Unroll factor too big
                     body, layout = op.generate(vect_len)
-            elif opts == plan.V_OP_UAJ_EXTRA:
+            elif opts == SPEC_UAJ_PADD_FULL:
                 if rows <= rows_per_it or vect_roundup(rows) % rows_per_it > 0:
                     # Cannot unroll too much
                     body, layout = op.generate(vect_len)
                 else:
                     body, layout = op.generate(rows_per_it)
-            elif opts in [plan.V_OP_PADONLY, plan.V_OP_PEEL]:
+            elif opts in [vs.SPEC_PADD, vs.SPEC_PEEL]:
                 body, layout = op.generate(vect_len)
             else:
                 raise RuntimeError("Don't know how to vectorize option %s" % opts)
 
             # Construct the remainder loop
-            if opts != plan.V_OP_UAJ_EXTRA and rows > rows_per_it and rows % rows_per_it > 0:
+            if opts != vs.SPEC_UAJ_PADD_FULL and rows > rows_per_it and rows % rows_per_it > 0:
                 # peel out
                 loop_peel = dcopy(unit_stride_loops)
                 # Adjust main, layout and remainder loops bound and trip
