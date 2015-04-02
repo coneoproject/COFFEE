@@ -423,14 +423,14 @@ class ZeroLoopScheduler(LoopScheduler):
         self.hoisted = hoisted
 
         # Track zero blocks in each symbol accessed in the computation rooted in root
-        self.nz_in_syms = {}
+        self.nonzero_syms = {}
         # Track blocks accessed for evaluating symbols in the various for loops
         # rooted in root
         self.nonzero_info = OrderedDict()
 
     def _get_nz_bounds(self, node):
         if isinstance(node, Symbol):
-            return (node.rank[-1], self.nz_in_syms[node.symbol])
+            return (node.rank[-1], self.nonzero_syms[node.symbol])
         elif isinstance(node, Par):
             return self._get_nz_bounds(node.children[0])
         elif isinstance(node, Prod):
@@ -465,19 +465,19 @@ class ZeroLoopScheduler(LoopScheduler):
         """Scan each variable ``v`` in ``node``: if non-initialized elements in ``v``
         are touched as iterating along ``itspace``, initialize ``v`` to 0.0."""
 
-        def get_accessed_syms(node, nz_in_syms, found_syms):
+        def get_accessed_syms(node, nonzero_syms, found_syms):
             if isinstance(node, Symbol):
-                nz_in_node = nz_in_syms.get(node.symbol)
+                nz_in_node = nonzero_syms.get(node.symbol)
                 if nz_in_node:
                     nz_regions = dict(zip([r for r in node.rank], nz_in_node))
                     found_syms.append((node.symbol, nz_regions))
             else:
                 for n in node.children:
-                    get_accessed_syms(n, nz_in_syms, found_syms)
+                    get_accessed_syms(n, nonzero_syms, found_syms)
 
         # Determine the symbols accessed in node and their non-zero regions
         found_syms = []
-        get_accessed_syms(node.children[1], self.nz_in_syms, found_syms)
+        get_accessed_syms(node.children[1], self.nonzero_syms, found_syms)
 
         # If iteration space along which they are accessed is bigger than the
         # non-zero region, hoisted symbols must be initialized to zero
@@ -520,7 +520,7 @@ class ZeroLoopScheduler(LoopScheduler):
         if isinstance(node, Symbol):
             if node.offset:
                 raise RuntimeError("Zeros error: offsets not supported: %s" % str(node))
-            nz_bounds = self.nz_in_syms.get(node.symbol)
+            nz_bounds = self.nonzero_syms.get(node.symbol)
             if nz_bounds:
                 itvars = [r for r in node.rank]
                 return dict(zip(itvars, nz_bounds))
@@ -547,12 +547,12 @@ class ZeroLoopScheduler(LoopScheduler):
         rooted in ``self.root``.
 
         Before start tracking zero blocks in the nodes rooted in ``node``,
-        ``self.nz_in_syms`` contains, for each known identifier, the ranges of
+        ``self.nonzero_syms`` contains, for each known identifier, the ranges of
         its zero blocks. For example, assuming identifier A is an array and has
         zero-valued entries in positions from 0 to k and from N-k to N,
-        ``self.nz_in_syms`` will contain an entry "A": ((0, k), (N-k, N)).
+        ``self.nonzero_syms`` will contain an entry "A": ((0, k), (N-k, N)).
         If A is modified by some statements rooted in ``node``, then
-        ``self.nz_in_syms["A"]`` will be modified accordingly.
+        ``self.nonzero_syms["A"]`` will be modified accordingly.
 
         This method also updates ``self.nonzero_info``, which maps loop nests to
         the enclosed symbols' non-zero blocks. For example, given the following
@@ -584,22 +584,22 @@ class ZeroLoopScheduler(LoopScheduler):
             # target symbol. Note that by scanning loop_nest, the nonzero
             # bounds are stored in order. For example, if the symbol is
             # A[][], that is, it has two dimensions, then the first element
-            # of the tuple stored in nz_in_syms[symbol] represents the nonzero
+            # of the tuple stored in /nonzero_syms[symbol]/ represents the nonzero
             # bounds for the first dimension, the second element the same for
             # the second dimension, and so on if it had had more dimensions.
-            # Also, since nz_in_syms represents the propagation of non-zero
+            # Also, since /nonzero_syms/ represents the propagation of non-zero
             # columns "up to this point of the computation", we have to merge
             # the non-zero columns produced by this node with those that we
             # had already found.
             nz_in_sym = tuple(itvar_nz_bounds[l.itvar] for l in loop_nest
                               if l.itvar in rank)
-            if symbol in self.nz_in_syms:
+            if symbol in self.nonzero_syms:
                 merged_nz_in_sym = []
-                for i in zip(nz_in_sym, self.nz_in_syms[symbol]):
+                for i in zip(nz_in_sym, self.nonzero_syms[symbol]):
                     flat_nz_bounds = [nzb for nzb_sym in i for nzb in nzb_sym]
                     merged_nz_in_sym.append(itspace_merge(flat_nz_bounds))
                 nz_in_sym = tuple(merged_nz_in_sym)
-            self.nz_in_syms[symbol] = nz_in_sym
+            self.nonzero_syms[symbol] = nz_in_sym
             if loop_nest:
                 # Track the propagation of non-zero blocks in this specific
                 # loop nest. Outer loops, i.e. loops that have non been
@@ -628,12 +628,10 @@ class ZeroLoopScheduler(LoopScheduler):
                 # Note that nz_bounds are stored as second element of a 2-tuple,
                 # because the declared array is two-dimensional, in which the
                 # second dimension represents the columns
-                self.nz_in_syms[s] = (((0, d.sym.rank[0]-1),), (nz_col_bounds,))
-            else:
-                self.nz_in_syms[s] = tuple(((0, r-1),) for r in d.size)
+                self.nonzero_syms[s] = (((0, d.sym.rank[0]-1),), (nz_col_bounds,))
 
         # If zeros were not found, then just give up
-        if not self.nz_in_syms:
+        if not self.nonzero_syms:
             return {}
 
         # Track propagation of zero blocks by symbolically executing the code
@@ -716,9 +714,6 @@ class ZeroLoopScheduler(LoopScheduler):
         propagation of zero-valued columns along the computation. This, therefore,
         involves fissing and fusing loops so as to remove iterations spent
         performing arithmetic operations over zero-valued entries."""
-
-        if not self.exprs:
-            return
 
         roots, new_exprs = set(), {}
         elf = ExpressionFissioner(1)
