@@ -612,6 +612,15 @@ def itspace_from_for(loops, mode=0):
         return tuple((l.itvar, (l.start, l.end - 1)) for l in loops)
 
 
+def itspace_copy(loop_a, loop_b):
+    """Copy the iteration space of ``loop_b`` into ``loop_a``, while preserving
+    the body."""
+    loop_a.init = dcopy(loop_b.init)
+    loop_a.cond = dcopy(loop_b.cond)
+    loop_a.incr = dcopy(loop_b.incr)
+    loop_a.pragma = dcopy(loop_b.pragma)
+
+
 #############################
 # Generic utility functions #
 #############################
@@ -630,15 +639,6 @@ def insert_at_elem(list, elem, new_elem, ofs=0):
 ###########################################
 # Generic utility functions for AST loops #
 ###########################################
-
-
-def set_itspace(loop_a, loop_b):
-    """Copy the iteration space of ``loop_b`` into ``loop_a``, while preserving
-    the body."""
-    loop_a.init = dcopy(loop_b.init)
-    loop_a.cond = dcopy(loop_b.cond)
-    loop_a.incr = dcopy(loop_b.incr)
-    loop_a.pragma = dcopy(loop_b.pragma)
 
 
 def loops_as_dict(loops):
