@@ -48,18 +48,18 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt_info, decls, header, hoisted, expr_graph):
+    def __init__(self, stmt, expr_info, decls, header, hoisted, expr_graph):
         """Initialize the ExpressionRewriter.
 
-        :param stmt_info: an AST node statement containing an expression and meta
-                         information (MetaExpr) related to the expression itself.
-                         including the iteration space it depends on.
-        :param decls: list of AST declarations of the various symbols in ``syms``.
+        :param stmt: AST statement containing the expression to be rewritten
+        :param expr_info: ``MetaExpr`` object describing the expression in ``stmt``
+        :param decls: declarations for the various symbols in ``stmt``.
         :param header: the parent Block of the loop in which ``stmt`` was found.
         :param hoisted: dictionary that tracks hoisted expressions
         :param expr_graph: expression graph that tracks symbol dependencies
         """
-        self.stmt, self.expr_info = stmt_info
+        self.stmt = stmt
+        self.expr_info = expr_info
         self.decls = decls
         self.header = header
         self.hoisted = hoisted

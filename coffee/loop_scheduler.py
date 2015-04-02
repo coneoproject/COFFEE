@@ -364,25 +364,22 @@ class ExpressionFissioner(LoopScheduler):
             return (split, splittable)
         return ((stmt, expr_info), ())
 
-    def fission(self, stmt_info, copy_loops):
+    def fission(self, stmt, expr_info, copy_loops):
         """Split an expression containing ``x`` summands into ``x/cut`` chunks.
         Each chunk is placed in a separate loop nest if ``copy_loops`` is true,
         in the same loop nest otherwise. In the former case, the split occurs
-        in the largest perfect loop nest wrapping the expression in ``stmt_info``.
-        Return a dictionary of all of the split chunks, in which each entry has
-        the same format of ``stmt_info``.
+        in the largest perfect loop nest wrapping the expression in ``stmt``.
+        Return a dictionary of all of the split chunks, which associates the split
+        statements to meta data (in terms of ``MetaExpr`` objects)
 
-        :param stmt_info: the expression that needs to be split. This is given as
-                          a tuple of two elements: the former is the expression
-                          root node; the latter includes info about the expression,
-                          particularly iteration variables of the enclosing loops,
-                          the enclosing loops themselves, and the parent block.
+        :param stmt: AST statement containing the expression to be fissioned
+        :param expr_info: ``MetaExpr`` object describing the expression in ``stmt``
         :param copy_loops: true if the split expressions should be placed in two
                            separate, adjacent loop nests (iterating, of course,
                            along the same iteration space); false, otherwise."""
 
         split_stmts = {}
-        splittable_stmt = stmt_info
+        splittable_stmt = (stmt, expr_info)
         while splittable_stmt:
             split_stmt, splittable_stmt = self._sum_fission(splittable_stmt, copy_loops)
             split_stmts[split_stmt[0]] = split_stmt[1]
@@ -424,6 +421,7 @@ class ZeroLoopScheduler(LoopScheduler):
         self.expr_graph = expr_graph
         self.decls = decls
         self.hoisted = hoisted
+
         # Track zero blocks in each symbol accessed in the computation rooted in root
         self.nz_in_syms = {}
         # Track blocks accessed for evaluating symbols in the various for loops
@@ -724,14 +722,13 @@ class ZeroLoopScheduler(LoopScheduler):
 
         roots, new_exprs = set(), {}
         elf = ExpressionFissioner(1)
-        for expr in self.exprs.items():
-            stmt, expr_info = expr
+        for stmt, expr_info in self.exprs.items():
             # First, split expressions into separate loop nests, based on sum's
             # associativity. This exposes more opportunities for restructuring loops,
             # since different summands may have contiguous regions of zero-valued
             # columns in different positions
             if expr_info.unit_stride_loops:
-                new_exprs.update(elf.fission(expr, False))
+                new_exprs.update(elf.fission(stmt, expr_info, False))
                 roots.add(expr_info.unit_stride_loops_parents[0])
                 self.exprs.pop(stmt)
             elif expr_info.slow_loops:

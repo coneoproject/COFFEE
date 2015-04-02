@@ -89,13 +89,13 @@ class LoopOptimizer(object):
                       * level == 4: level 3 + precomputation of read-only expressions \
                                     out of the loop nest
         """
-        for stmt_info in self.exprs.items():
-            ew = ExpressionRewriter(stmt_info, self.decls, self.header,
+        for stmt, expr_info in self.exprs.items():
+            ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             if level > 0:
                 ew.licm()
             if level > 1:
-                if not stmt_info[1].unit_stride_loops:
+                if not expr_info.unit_stride_loops:
                     continue
                 ew.expand()
                 ew.distribute()
@@ -367,14 +367,11 @@ class CPULoopOptimizer(LoopOptimizer):
                 A[i][j] += B[i]*X[j]
         """
 
-        if not self.exprs:
-            return
-
         new_exprs = {}
         elf = ExpressionFissioner(cut)
-        for splittable in self.exprs.items():
+        for stmt, expr_info in self.exprs.items():
             # Split the expression
-            new_exprs.update(elf.fission(splittable, True))
+            new_exprs.update(elf.fission(stmt, expr_info, True))
         self.exprs = new_exprs
 
     def blas(self, library):
