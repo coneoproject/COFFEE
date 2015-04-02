@@ -696,10 +696,10 @@ class ZeroLoopScheduler(LoopScheduler):
                     # Update expressions and hoisting-related information
                     if stmt in track_exprs:
                         new_exprs[stmt] = copy_metaexpr(track_exprs[stmt],
-                                                        **{'parent': inner_block,
-                                                           'loops_info': loops_info})
+                                                        parent=inner_block,
+                                                        loops_info=loops_info)
                     self.hoisted.update_stmt(stmt.children[0].symbol,
-                                             **{'loop': loops_info[0][0], 'place': root})
+                                             loop=loops_info[0][0], place=root)
                 _nonzero_info[loops_info[-1][0]] = stmt_ofs
                 # Append the created loops to the root
                 index = root.children.index(loop[0])

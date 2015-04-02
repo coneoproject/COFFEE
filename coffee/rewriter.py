@@ -502,8 +502,7 @@ class ExpressionHoister(object):
             place.children[ofs:ofs] = var_decl + inv_for + [FlatBlock("\n")]
             # Update hoisted symbols metadata
             for i in var_decl:
-                self.hoisted.update_stmt(i.sym.symbol, **{'loop': inv_code[0],
-                                                          'place': place})
+                self.hoisted.update_stmt(i.sym.symbol, loop=inv_code[0], place=place)
 
 
 class ExpressionExpander(object):
