@@ -620,8 +620,16 @@ def itspace_from_for(loops, mode=0):
 any_in = lambda a, b: any(i in b for i in a)
 flatten = lambda list: [i for l in list for i in l]
 bind = lambda a, b: [(a, v) for v in b]
-
 od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
+
+def insert_at_elem(list, elem, new_elem, ofs=0):
+    ofs = list.index(elem) + ofs
+    list.insert(ofs, new_elem)
+
+
+###########################################
+# Generic utility functions for AST loops #
+###########################################
 
 
 def set_itspace(loop_a, loop_b):

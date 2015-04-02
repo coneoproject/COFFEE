@@ -78,8 +78,10 @@ class LoopVectorizer(object):
         enforces data alignment of multi-dimensional arrays, add suitable
         pragmas to inner loops to inform the backend compiler about this
         property."""
+        # Aliases
         decls = self.loop_opt.decls
-        info = visit(self.loop_opt.header, None, search=LinAlg)
+        header = self.loop_opt.header
+        info = visit(header, search=LinAlg)
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']
@@ -160,7 +162,7 @@ class LoopVectorizer(object):
             buffer = Decl(decl.typ, Symbol('_%s' % decl.sym.symbol, buf_rank),
                           ArrayInit('%s0.0%s' % ('{'*len(buf_rank), '}'*len(buf_rank))))
             buffer.scope = LOCAL
-            self.loop_opt.header.children.insert(0, buffer)
+            header.children.insert(0, buffer)
             # C- Replace all FunDecl argument occurrences in the body with the buffer
             itspace_binding = defaultdict(list)
             for (s_itspace, offset), syms in dataspace_syms.items():
@@ -180,7 +182,7 @@ class LoopVectorizer(object):
                 s_refs, b_refs = zip(*binding)
                 if first[0] == READ:
                     copy, init = ast_c_make_copy(b_refs, s_refs, s_p_itspace, Assign)
-                    self.loop_opt.header.children.insert(0, copy.children[0])
+                    header.children.insert(0, copy.children[0])
                 if last[0] == WRITE:
                     # If extra information (i.e., a pragma) is present telling that
                     # the argument does not need to be incremented because it does
@@ -194,16 +196,15 @@ class LoopVectorizer(object):
                         op = Assign
                     copy, init = ast_c_make_copy(s_refs, b_refs, s_p_itspace, op)
                     if to_invert:
-                        to_invert = self.loop_opt.header.children.index(to_invert)
-                        self.loop_opt.header.children.insert(to_invert, copy.children[0])
+                        insert_at_elem(header.children, to_invert, copy.children[0])
                     else:
-                        self.loop_opt.header.children.append(copy.children[0])
+                        header.children.append(copy.children[0])
             # Update the global data structure
             decls[buffer.sym.symbol] = buffer
 
         # 2) Try adjusting the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
-        iloops = inner_loops(self.loop_opt.header)
+        iloops = inner_loops(header)
         adjusted_loops = []
         for l in iloops:
             adjust = True
@@ -282,8 +283,8 @@ class LoopVectorizer(object):
         layout = None
         for stmt, expr_info in self.loop_opt.exprs.items():
             parent = expr_info.parent
-            unit_stride_loops, unit_stride_loops_parents = \
-                zip(*expr_info.unit_stride_loops_info)
+            unit_stride_loops = expr_info.unit_stride_loops
+            unit_stride_loops_parents = expr_info.unit_stride_loops_parents
 
             # Check if outer-product vectorization is actually doable
             vect_len = plan.isa["dp_reg"]
@@ -319,9 +320,8 @@ class LoopVectorizer(object):
 
             # Construct the remainder loop
             if opts != vs.SPEC_UAJ_PADD_FULL and rows > rows_per_it and rows % rows_per_it > 0:
-                # peel out
+                # Adjust bounds and increments of the main, layout and remainder loops
                 loop_peel = dcopy(unit_stride_loops)
-                # Adjust main, layout and remainder loops bound and trip
                 bound = unit_stride_loops[0].cond.children[1].symbol
                 bound -= bound % rows_per_it
                 unit_stride_loops[0].cond.children[1] = c_sym(bound)
@@ -330,18 +330,17 @@ class LoopVectorizer(object):
                 loop_peel[0].incr.children[1] = c_sym(1)
                 loop_peel[1].incr.children[1] = c_sym(1)
                 # Append peeling loop after the main loop
-                unit_stride_outerparent = unit_stride_loops_parents[0]
-                ofs = unit_stride_outerparent.children.index(unit_stride_loops[0])
-                unit_stride_outerparent.children.insert(ofs+1, loop_peel[0])
+                unit_stride_outerparent = unit_stride_loops_parents[0].children
+                insert_at_elem(unit_stride_outerparent, unit_stride_loops[0], loop_peel[0], 1)
 
-            # Insert the vectorized code at the right point in the loop nest
-            blk = parent.children
-            ofs = blk.index(stmt)
-            parent.children = blk[:ofs] + body + blk[ofs + 1:]
+            # Replace scalar with vector code
+            ofs = parent.children.index(stmt)
+            parent.children[ofs:ofs] = body
+            parent.children.remove(stmt)
 
-        # Append the layout code after the whole loop nest
+        # Insert the layout code right after the loop nest enclosing the expression
         if layout:
-            parent = self.loop_opt.header.children.append(layout)
+            insert_at_elem(self.loop_opt.header.children, expr_info.loops[0], layout, 1)
 
 
 class OuterProduct():
