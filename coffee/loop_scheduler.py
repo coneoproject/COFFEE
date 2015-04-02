@@ -666,7 +666,7 @@ class ZeroLoopScheduler(LoopScheduler):
         """
 
         new_exprs = {}
-        _nonzero_info = {}
+        nonzero_info = {}
         track_exprs = {}
         for loop, stmt_itspaces in self.nonzero_info.items():
             fissioned_loops = defaultdict(list)
@@ -700,13 +700,13 @@ class ZeroLoopScheduler(LoopScheduler):
                                                         loops_info=loops_info)
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              loop=loops_info[0][0], place=root)
-                _nonzero_info[loops_info[-1][0]] = stmt_ofs
+                nonzero_info[loops_info[-1][0]] = stmt_ofs
                 # Append the created loops to the root
                 index = root.children.index(loop[0])
                 root.children.insert(index, loops_info[0][0])
             root.children.remove(loop[0])
 
-        self.nonzero_info = _nonzero_info
+        self.nonzero_info = nonzero_info
         return new_exprs
 
     def reschedule(self):
