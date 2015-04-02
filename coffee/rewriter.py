@@ -129,13 +129,12 @@ class ExpressionRewriter(object):
 
                     to_replace[str(Symbol(sym, rank))] = expr
                     to_delete.append(sym)
-
                 for stmt in l.body:
-                    symbol, expr = stmt.children
-                    sym = symbol.symbol
+                    _, expr = stmt.children
                     ast_replace(expr, to_replace, copy=True)
                 for sym in to_delete:
                     self.hoisted.delete_hoisted(sym)
+                    self.decls.pop(sym)
 
     def expand(self):
         """Expand expressions such that: ::
