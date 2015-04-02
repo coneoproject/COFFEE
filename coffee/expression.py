@@ -108,6 +108,10 @@ class MetaExpr(object):
     def unit_stride_itvars(self):
         return self._unit_stride_itvars
 
+    @property
+    def dimension(self):
+        return len(self.unit_stride_loops)
+
 
 def copy_metaexpr(expr_info, **kwargs):
     """Given a ``MetaExpr``, return a plain new ``MetaExpr`` starting from a

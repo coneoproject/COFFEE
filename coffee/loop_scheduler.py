@@ -718,27 +718,25 @@ class ZeroLoopScheduler(LoopScheduler):
         roots, new_exprs = set(), {}
         elf = ExpressionFissioner(1)
         for stmt, expr_info in self.exprs.items():
-            # First, split expressions into separate loop nests, based on sum's
-            # associativity. This exposes more opportunities for restructuring loops,
-            # since different summands may have contiguous regions of zero-valued
-            # columns in different positions
-            if expr_info.unit_stride_loops:
+            if expr_info.dimension == 0:
+                continue
+            elif expr_info.dimension > 1:
+                # Split expressions based on sum's associativity. This exposes more
+                # opportunities for rescheduling loops, since different summands
+                # may have zero-valued blocks at different offsets
                 new_exprs.update(elf.fission(stmt, expr_info, False))
-                roots.add(expr_info.unit_stride_loops_parents[0])
                 self.exprs.pop(stmt)
-            elif expr_info.slow_loops:
-                roots.add(expr_info.slow_loops_parents[0])
-            else:
-                raise RuntimeError("Expressions...")
+            roots.add(expr_info.unit_stride_loops_parents[0])
 
-            if len(roots) > 1:
-                warning("Found multiple roots while performing zero-elimination")
-                warning("The code generation is undefined")
-
+        if len(roots) > 1:
+            warning("Found multiple roots while performing zero-elimination")
+            warning("The code generation is undefined")
         root = roots.pop()
+
         # Symbolically execute the code starting from root to track the
-        # propagation of zeros
+        # propagation of zero-valued blocks in the various arrays
         self._track_nz(root)
 
-        # Finally, restructure the iteration spaces
+        # At this point we now the location of zero-valued blocks, so restructure
+        # the iteration spaces to avoid computation over such regions
         self.exprs.update(self._reschedule_itspace(root, new_exprs))
