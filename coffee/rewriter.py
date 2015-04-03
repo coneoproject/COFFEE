@@ -260,6 +260,11 @@ class ExpressionHoister(object):
     # Temporary variables template
     _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
 
+    # Constants used by the extract method to charaterize sub-expressions
+    INV = 0  # Invariant term, hoistable if part of an invariant expression
+    KSE = 1  # Invariant expression, potentially part of larger invariant
+    HOI = 2  # Variant expression, hoisted, can't hoist anymore
+
     def __init__(self, stmt, expr_info, header, decls, hoisted, expr_graph):
         """Initialize the ExpressionHoister."""
         self.stmt = stmt
@@ -276,11 +281,6 @@ class ExpressionHoister(object):
             self._expr_handled.append(stmt)
             self.expr_id = self._expr_handled.index(stmt)
         self.counter = 0
-
-        # Constants used by the extract method to charaterize sub-expressions
-        self.INV = 0  # Invariant term, hoistable if part of an invariant expression
-        self.KSE = 1  # Invariant expression, potentially part of larger invariant
-        self.HOI = 2  # Variant expression, hoisted, can't hoist anymore
 
         # Variables used for communication between the extract and licm methods
         self.extracted = False  # True if managed to hoist at least one sub-expr
@@ -387,8 +387,8 @@ class ExpressionHoister(object):
         expr_type = self.expr_info.type
 
         expr_loops = self.expr_info.loops
-        dict_expr_loops = loops_as_dict(expr_loops)
-        real_deps = dict_expr_loops.keys()
+        expr_dims_loops = For.fromloops(expr_loops)
+        real_deps = expr_dims_loops.keys()
 
         # (Re)set global parameters for the /extract/ function
         self.symbols = visit(self.header, None)['symbols_dep']
@@ -426,18 +426,18 @@ class ExpressionHoister(object):
                     place, wl = self.header, None
                     next_loop = outermost_loop
                 elif len(dep) == 1 and is_outermost_perfect:
-                    place, wl = self.header, dict_expr_loops[dep[0]]
+                    place, wl = self.header, expr_dims_loops[dep[0]]
                     next_loop = outermost_loop
                 elif len(dep) == 1 and not is_outermost_perfect:
-                    place, wl = dict_expr_loops[dep[0]].children[0], None
-                    if len(dict_expr_loops) > 1:
-                        next_loop = od_find_next(dict_expr_loops, dep[0])
+                    place, wl = expr_dims_loops[dep[0]].children[0], None
+                    if len(expr_dims_loops) > 1:
+                        next_loop = od_find_next(expr_dims_loops, dep[0])
                     else:
                         next_loop = place.children[-1]
                 else:
-                    dep_block = dict_expr_loops[dep[-2]].children[0]
-                    place, wl = dep_block, dict_expr_loops[dep[-1]]
-                    next_loop = od_find_next(dict_expr_loops, dep[-2])
+                    dep_block = expr_dims_loops[dep[-2]].children[0]
+                    place, wl = dep_block, expr_dims_loops[dep[-1]]
+                    next_loop = od_find_next(expr_dims_loops, dep[-2])
 
                 # 1) Remove identical sub-expressions
                 expr = dict([(str(e), e) for e in expr]).values()

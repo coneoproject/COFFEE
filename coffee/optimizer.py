@@ -94,9 +94,7 @@ class LoopOptimizer(object):
                                     self.hoisted, self.expr_graph)
             if level > 0:
                 ew.licm()
-            if level > 1:
-                if not expr_info.domain_loops:
-                    continue
+            if level > 1 and expr_info.dimension:
                 ew.expand()
                 ew.factorize()
                 ew.licm(merge_and_simplify=True, compact_tmps=True)
@@ -396,7 +394,6 @@ class GPULoopOptimizer(LoopOptimizer):
         ``pragma coffee itspace``."""
 
         info = visit(self.loop, self.header)
-        loops = info['fors']
         symbols = info['symbols_dep']
 
         itspace_vrs = set()

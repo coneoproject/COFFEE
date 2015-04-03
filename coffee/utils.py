@@ -634,13 +634,3 @@ od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
 def insert_at_elem(list, elem, new_elem, ofs=0):
     ofs = list.index(elem) + ofs
     list.insert(ofs, new_elem)
-
-
-###########################################
-# Generic utility functions for AST loops #
-###########################################
-
-
-def loops_as_dict(loops):
-    loops_dims = [l.dim for l in loops]
-    return OrderedDict(zip(loops_dims, loops))

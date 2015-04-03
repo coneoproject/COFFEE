@@ -34,7 +34,12 @@
 """This file contains the hierarchy of classes that implement a kernel's
 Abstract Syntax Tree (AST)."""
 
-
+try:
+    from collections import OrderedDict
+# OrderedDict was added in Python 2.7. Earlier versions can use ordereddict
+# from PyPI
+except ImportError:
+    from ordereddict import OrderedDict
 from copy import deepcopy as dcopy
 
 # Utilities for simple exprs and commands
@@ -667,6 +672,11 @@ class For(Statement):
     @body.setter
     def body(self, new_body):
         self.children[0].children = new_body
+
+    @staticmethod
+    def fromloops(loops):
+        loops_dims = [l.dim for l in loops]
+        return OrderedDict(zip(loops_dims, loops))
 
     def gencode(self, not_scope=False):
         return "\n".join(self.pragma) + "\n" + for_loop(self.init.gencode(True),
