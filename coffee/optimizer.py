@@ -95,7 +95,7 @@ class LoopOptimizer(object):
             if level > 0:
                 ew.licm()
             if level > 1:
-                if not expr_info.unit_stride_loops:
+                if not expr_info.domain_loops:
                     continue
                 ew.expand()
                 ew.distribute()
@@ -202,7 +202,7 @@ class LoopOptimizer(object):
                     do_not_precompute.add(l.loop)
         to_remove, precomputed_block, precomputed_syms = ([], [], {})
         for i in self.loop.body:
-            if i in flatten(self.expr_unit_stride_loops):
+            if i in flatten(self.expr_domain_loops):
                 break
             elif i not in do_not_precompute:
                 precompute_stmt(i, precomputed_syms, precomputed_block)
@@ -238,14 +238,14 @@ class LoopOptimizer(object):
     @property
     def expr_loops(self):
         """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
-        loops that expressions depend on."""
+        loops enclosing expressions."""
         return [expr_info.loops for expr_info in self.exprs.values()]
 
     @property
-    def expr_unit_stride_loops(self):
+    def expr_domain_loops(self):
         """Return ``[(loop1, loop2, ...), ...]``, where a tuple contains all
-        loops along which an expression performs unit-stride memory accesses."""
-        return [expr_info.unit_stride_loops for expr_info in self.exprs.values()]
+        loops representing the domain of the expressions' output tensor."""
+        return [expr_info.domain_loops for expr_info in self.exprs.values()]
 
 
 class CPULoopOptimizer(LoopOptimizer):

@@ -45,9 +45,8 @@ from copy import deepcopy as dcopy
 from warnings import warn as warning
 
 from base import *
+from utils import *
 from expression import MetaExpr, copy_metaexpr
-from utils import ast_update_ofs, itspace_size_ofs, itspace_merge, itspace_to_for
-from utils import itspace_from_for, visit, flatten
 
 
 class LoopScheduler(object):
@@ -312,8 +311,7 @@ class ExpressionFissioner(LoopScheduler):
 
         stmt, expr_info = stmt_info
         expr_parent = expr_info.parent
-        unit_stride_outerloop_info = expr_info.unit_stride_loops_info[0]
-        unit_stride_outerloop, unit_stride_outerparent = unit_stride_outerloop_info
+        domain_outerloop, domain_outerparent = expr_info.domain_loops_info[0]
 
         # Copy the original expression twice, and then split the two copies, that
         # we refer to as ``left`` and ``right``, meaning that the left copy will
@@ -336,31 +334,31 @@ class ExpressionFissioner(LoopScheduler):
             split = (stmt_left, MetaExpr(expr_info.type,
                                          expr_parent,
                                          expr_info.loops_info,
-                                         expr_info.unit_stride_itvars))
+                                         expr_info.domain))
 
             # Append the right-split (remainder) expression
             if copy_loops:
                 # Create a new loop nest
-                new_unit_stride_outerloop = dcopy(unit_stride_outerloop)
-                new_unit_stride_innerloop = new_unit_stride_outerloop.body[0]
-                new_unit_stride_innerloop_block = new_unit_stride_innerloop.children[0]
-                new_unit_stride_innerloop_block.children[0] = stmt_right
-                new_unit_stride_outerloop_info = (new_unit_stride_outerloop,
-                                                  unit_stride_outerparent)
-                new_unit_stride_innerloop_info = (new_unit_stride_innerloop,
-                                                  new_unit_stride_innerloop_block)
-                new_loops_info = expr_info.slow_loops_info + \
-                    (new_unit_stride_outerloop_info,) + (new_unit_stride_innerloop_info,)
-                unit_stride_outerparent.children.append(new_unit_stride_outerloop)
+                new_domain_outerloop = dcopy(domain_outerloop)
+                new_domain_innerloop = new_domain_outerloop.body[0]
+                new_domain_innerloop_block = new_domain_innerloop.children[0]
+                new_domain_innerloop_block.children[0] = stmt_right
+                new_domain_outerloop_info = (new_domain_outerloop,
+                                             domain_outerparent)
+                new_domain_innerloop_info = (new_domain_innerloop,
+                                             new_domain_innerloop_block)
+                new_loops_info = expr_info.out_domain_loops_info + \
+                    (new_domain_outerloop_info,) + (new_domain_innerloop_info,)
+                domain_outerparent.children.append(new_domain_outerloop)
             else:
                 # Reuse loop nest created in the previous function call
                 expr_parent.children.insert(index, stmt_right)
-                new_unit_stride_innerloop_block = expr_parent
+                new_domain_innerloop_block = expr_parent
                 new_loops_info = expr_info.loops_info
             splittable = (stmt_right, MetaExpr(expr_info.type,
-                                               new_unit_stride_innerloop_block,
+                                               new_domain_innerloop_block,
                                                new_loops_info,
-                                               expr_info.unit_stride_itvars))
+                                               expr_info.domain))
             return (split, splittable)
         return ((stmt, expr_info), ())
 
@@ -726,7 +724,7 @@ class ZeroLoopScheduler(LoopScheduler):
                 # may have zero-valued blocks at different offsets
                 new_exprs.update(elf.fission(stmt, expr_info, False))
                 self.exprs.pop(stmt)
-            roots.add(expr_info.unit_stride_loops_parents[0])
+            roots.add(expr_info.domain_loops_parents[0])
 
         if len(roots) > 1:
             warning("Found multiple roots while performing zero-elimination")

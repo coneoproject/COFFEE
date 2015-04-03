@@ -38,20 +38,22 @@ class MetaExpr(object):
 
     """Metadata container for a compute-intensive expression."""
 
-    def __init__(self, type, parent, loops_info, unit_stride_itvars):
+    def __init__(self, type, parent, loops_info, domain):
         """Initialize the MetaExpr.
 
         :param type: the C type of the expression.
         :param parent: the parent block node in which the expression is embedded.
-        :param loops_info: the ordered tuple of (loop, parent) the expression
-                           depends on.
-        :param unit_stride_itvars: the unite-stride loop dimensions, as iteration
-                                   variables, along which writes are performed.
+        :param loops_info: the ordered tuple of (loop, parent) the expression is
+                           enclosed in.
+        :param domain: an ``n``-tuple, where ``n`` is the rank of the tensor
+                       evaluated by the expression. The i-th entry corresponds to
+                       the loop dimension along which iteration occurs (For example,
+                       given an output tensor ``A[i][j]``, ``domain=(i, j)``).
         """
         self._type = type
         self._parent = parent
         self._loops_info = loops_info
-        self._unit_stride_itvars = unit_stride_itvars
+        self._domain = domain
 
     @property
     def type(self):
@@ -70,30 +72,28 @@ class MetaExpr(object):
         return self._loops_info
 
     @property
-    def unit_stride_loops(self):
-        return tuple([l for l in self.loops if l.itvar in self._unit_stride_itvars])
+    def domain_loops(self):
+        return tuple([l for l in self.loops if l.itvar in self._domain])
 
     @property
-    def unit_stride_loops_parents(self):
-        return tuple([p for l, p in self._loops_info if l.itvar
-                      in self._unit_stride_itvars])
+    def domain_loops_parents(self):
+        return tuple([p for l, p in self._loops_info if l.itvar in self._domain])
 
     @property
-    def unit_stride_loops_info(self):
-        return tuple([(l, p) for l, p in self._loops_info if l.itvar
-                      in self._unit_stride_itvars])
+    def domain_loops_info(self):
+        return tuple([(l, p) for l, p in self._loops_info if l.itvar in self._domain])
 
     @property
-    def slow_loops(self):
-        return tuple(set(self.loops) - set(self.unit_stride_loops))
+    def out_domain_loops(self):
+        return tuple(set(self.loops) - set(self.domain_loops))
 
     @property
-    def slow_loops_parents(self):
-        return tuple(set(self.loops_parents) - set(self.unit_stride_loops_parents))
+    def out_domain_loops_parents(self):
+        return tuple(set(self.loops_parents) - set(self.domain_loops_parents))
 
     @property
-    def slow_loops_info(self):
-        return tuple(set(self.loops_info) - set(self.unit_stride_loops_info))
+    def out_domain_loops_info(self):
+        return tuple(set(self.loops_info) - set(self.domain_loops_info))
 
     @property
     def perfect_loops(self):
@@ -105,12 +105,12 @@ class MetaExpr(object):
         return self._parent
 
     @property
-    def unit_stride_itvars(self):
-        return self._unit_stride_itvars
+    def domain(self):
+        return self._domain
 
     @property
     def dimension(self):
-        return len(self.unit_stride_loops)
+        return len(self._domain)
 
 
 def copy_metaexpr(expr_info, **kwargs):
@@ -121,12 +121,10 @@ def copy_metaexpr(expr_info, **kwargs):
     * ``parent``: the block node that embeds the expression.
     * ``loops_info``: an iterator of 2-tuple ``(loop, loop_parent)`` which
       substitute analogous information in the new ``MetaExpr``.
-    * ``itvars``: the iteration variables along which the expression performs
-      unit-stride accesses.
+    * ``domain``: the domain of the output tensor evaluated by the expression.
     """
-
     parent = kwargs.get('parent', expr_info.parent)
-    unit_stride_itvars = kwargs.get('itvars', expr_info.unit_stride_itvars)
+    domain = kwargs.get('domain', expr_info.domain)
 
     new_loops_info, old_loops_info = [], expr_info.loops_info
     to_replace_loops_info = kwargs.get('loops_info', [])
@@ -139,4 +137,4 @@ def copy_metaexpr(expr_info, **kwargs):
         else:
             new_loops_info.append(loop_info)
 
-    return MetaExpr(expr_info.type, parent, new_loops_info, unit_stride_itvars)
+    return MetaExpr(expr_info.type, parent, new_loops_info, domain)

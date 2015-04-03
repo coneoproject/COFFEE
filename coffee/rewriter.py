@@ -159,7 +159,7 @@ class ExpressionRewriter(object):
         # The heuristics here is that the expansion occurs along the iteration
         # variable which appears in more unique arrays. This will allow factorization
         # to be more effective.
-        itvar_occs = dict.fromkeys(self.expr_info.unit_stride_itvars, 0)
+        itvar_occs = dict.fromkeys(self.expr_info.domain, 0)
         for _, itvar in count_occurrences(self.stmt.children[1]).keys():
             if itvar and itvar[0] in itvar_occs:
                 itvar_occs[itvar[0]] += 1

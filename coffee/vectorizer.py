@@ -282,20 +282,19 @@ class LoopVectorizer(object):
         """
         layout = None
         for stmt, expr_info in self.loop_opt.exprs.items():
+            if expr_info.dimension != 2:
+                continue
             parent = expr_info.parent
-            unit_stride_loops = expr_info.unit_stride_loops
-            unit_stride_loops_parents = expr_info.unit_stride_loops_parents
+            domain_loops = expr_info.domain_loops
+            domain_loops_parents = expr_info.domain_loops_parents
 
             # Check if outer-product vectorization is actually doable
             vect_len = plan.isa["dp_reg"]
-            rows = unit_stride_loops[0].size
+            rows = domain_loops[0].size
             if rows < vect_len:
                 continue
-            if len(unit_stride_loops) != 2:
-                # There must be exactly two unit-strided dimensions
-                continue
 
-            op = OuterProduct(stmt, unit_stride_loops, 'STORE')
+            op = OuterProduct(stmt, domain_loops, 'STORE')
 
             # Vectorisation
             vs = VectStrategy
@@ -321,17 +320,18 @@ class LoopVectorizer(object):
             # Construct the remainder loop
             if opts != vs.SPEC_UAJ_PADD_FULL and rows > rows_per_it and rows % rows_per_it > 0:
                 # Adjust bounds and increments of the main, layout and remainder loops
-                loop_peel = dcopy(unit_stride_loops)
-                bound = unit_stride_loops[0].cond.children[1].symbol
+                domain_outerloop = domain_loops[0]
+                peel_loop = dcopy(domain_loops)
+                bound = domain_outerloop.cond.children[1].symbol
                 bound -= bound % rows_per_it
-                unit_stride_loops[0].cond.children[1] = c_sym(bound)
-                layout.cond.children[1] = c_sym(bound)
-                loop_peel[0].init.init = c_sym(bound)
-                loop_peel[0].incr.children[1] = c_sym(1)
-                loop_peel[1].incr.children[1] = c_sym(1)
+                domain_outerloop.cond.children[1] = Symbol(bound)
+                layout.cond.children[1] = Symbol(bound)
+                peel_loop[0].init.init = Symbol(bound)
+                peel_loop[0].incr.children[1] = Symbol(1)
+                peel_loop[1].incr.children[1] = Symbol(1)
                 # Append peeling loop after the main loop
-                unit_stride_outerparent = unit_stride_loops_parents[0].children
-                insert_at_elem(unit_stride_outerparent, unit_stride_loops[0], loop_peel[0], 1)
+                domain_outerparent = domain_loops_parents[0].children
+                insert_at_elem(domain_outerparent, domain_outerloop, peel_loop[0], 1)
 
             # Replace scalar with vector code
             ofs = parent.children.index(stmt)
@@ -434,7 +434,7 @@ class OuterProduct():
             if node_ide not in decls:
                 reg = [k for k in vrs.keys() if k.gencode() == node_ide]
                 if not reg:
-                    vrs[node] = c_sym(regs.get_reg())
+                    vrs[node] = Symbol(regs.get_reg())
                     return vrs[node]
                 else:
                     return vrs[reg[0]]
@@ -556,8 +556,8 @@ class OuterProduct():
         regs = self.Alloc(tensor_size)
 
         # Adjust loops' increment
-        self.loops[0].incr.children[1] = c_sym(rows)
-        self.loops[1].incr.children[1] = c_sym(cols)
+        self.loops[0].incr.children[1] = Symbol(rows)
+        self.loops[1].incr.children[1] = Symbol(cols)
 
         stmts, decls, vrs = [], {}, {}
         rows_per_col = rows / cols
@@ -586,7 +586,7 @@ class OuterProduct():
         if self.mode == 'STORE':
             # Tensor layout
             layout_loops = dcopy(self.loops)
-            layout_loops[0].incr.children[1] = c_sym(cols)
+            layout_loops[0].incr.children[1] = Symbol(cols)
             layout_loops[0].children = [Block([layout_loops[1]], open_scope=True)]
             layout_loops[1].children = [Block(layout, open_scope=True)]
             layout = layout_loops[0]

@@ -350,8 +350,7 @@ def visit(node, parent=None, search=None, stop_on_search=False):
                 return
             if opts[1] == 'coffee' and opts[2] == 'expression':
                 # Found high-level optimisation
-                unit_stride_itvars = node.children[0].rank
-                return (parent, fors, unit_stride_itvars)
+                return (parent, fors, node.children[0].rank)
 
     def inspect(node, parent, **kwargs):
         if search and isinstance(node, search):
