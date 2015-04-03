@@ -216,9 +216,7 @@ class LoopOptimizer(object):
             new_outer_block.append(ast_c_for(searching_stmt, self.loop))
 
         # Update the AST adding the newly precomputed blocks
-        root = self.header.children
-        ofs = root.index(self.loop)
-        self.header.children = root[:ofs] + new_outer_block + root[ofs:]
+        insert_at_elem(self.header.children, self.loop, new_outer_block)
 
         # Update the AST by scalar-expanding the pre-computed accessed variables
         ast_update_rank(self.loop, precomputed_syms)

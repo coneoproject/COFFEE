@@ -631,6 +631,8 @@ bind = lambda a, b: [(a, v) for v in b]
 od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
 
 
-def insert_at_elem(list, elem, new_elem, ofs=0):
-    ofs = list.index(elem) + ofs
-    list.insert(ofs, new_elem)
+def insert_at_elem(_list, elem, new_elem, ofs=0):
+    ofs = _list.index(elem) + ofs
+    new_elem = [new_elem] if not isinstance(new_elem, list) else new_elem
+    for e in reversed(new_elem):
+        _list.insert(ofs, e)
