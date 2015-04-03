@@ -102,7 +102,15 @@ class ASTKernel(object):
         for kernel in kernels:
             info = visit(kernel)
             decls = info['decls']
-            nests = set(nest[0] for nest in info['fors'])
+            # Structure up expressions and related metadata
+            nests = defaultdict(OrderedDict)
+            for stmt, expr_info in info['exprs'].items():
+                parent, nest, domain = expr_info
+                if not nest:
+                    continue
+                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, domain)
+                nests[nest[0]].update({stmt: metaexpr})
+
             loop_opts = [GPULoopOptimizer(l, header, decls) for l, header in nests]
             for loop_opt in loop_opts:
                 itspace_vrs, accessed_vrs = loop_opt.extract()
@@ -207,11 +215,14 @@ class ASTKernel(object):
             # Structure up expressions and related metadata
             nests = defaultdict(OrderedDict)
             for stmt, expr_info in info['exprs'].items():
-                _, nest, _ = expr_info
-                nests[nest[0]].update({stmt: MetaExpr(check_type(stmt, decls), *expr_info)})
-            loop_opts = [CPULoopOptimizer(nest[0], nest[1], decls, exprs)
-                         for nest, exprs in nests.items()]
+                parent, nest, domain = expr_info
+                if not nest:
+                    continue
+                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, domain)
+                nests[nest[0]].update({stmt: metaexpr})
 
+            loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
+                         for (loop, header), exprs in nests.items()]
             for loop_opt in loop_opts:
                 # 0) Expression Rewriting
                 if rewrite:
