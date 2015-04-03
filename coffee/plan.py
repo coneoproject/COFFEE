@@ -249,8 +249,7 @@ class ASTKernel(object):
                     loop_opt.unroll(dict(unroll))
 
                 # 4) Vectorization
-                if initialized:
-                    decls = dict(decls.items() + loop_opt.decls.items())
+                if initialized and loop_opt.expr_domain_loops[0]:
                     vect = LoopVectorizer(loop_opt)
                     if ap:
                         # Data alignment
