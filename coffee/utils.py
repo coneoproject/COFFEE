@@ -231,7 +231,7 @@ def ast_update_id(symbol, name, id):
 ###############################################
 
 
-def ast_c_for(stmts, loop, copy=False):
+def ast_make_for(stmts, loop, copy=False):
     """Create a for loop having the same iteration space as  ``loop`` enclosing
     the statements in  ``stmts``. If ``copy == True``, then new instances of
     ``stmts`` are created"""
@@ -243,16 +243,13 @@ def ast_c_for(stmts, loop, copy=False):
     return new_loop
 
 
-def ast_c_sum(symbols):
+def ast_make_sum(symbols):
     """Create a ``Sum`` object starting from a symbols list ``symbols``. If
-    the length of ``symbols`` is 1, return ``Symbol(symbols[0])``."""
-    if len(symbols) == 1:
-        return symbols[0]
-    else:
-        return Sum(symbols[0], ast_c_sum(symbols[1:]))
+    the length of ``symbols`` is 1, return the only symbol present."""
+    return symbols[0] if len(symbols) == 1 else Sum(symbols[0], ast_make_sum(symbols[1:]))
 
 
-def ast_c_make_alias(node1, node2):
+def ast_make_alias(node1, node2):
     """Return an object in which the LHS is represented by ``node1`` and the RHS
     by ``node2``, and ``node1`` is an alias for ``node2``; that is, ``node1``
     will point to the same memory region of ``node2``.
@@ -283,7 +280,7 @@ def ast_c_make_alias(node1, node2):
     return node1
 
 
-def ast_c_make_copy(arr1, arr2, itspace, op):
+def ast_make_copy(arr1, arr2, itspace, op):
     """Create an AST performing a copy from ``arr2`` to ``arr1``.
     Return also an ``ArrayInit`` object indicating how ``arr1`` should be
     initialized prior to the copy."""

@@ -181,7 +181,7 @@ class LoopVectorizer(object):
             for s_p_itspace, binding in itspace_binding.items():
                 s_refs, b_refs = zip(*binding)
                 if first[0] == READ:
-                    copy, init = ast_c_make_copy(b_refs, s_refs, s_p_itspace, Assign)
+                    copy, init = ast_make_copy(b_refs, s_refs, s_p_itspace, Assign)
                     header.children.insert(0, copy.children[0])
                 if last[0] == WRITE:
                     # If extra information (i.e., a pragma) is present telling that
@@ -194,7 +194,7 @@ class LoopVectorizer(object):
                     if ext_acc_mode and ext_acc_mode[0] == WRITE and \
                             len(itspace_binding) == 1:
                         op = Assign
-                    copy, init = ast_c_make_copy(s_refs, b_refs, s_p_itspace, op)
+                    copy, init = ast_make_copy(s_refs, b_refs, s_p_itspace, op)
                     if to_invert:
                         insert_at_elem(header.children, to_invert, copy.children[0])
                     else:

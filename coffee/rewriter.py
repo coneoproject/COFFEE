@@ -234,9 +234,9 @@ class ExpressionRewriter(object):
         new_prods = []
         for d in to_distr.values():
             dist, target = zip(*d)
-            target = Par(ast_c_sum(target)) if len(target) > 1 else ast_c_sum(target)
+            target = Par(ast_make_sum(target)) if len(target) > 1 else ast_make_sum(target)
             new_prods.append(Par(Prod(dist[0], target)))
-        self.stmt.children[1] = Par(ast_c_sum(new_prods))
+        self.stmt.children[1] = Par(ast_make_sum(new_prods))
 
 
 class ExpressionHoister(object):

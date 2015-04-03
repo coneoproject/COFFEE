@@ -204,16 +204,16 @@ class LoopOptimizer(object):
         searching_stmt = []
         for i in precomputed_block:
             if searching_stmt and not isinstance(i, (Assign, Incr)):
-                new_outer_block.append(ast_c_for(searching_stmt, self.loop))
+                new_outer_block.append(ast_make_for(searching_stmt, self.loop))
                 searching_stmt = []
             if isinstance(i, For):
-                new_outer_block.append(ast_c_for([i], self.loop))
+                new_outer_block.append(ast_make_for([i], self.loop))
             elif isinstance(i, (Assign, Incr)):
                 searching_stmt.append(i)
             else:
                 new_outer_block.append(i)
         if searching_stmt:
-            new_outer_block.append(ast_c_for(searching_stmt, self.loop))
+            new_outer_block.append(ast_make_for(searching_stmt, self.loop))
 
         # Update the AST adding the newly precomputed blocks
         insert_at_elem(self.header.children, self.loop, new_outer_block)
