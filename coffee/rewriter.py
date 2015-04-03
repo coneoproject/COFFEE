@@ -73,9 +73,6 @@ class ExpressionRewriter(object):
                                               self.hoisted,
                                               self.expr_graph)
 
-        # Properties of the transformed expression
-        self._expanded = False
-
     def licm(self, merge_and_simplify=False, compact_tmps=False):
         """Perform generalized loop-invariant code motion.
 
@@ -172,71 +169,31 @@ class ExpressionRewriter(object):
 
         # Update known declarations
         self.decls.update(ee.expanded_decls)
-        self._expanded = True
 
-    def factorize(self):
-        """Factorize terms in the expression.
-        E.g. ::
+    def factorize(self, mode='default'):
+        """Factorize terms in the expression. For example: ::
 
             A[i]*B[j] + A[i]*C[j]
 
         becomes ::
 
-            A[i]*(B[j] + C[j])."""
+            A[i]*(B[j] + C[j]).
 
-        def find_prod(node, occs, to_distr):
-            if isinstance(node, Symbol):
-                return
-            elif isinstance(node, Par):
-                find_prod(node.children[0], occs, to_distr)
-            elif isinstance(node, Sum):
-                left, right = (node.children[0], node.children[1])
-                find_prod(left, occs, to_distr)
-                find_prod(right, occs, to_distr)
-            elif isinstance(node, Prod):
-                left, right = (node.children[0], node.children[1])
-                find_prod(left, occs, to_distr)
-                find_prod(right, occs, to_distr)
-                l_str, r_str = (str(left), str(right))
-                if occs[l_str] > 1 and occs[r_str] > 1:
-                    if occs[l_str] > occs[r_str]:
-                        dist = l_str
-                        target = (left, right)
-                        occs[r_str] -= 1
-                    else:
-                        dist = r_str
-                        target = (right, left)
-                        occs[l_str] -= 1
-                elif occs[l_str] > 1 and occs[r_str] == 1:
-                    dist = l_str
-                    target = (left, right)
-                elif occs[r_str] > 1 and occs[l_str] == 1:
-                    dist = r_str
-                    target = (right, left)
-                elif occs[l_str] == 1 and occs[r_str] == 1:
-                    dist = l_str
-                    target = (left, right)
-                else:
-                    return
-                to_distr[dist].append(target)
+        :param mode: different factorization strategies are possible, each exposing
+                     distinct, "hidden" opportunities for code motion.
 
-        if not self._expanded:
-            raise RuntimeError("Distribute error: expansion required first.")
-
-        to_distr = defaultdict(list)
-        occurrences = count_occurrences(self.stmt.children[1], key=2)
-        find_prod(self.stmt.children[1], occurrences, to_distr)
-
-        if not to_distr:
-            return
-
-        # Create the new expression
-        new_prods = []
-        for d in to_distr.values():
-            dist, target = zip(*d)
-            target = Par(ast_make_sum(target)) if len(target) > 1 else ast_make_sum(target)
-            new_prods.append(Par(Prod(dist[0], target)))
-        self.stmt.children[1] = Par(ast_make_sum(new_prods))
+                     * mode == 'standard': this simple heuristics consists of \
+                                           grouping on symbols that appear the \
+                                           most in the expression.
+                     * mode == 'immutable': if many static constant objects are \
+                                            expected, with this strategy they are \
+                                            grouped together, within the obvious \
+                                            limits imposed by the expression itself.
+        """
+        if mode not in ['standard', 'immutable']:
+            warning('Unknown factorization strategy. Skipping.')
+        ef = ExpressionFactorizer(mode, self.stmt)
+        ef.factorize()
 
 
 class ExpressionHoister(object):
@@ -663,3 +620,64 @@ class ExpressionExpander(object):
         """Perform the expansion of the expression rooted in ``self.stmt``.
         Terms are expanded along the iteration variable ``self.dim_exp``."""
         self._expand(self.stmt.children[1], self.stmt)
+
+
+class ExpressionFactorizer(object):
+
+    def __init__(self, mode, stmt):
+        self.mode = mode
+        self.stmt = stmt
+
+    def _find_prod(self, node, occs, factorizable):
+        if isinstance(node, Symbol):
+            return
+        elif isinstance(node, Par):
+            self._find_prod(node.children[0], occs, factorizable)
+        elif isinstance(node, Sum):
+            left, right = (node.children[0], node.children[1])
+            self._find_prod(left, occs, factorizable)
+            self._find_prod(right, occs, factorizable)
+        elif isinstance(node, Prod):
+            left, right = (node.children[0], node.children[1])
+            self._find_prod(left, occs, factorizable)
+            self._find_prod(right, occs, factorizable)
+            l_str, r_str = (str(left), str(right))
+            if occs[l_str] > 1 and occs[r_str] > 1:
+                if occs[l_str] > occs[r_str]:
+                    dist = l_str
+                    target = (left, right)
+                    occs[r_str] -= 1
+                else:
+                    dist = r_str
+                    target = (right, left)
+                    occs[l_str] -= 1
+            elif occs[l_str] > 1 and occs[r_str] == 1:
+                dist = l_str
+                target = (left, right)
+            elif occs[r_str] > 1 and occs[l_str] == 1:
+                dist = r_str
+                target = (right, left)
+            elif occs[l_str] == 1 and occs[r_str] == 1:
+                dist = l_str
+                target = (left, right)
+            else:
+                return
+            factorizable[dist].append(target)
+
+    def factorize(self):
+        if self.mode == 'immutable':
+            raise NotImplementedError("Strategy yet not implemented")
+
+        factorizable = defaultdict(list)
+        occurrences = count_occurrences(self.stmt.children[1], key=2)
+        self._find_prod(self.stmt.children[1], occurrences, factorizable)
+
+        if not factorizable:
+            return
+
+        new_prods = []
+        for d in factorizable.values():
+            dist, target = zip(*d)
+            target = Par(ast_make_sum(target)) if len(target) > 1 else ast_make_sum(target)
+            new_prods.append(Par(Prod(dist[0], target)))
+        self.stmt.children[1] = Par(ast_make_sum(new_prods))
