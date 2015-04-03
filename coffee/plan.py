@@ -184,7 +184,7 @@ class ASTKernel(object):
             rewrite = kwargs.get('rewrite')
             vectorize = kwargs.get('vectorize')
             v_type, v_param = vectorize if vectorize else (None, None)
-            ap = kwargs.get('align_pad')
+            align_pad = kwargs.get('align_pad')
             split = kwargs.get('split')
             toblas = kwargs.get('blas')
             unroll = kwargs.get('unroll')
@@ -251,7 +251,7 @@ class ASTKernel(object):
                 # 4) Vectorization
                 if initialized and loop_opt.expr_domain_loops[0]:
                     vect = LoopVectorizer(loop_opt)
-                    if ap:
+                    if align_pad:
                         # Data alignment
                         vect.alignment()
                         # Padding
