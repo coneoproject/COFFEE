@@ -101,37 +101,37 @@ class SSALoopMerger(LoopScheduler):
         containing the merged loop as well as the iteration variables used
         in the respective iteration spaces."""
         # Find the first statement in the perfect loop nest loop_b
-        itvars_a, itvars_b = [], []
+        dims_a, dims_b = [], []
         while isinstance(loop_b.children[0], (Block, For)):
             if isinstance(loop_b, For):
-                itvars_b.append(loop_b.itvar)
+                dims_b.append(loop_b.dim)
             loop_b = loop_b.children[0]
         # Find the first statement in the perfect loop nest loop_a
         root_loop_a = loop_a
         while isinstance(loop_a.children[0], (Block, For)):
             if isinstance(loop_a, For):
-                itvars_a.append(loop_a.itvar)
+                dims_a.append(loop_a.dim)
             loop_a = loop_a.children[0]
         # Merge body of loop_a in loop_b
         loop_b.children[0:0] = loop_a.children
         # Remove loop_a from root
         root.children.remove(root_loop_a)
-        return (loop_b, tuple(itvars_a), tuple(itvars_b))
+        return (loop_b, tuple(dims_a), tuple(dims_b))
 
-    def _update_itvars(self, node, itvars):
+    def _update_dims(self, node, dims):
         """Change the iteration variables in the nodes rooted in ``node``
-        according to the map defined in ``itvars``, which is a dictionary
+        according to the map defined in ``dims``, which is a dictionary
         from old_iteration_variable to new_iteration_variable. For example,
-        given itvars = {'i': 'j'} and a node "A[i] = B[i]", change the node
+        given dims = {'i': 'j'} and a node "A[i] = B[i]", change the node
         into "A[j] = B[j]"."""
         if isinstance(node, Symbol):
             new_rank = []
             for r in node.rank:
-                new_rank.append(r if r not in itvars else itvars[r])
+                new_rank.append(r if r not in dims else dims[r])
             node.rank = tuple(new_rank)
         elif not isinstance(node, FlatBlock):
             for n in node.children:
-                self._update_itvars(n, itvars)
+                self._update_dims(n, dims)
 
     def merge(self):
         """Merge perfect loop nests rooted in ``self.root``."""
@@ -192,8 +192,8 @@ class SSALoopMerger(LoopScheduler):
                     mergeable.append(ln)
             # If there is at least one mergeable loops, do the merging
             for l in reversed(mergeable):
-                merged, l_itvars, m_itvars = self._merge_loops(parent, l, merging_in)
-                self._update_itvars(merged, dict(zip(l_itvars, m_itvars)))
+                merged, l_dims, m_dims = self._merge_loops(parent, l, merging_in)
+                self._update_dims(merged, dict(zip(l_dims, m_dims)))
             # Update the lists of merged loops
             all_merged.append((mergeable, merging_in))
             self.merged_loops.append(merging_in)
@@ -225,7 +225,7 @@ class SSALoopMerger(LoopScheduler):
         Note this last step is not done by compilers like Intel's (version 14).
         """
 
-        def replace_expr(node, parent, parent_idx, itvar, hoisted_expr):
+        def replace_expr(node, parent, parent_idx, dim, hoisted_expr):
             """Recursively search for any sub-expressions rooted in node that have
             been hoisted and therefore are already kept in a temporary. Replace them
             with such temporary."""
@@ -239,14 +239,14 @@ class SSALoopMerger(LoopScheduler):
                 else:
                     # Go ahead recursively
                     for i, n in enumerate(node.children):
-                        replace_expr(n, node, i, itvar, hoisted_expr)
+                        replace_expr(n, node, i, dim, hoisted_expr)
 
         hoisted_expr = {}
         for loop in self.merged_loops:
             block = loop.body
             for stmt in block:
                 sym, expr = stmt.children
-                replace_expr(expr.children[0], expr, 0, loop.itvar, hoisted_expr)
+                replace_expr(expr.children[0], expr, 0, loop.dim, hoisted_expr)
                 hoisted_expr[str(expr)] = sym
 
 
@@ -436,7 +436,7 @@ class ZeroLoopScheduler(LoopScheduler):
         else:
             raise RuntimeError("Group iter space error: unknown node: %s" % str(node))
 
-    def _merge_itvars_nz_bounds(self, itvar_nz_bounds_l, itvar_nz_bounds_r):
+    def _merge_dims_nz_bounds(self, dim_nz_bounds_l, dim_nz_bounds_r):
         """Given two dictionaries associating iteration variables to ranges
         of non-zero columns, merge the two dictionaries by combining ranges
         along the same iteration variables and return the merged dictionary.
@@ -446,18 +446,18 @@ class ZeroLoopScheduler(LoopScheduler):
             dict2 = {'j': [(3,4)], 'k': [(1,4)]}
             dict1 + dict2 -> {'j': [(1,6)], 'k': [(1,7)]}
         """
-        new_itvar_nz_bounds = {}
-        for itvar, nz_bounds in itvar_nz_bounds_l.items():
-            if itvar.isdigit():
+        new_dim_nz_bounds = {}
+        for dim, nz_bounds in dim_nz_bounds_l.items():
+            if dim.isdigit():
                 # Skip constant dimensions
                 continue
             # Compute the union of nonzero bounds along the same
             # iteration variable. Unify contiguous regions (for example,
             # [(1,3), (4,6)] -> [(1,6)]
-            new_nz_bounds = nz_bounds + itvar_nz_bounds_r.get(itvar, ())
+            new_nz_bounds = nz_bounds + dim_nz_bounds_r.get(dim, ())
             merged_nz_bounds = itspace_merge(new_nz_bounds)
-            new_itvar_nz_bounds[itvar] = merged_nz_bounds
-        return new_itvar_nz_bounds
+            new_dim_nz_bounds[dim] = merged_nz_bounds
+        return new_dim_nz_bounds
 
     def _set_var_to_zero(self, node, ofs, itspace):
         """Scan each variable ``v`` in ``node``: if non-initialized elements in ``v``
@@ -483,19 +483,19 @@ class ZeroLoopScheduler(LoopScheduler):
             sym_decl = self.hoisted.get(sym)
             if not sym_decl:
                 continue
-            for itvar, size in itspace:
-                itvar_nz_regions = nz_regions.get(itvar)
-                itvar_ofs = ofs.get(itvar)
-                if not itvar_nz_regions or itvar_ofs is None:
+            for dim, size in itspace:
+                dim_nz_regions = nz_regions.get(dim)
+                dim_ofs = ofs.get(dim)
+                if not dim_nz_regions or dim_ofs is None:
                     # Sym does not iterate along this iteration variable, so skip
                     # the check
                     continue
                 iteration_ok = False
                 # Check that the iteration space actually corresponds to one of the
                 # non-zero regions in the symbol currently analyzed
-                for itvar_nz_region in itvar_nz_regions:
-                    init_nz_reg, end_nz_reg = itvar_nz_region
-                    if itvar_ofs == init_nz_reg and size == end_nz_reg + 1 - init_nz_reg:
+                for dim_nz_region in dim_nz_regions:
+                    init_nz_reg, end_nz_reg = dim_nz_region
+                    if dim_ofs == init_nz_reg and size == end_nz_reg + 1 - init_nz_reg:
                         iteration_ok = True
                         break
                 if not iteration_ok:
@@ -520,23 +520,22 @@ class ZeroLoopScheduler(LoopScheduler):
                 raise RuntimeError("Zeros error: offsets not supported: %s" % str(node))
             nz_bounds = self.nonzero_syms.get(node.symbol)
             if nz_bounds:
-                itvars = [r for r in node.rank]
-                return dict(zip(itvars, nz_bounds))
+                dims = [r for r in node.rank]
+                return dict(zip(dims, nz_bounds))
             else:
                 return {}
         elif isinstance(node, (Par, FunCall)):
             return self._track_expr_nz_columns(node.children[0])
         else:
-            itvar_nz_bounds_l = self._track_expr_nz_columns(node.children[0])
-            itvar_nz_bounds_r = self._track_expr_nz_columns(node.children[1])
+            dim_nz_bounds_l = self._track_expr_nz_columns(node.children[0])
+            dim_nz_bounds_r = self._track_expr_nz_columns(node.children[1])
             if isinstance(node, (Prod, Div)):
                 # Merge the nonzero bounds of different iteration variables
                 # within the same dictionary
-                return dict(itvar_nz_bounds_l.items() +
-                            itvar_nz_bounds_r.items())
+                return dict(dim_nz_bounds_l.items() +
+                            dim_nz_bounds_r.items())
             elif isinstance(node, Sum):
-                return self._merge_itvars_nz_bounds(itvar_nz_bounds_l,
-                                                    itvar_nz_bounds_r)
+                return self._merge_dims_nz_bounds(dim_nz_bounds_l, dim_nz_bounds_r)
             else:
                 raise RuntimeError("Zeros error: unsupported operation: %s" % str(node))
 
@@ -575,8 +574,8 @@ class ZeroLoopScheduler(LoopScheduler):
         if isinstance(node, (Assign, Incr, Decr)):
             symbol = node.children[0].symbol
             rank = node.children[0].rank
-            itvar_nz_bounds = self._track_expr_nz_columns(node.children[1])
-            if not itvar_nz_bounds:
+            dim_nz_bounds = self._track_expr_nz_columns(node.children[1])
+            if not dim_nz_bounds:
                 return
             # Reflect the propagation of non-zero blocks in the node's
             # target symbol. Note that by scanning loop_nest, the nonzero
@@ -589,8 +588,8 @@ class ZeroLoopScheduler(LoopScheduler):
             # columns "up to this point of the computation", we have to merge
             # the non-zero columns produced by this node with those that we
             # had already found.
-            nz_in_sym = tuple(itvar_nz_bounds[l.itvar] for l in loop_nest
-                              if l.itvar in rank)
+            nz_in_sym = tuple(dim_nz_bounds[l.dim] for l in loop_nest
+                              if l.dim in rank)
             if symbol in self.nonzero_syms:
                 merged_nz_in_sym = []
                 for i in zip(nz_in_sym, self.nonzero_syms[symbol]):
@@ -603,11 +602,11 @@ class ZeroLoopScheduler(LoopScheduler):
                 # loop nest. Outer loops, i.e. loops that have non been
                 # encountered as visiting from the root, are discarded.
                 key = loop_nest
-                itvar_nz_bounds = dict([(k, v) for k, v in itvar_nz_bounds.items()
-                                        if k in [l.itvar for l in loop_nest]])
+                dim_nz_bounds = dict([(k, v) for k, v in dim_nz_bounds.items()
+                                      if k in [l.dim for l in loop_nest]])
                 if key not in self.nonzero_info:
                     self.nonzero_info[key] = []
-                self.nonzero_info[key].append((node, itvar_nz_bounds))
+                self.nonzero_info[key].append((node, dim_nz_bounds))
         if isinstance(node, For):
             self._track_nz_blocks(node.children[0], node, loop_nest + (node,))
         if isinstance(node, (Root, Block)):
@@ -672,11 +671,11 @@ class ZeroLoopScheduler(LoopScheduler):
             for stmt, stmt_itspace in stmt_itspaces:
                 nz_bounds_list = [i for i in itertools.product(*stmt_itspace.values())]
                 for nz_bounds in nz_bounds_list:
-                    itvar_nz_bounds = tuple(zip(stmt_itspace.keys(), nz_bounds))
-                    if not itvar_nz_bounds:
+                    dim_nz_bounds = tuple(zip(stmt_itspace.keys(), nz_bounds))
+                    if not dim_nz_bounds:
                         # If no non_zero bounds, then just reuse the existing loops
-                        itvar_nz_bounds = itspace_from_for(loop, mode=1)
-                    itspace, stmt_ofs = itspace_size_ofs(itvar_nz_bounds)
+                        dim_nz_bounds = itspace_from_for(loop, mode=1)
+                    itspace, stmt_ofs = itspace_size_ofs(dim_nz_bounds)
                     copy_stmt = dcopy(stmt)
                     fissioned_loops[itspace].append((copy_stmt, stmt_ofs))
                     if stmt in exprs:

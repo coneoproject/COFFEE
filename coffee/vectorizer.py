@@ -148,7 +148,7 @@ class LoopVectorizer(object):
                 # ... the presence of offsets
                 ofs = s.offset[-1][1] if s.offset else 0
                 # ... the iteration space
-                s_itspace = [l for l in symbols_dep[s] if l.itvar in s.rank]
+                s_itspace = [l for l in symbols_dep[s] if l.dim in s.rank]
                 s_itspace = tuple((s, e) for s, e, _ in itspace_from_for(s_itspace))
                 s_p_itspace = s_itspace[p_dim]
                 # ... combining the last two, the actual dataspace
@@ -212,7 +212,7 @@ class LoopVectorizer(object):
                 sym = stmt.children[0]
                 # Cond A- all lvalues must have as fastest varying dimension the
                 # one dictated by the innermost loop
-                if not (sym.rank and sym.rank[-1] == l.itvar):
+                if not (sym.rank and sym.rank[-1] == l.dim):
                     adjust = False
                     break
                 # Cond B- all lvalues must be paddable; that is, they cannot be
@@ -228,15 +228,15 @@ class LoopVectorizer(object):
             nonzero_info_l = self.loop_opt.nonzero_info.get(l, [])
             for stmt, ofs in nonzero_info_l:
                 expr = dcopy(stmt.children[1])
-                ast_update_ofs(expr, dict([(l.itvar, 0)]))
-                l_ofs = dict(ofs)[l.itvar]
+                ast_update_ofs(expr, dict([(l.dim, 0)]))
+                l_ofs = dict(ofs)[l.dim]
                 # The statement can be aligned only if the new start and end
                 # points cover the whole iteration space. Also, the padded
                 # region cannot be exceeded.
                 start_point = vect_rounddown(l_ofs)
                 end_point = start_point + vect_roundup(l.end)  # == tot iters
                 if end_point >= l_ofs + l.end:
-                    alignable_stmts.append((stmt, dict([(l.itvar, start_point)])))
+                    alignable_stmts.append((stmt, dict([(l.dim, start_point)])))
                 read_regions[str(expr)].append((start_point, end_point))
             for rr in read_regions.values():
                 if len(itspace_merge(rr)) < len(rr):
@@ -382,7 +382,7 @@ class OuterProduct():
 
         # Find inner variables
         regs = [reg for node, reg in vrs.items()
-                if node.rank and node.rank[-1] == self.loops[1].itvar]
+                if node.rank and node.rank[-1] == self.loops[1].dim]
 
         if step in [0, 2]:
             return [Assign(r, plan.isa["l_perm"](r, "5")) for r in regs]
@@ -404,7 +404,7 @@ class OuterProduct():
         """
         stmt = []
         for node, reg in vrs.items():
-            if node.rank and node.rank[-1] in [i.itvar for i in self.loops]:
+            if node.rank and node.rank[-1] in [l.dim for l in self.loops]:
                 exp = plan.isa["symbol_load"](node.symbol, node.rank, node.offset)
             else:
                 exp = plan.isa["symbol_set"](node.symbol, node.rank, node.offset)
@@ -426,7 +426,7 @@ class OuterProduct():
                   Updated every time a new scalar variable is encountered.
         """
         if isinstance(node, Symbol):
-            if node.rank and self.loops[0].itvar == node.rank[-1]:
+            if node.rank and self.loops[0].dim == node.rank[-1]:
                 # The symbol depends on the outer loop dimension, so add offset
                 n_ofs = tuple([(1, 0) for i in range(len(node.rank)-1)]) + ((1, ofs),)
                 node = Symbol(node.symbol, dcopy(node.rank), n_ofs)

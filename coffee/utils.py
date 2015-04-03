@@ -91,9 +91,9 @@ def unroll_factors(loops):
     # Then, determine possible unroll factors for all loops
     for l in loops:
         if l in _inner_loops:
-            loops_unroll[l.itvar] = [1]
+            loops_unroll[l.dim] = [1]
         else:
-            loops_unroll[l.itvar] = [i+1 for i in range(l.size) if l.size % (i+1) == 0]
+            loops_unroll[l.dim] = [i+1 for i in range(l.size) if l.size % (i+1) == 0]
 
     return loops_unroll
 
@@ -187,7 +187,7 @@ def ast_replace(node, syms_dict, n_replaced={}, copy=False):
 
 
 def ast_update_ofs(node, ofs):
-    """Given a dictionary ``ofs`` s.t. ``{'itvar': ofs}``, update the various
+    """Given a dictionary ``ofs`` s.t. ``{'dim': ofs}``, update the various
     iteration variables in the symbols rooted in ``node``."""
     if isinstance(node, Symbol):
         new_ofs = []
@@ -386,7 +386,7 @@ def visit(node, parent=None, search=None, stop_on_search=False):
         elif isinstance(node, Symbol):
             cur_nest = info['cur_nest']
             access_mode = (kwargs.get('mode', READ), parent.__class__)
-            dep = [l for l, _ in cur_nest if l.itvar in node.rank]
+            dep = [l for l, _ in cur_nest if l.dim in node.rank]
             if access_mode[0] == WRITE:
                 info['symbols_written'][node.symbol] = cur_nest
             if node.symbol in info['symbols_written']:
@@ -537,11 +537,11 @@ def check_type(stmt, decls):
 def itspace_size_ofs(itspace):
     """Given an ``itspace`` in the form ::
 
-        (('itvar', (bound_a, bound_b), ...)),
+        (('dim', (bound_a, bound_b), ...)),
 
     return ::
 
-        ((('itvar', bound_b - bound_a), ...), (('itvar', bound_a), ...))"""
+        ((('dim', bound_b - bound_a), ...), (('dim', bound_a), ...))"""
     itspace_info = []
     for var, bounds in itspace:
         itspace_info.append(((var, bounds[1] - bounds[0] + 1), (var, bounds[0])))
@@ -603,12 +603,12 @@ def itspace_from_for(loops, mode=0):
 
     If ``mode > 0``, return: ::
 
-        ((for1_itvar, (start1, topiter1)), (for2_itvar, (start2, topiter2):, ...)
+        ((for1_dim, (start1, topiter1)), (for2_dim, (start2, topiter2):, ...)
     """
     if mode == 0:
         return tuple((l.start, l.end, l.increment) for l in loops)
     else:
-        return tuple((l.itvar, (l.start, l.end - 1)) for l in loops)
+        return tuple((l.dim, (l.start, l.end - 1)) for l in loops)
 
 
 def itspace_copy(loop_a, loop_b):
@@ -630,6 +630,7 @@ flatten = lambda list: [i for l in list for i in l]
 bind = lambda a, b: [(a, v) for v in b]
 od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
 
+
 def insert_at_elem(list, elem, new_elem, ofs=0):
     ofs = list.index(elem) + ofs
     list.insert(ofs, new_elem)
@@ -641,5 +642,5 @@ def insert_at_elem(list, elem, new_elem, ofs=0):
 
 
 def loops_as_dict(loops):
-    loops_itvars = [l.itvar for l in loops]
-    return OrderedDict(zip(loops_itvars, loops))
+    loops_dims = [l.dim for l in loops]
+    return OrderedDict(zip(loops_dims, loops))

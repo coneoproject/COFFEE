@@ -150,11 +150,9 @@ class LinearAlgebra(object):
                 new_outer = dcopy(self.outer_loop)
                 new_outer.body = [middle_loop]
                 self.header.children.insert(ofs, new_outer)
-                loop_itvars = (self.outer_loop.itvar, middle_loop.itvar,
-                               inner_loop[0].itvar)
-                loop_sizes = (self.outer_loop.size, middle_loop.size,
-                              inner_loop[0].size)
-                loop_info = OrderedDict(zip(loop_itvars, loop_sizes))
+                loop_dims = (self.outer_loop.dim, middle_loop.dim, inner_loop[0].dim)
+                loop_sizes = (self.outer_loop.size, middle_loop.size, inner_loop[0].size)
+                loop_info = OrderedDict(zip(loop_dims, loop_sizes))
                 to_transform[new_outer] = (body[0].children[0], rhs, loop_info)
                 found_mmm = True
         # Clean up

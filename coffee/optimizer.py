@@ -158,8 +158,8 @@ class LoopOptimizer(object):
             elif isinstance(node, (Assign, Incr)):
                 # Precompute the LHS of the assignment
                 symbol = node.children[0]
-                precomputed[symbol.symbol] = (self.loop.itvar,)
-                new_rank = (self.loop.itvar,) + symbol.rank
+                precomputed[symbol.symbol] = (self.loop.dim,)
+                new_rank = (self.loop.dim,) + symbol.rank
                 symbol.rank = new_rank
                 # Vector-expand the RHS
                 precompute_stmt(node.children[1], precomputed, new_outer_block)
@@ -274,7 +274,7 @@ class CPULoopOptimizer(LoopOptimizer):
         for itspace, uf in loop_uf.items():
             new_exprs = {}
             for stmt, expr_info in self.exprs.items():
-                loop = [l for l in expr_info.perfect_loops if l.itvar == itspace]
+                loop = [l for l in expr_info.perfect_loops if l.dim == itspace]
                 if not loop:
                     # Unroll only loops in a perfect loop nest
                     continue
@@ -396,19 +396,19 @@ class GPULoopOptimizer(LoopOptimizer):
         ``pragma coffee itspace``."""
 
         info = visit(self.loop, self.header)
-        fors_list = info['fors']
+        loops = info['fors']
         symbols = info['symbols_dep']
 
         itspace_vrs = set()
-        for fors in fors_list:
-            for node, parent in reversed(fors):
-                if '#pragma coffee itspace' not in node.pragma:
+        for nest in info['fors']:
+            for loop, parent in reversed(nest):
+                if '#pragma coffee itspace' not in loop.pragma:
                     continue
                 parent = parent.children
-                for n in node.body:
-                    parent.insert(parent.index(node), n)
-                parent.remove(node)
-                itspace_vrs.add(node.itvar)
+                for n in loop.body:
+                    parent.insert(parent.index(loop), n)
+                parent.remove(loop)
+                itspace_vrs.add(loop.dim)
 
         accessed_vrs = [s for s in symbols if any_in(s.rank, itspace_vrs)]
 

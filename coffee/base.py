@@ -638,7 +638,7 @@ class For(Statement):
         self.incr = incr
 
     @property
-    def itvar(self):
+    def dim(self):
         if isinstance(self.init, Decl):
             return self.init.sym.symbol
         elif isinstance(self.init, Assign):

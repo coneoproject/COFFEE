@@ -73,15 +73,15 @@ class MetaExpr(object):
 
     @property
     def domain_loops(self):
-        return tuple([l for l in self.loops if l.itvar in self._domain])
+        return tuple([l for l in self.loops if l.dim in self._domain])
 
     @property
     def domain_loops_parents(self):
-        return tuple([p for l, p in self._loops_info if l.itvar in self._domain])
+        return tuple([p for l, p in self._loops_info if l.dim in self._domain])
 
     @property
     def domain_loops_info(self):
-        return tuple([(l, p) for l, p in self._loops_info if l.itvar in self._domain])
+        return tuple([(l, p) for l, p in self._loops_info if l.dim in self._domain])
 
     @property
     def out_domain_loops(self):
@@ -128,12 +128,12 @@ def copy_metaexpr(expr_info, **kwargs):
 
     new_loops_info, old_loops_info = [], expr_info.loops_info
     to_replace_loops_info = kwargs.get('loops_info', [])
-    to_replace_loops_info = dict(zip([l.itvar for l, p in to_replace_loops_info],
+    to_replace_loops_info = dict(zip([l.dim for l, p in to_replace_loops_info],
                                      to_replace_loops_info))
     for loop_info in old_loops_info:
-        loop_itvar = loop_info[0].itvar
-        if loop_itvar in to_replace_loops_info:
-            new_loops_info.append(to_replace_loops_info[loop_itvar])
+        loop_dim = loop_info[0].dim
+        if loop_dim in to_replace_loops_info:
+            new_loops_info.append(to_replace_loops_info[loop_dim])
         else:
             new_loops_info.append(loop_info)
 
