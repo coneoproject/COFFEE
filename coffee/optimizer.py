@@ -71,23 +71,16 @@ class LoopOptimizer(object):
         1. Generalized loop-invariant code motion
         2. Factorization of common loop-dependent terms
         3. Expansion of constants over loop-dependent terms
-        4. Zero-valued columns avoidance
-        5. Precomputation of integration-dependent terms
 
-        :param level: The optimization level (0, 1, 2, 3, 4). The higher, the more
+        :param level: The optimization level (0, 1, 2). The higher, the more
                       invasive is the re-writing of the expression, trying to
                       eliminate unnecessary floating point operations.
 
-                      * level == 1: performs "basic" generalized loop-invariant \
-                                    code motion
-                      * level == 2: level 1 + expansion of terms, factorization of \
-                                    basis functions appearing multiple times in the \
-                                    same expression, and finally another run of \
-                                    loop-invariant code motion to move invariant \
-                                    sub-expressions exposed by factorization
-                      * level == 3: level 2 + avoid computing zero-columns
-                      * level == 4: level 3 + precomputation of read-only expressions \
-                                    out of the loop nest
+                      * level == 1: performs generalized loop-invariant code motion only
+                      * level == 2: level 1; terms expansion (to expose factorization \
+                                    opportunities); terms factorization (to expose \
+                                    code motion opportunities); and a final pass of \
+                                    generalized loop-invariant code motion.
         """
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
