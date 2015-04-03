@@ -937,9 +937,9 @@ def c_sym(const):
 
 
 def c_for(var, to, code, pragma="#pragma coffee itspace", init=None):
-    i = c_sym(var)
-    init = init or c_sym(0)
-    end = c_sym(to)
+    i = Symbol(var)
+    init = init or Symbol(0)
+    end = Symbol(to)
     if type(code) == str:
         code = FlatBlock(code)
     elif type(code) == list:
@@ -947,7 +947,7 @@ def c_for(var, to, code, pragma="#pragma coffee itspace", init=None):
     elif type(code) is not Block:
         code = Block([code], open_scope=True)
     return Block(
-        [For(Decl("int", i, init), Less(i, end), Incr(i, c_sym(1)),
+        [For(Decl("int", i, init), Less(i, end), Incr(i, Symbol(1)),
              code, pragma)], open_scope=True)
 
 

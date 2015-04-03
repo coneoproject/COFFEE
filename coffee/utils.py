@@ -581,8 +581,8 @@ def itspace_to_for(itspaces, loop_parent):
     loop_body = inner_block
     for i, itspace in enumerate(itspaces):
         start, stop = itspace
-        loops.insert(0, For(Decl("int", start, c_sym(0)), Less(start, stop),
-                            Incr(start, c_sym(1)), loop_body))
+        loops.insert(0, For(Decl("int", start, Symbol(0)), Less(start, stop),
+                            Incr(start, Symbol(1)), loop_body))
         loop_body = Block([loops[i-1]], open_scope=True)
         loops_parents.append(loop_body)
     # Note that #loops_parents = #loops+1, but by zipping we just cut away the

@@ -124,7 +124,7 @@ class ASTKernel(object):
                                     for i in v.rank])
 
                 # Add iteration space arguments
-                kernel.args.extend([Decl("int", c_sym("%s" % i)) for i in itspace_vrs])
+                kernel.args.extend([Decl("int", Symbol("%s" % i)) for i in itspace_vrs])
 
             # Clean up the kernel removing variable qualifiers like 'static'
             for decl in decls.values():
