@@ -282,11 +282,6 @@ class ExpressionHoister(object):
             self.expr_id = self._expr_handled.index(stmt)
         self.counter = 0
 
-        # Variables used for communication between the extract and licm methods
-        self.extracted = False  # True if managed to hoist at least one sub-expr
-        self.symbols = {}
-        self.real_deps = []
-
     def _extract_exprs(self, node, expr_dep, length=0):
         """Extract invariant sub-expressions from the original expression.
         Hoistable sub-expressions are stored in expr_dep."""
@@ -314,8 +309,8 @@ class ExpressionHoister(object):
         node_len = len_l + len_r
 
         # Filter out false dependencies
-        dep_l = tuple(d for d in dep_l if d in self.real_deps)
-        dep_r = tuple(d for d in dep_r if d in self.real_deps)
+        dep_l = tuple(d for d in dep_l if d in self.expr_deps)
+        dep_r = tuple(d for d in dep_r if d in self.expr_deps)
 
         if info_l == self.KSE and info_r == self.KSE:
             if dep_l != dep_r:
@@ -381,21 +376,31 @@ class ExpressionHoister(object):
         else:
             raise RuntimeError("Fatal error while finding hoistable terms")
 
-    def licm(self):
-        """Perform loop-invariant code motion for the expression passed in at
-        object construction time."""
-        expr_type = self.expr_info.type
+    def _check_loops(self, loops):
+        """Ensures hoisting is legal. As long as all inner loops are perfect,
+        hoisting at the bottom of the possibly non-perfect outermost loop
+        always is a legal transformation."""
+        return all([is_perfect_loop(l) for l in loops[1:]])
 
+    def licm(self):
+        """Perform generalized loop-invariant code motion."""
+        # Aliases
+        expr_type = self.expr_info.type
         expr_loops = self.expr_info.loops
-        expr_dims_loops = For.fromloops(expr_loops)
-        real_deps = expr_dims_loops.keys()
+        expr_outermost_loop = expr_loops[0]
+        is_expr_outermost_perfect = is_perfect_loop(expr_outermost_loop)
+
+        if not self._check_loops(expr_loops):
+            warning("Loop nest unsuitable for generalized licm. Skipping.")
+            return
 
         # (Re)set global parameters for the /extract/ function
         self.symbols = visit(self.header, None)['symbols_dep']
         self.symbols = dict((s, [l.dim for l in dep]) for s, dep in self.symbols.items())
-
-        self.real_deps = real_deps
         self.extracted = False
+
+        expr_dims_loops = For.fromloops(expr_loops)
+        self.expr_deps = expr_dims_loops.keys()
 
         # Extract read-only sub-expressions that do not depend on at least
         # one loop in the loop nest
@@ -412,7 +417,7 @@ class ExpressionHoister(object):
 
             for all_deps, expr in expr_dep.items():
                 # -1) Filter dependencies that do not pertain to the expression
-                dep = tuple(d for d in all_deps if d in real_deps)
+                dep = tuple(d for d in all_deps if d in self.expr_deps)
 
                 # 0) The invariant statements go in the closest outer loop to
                 # dep[-1] which they depend on, and are wrapped by a loop wl
@@ -420,20 +425,18 @@ class ExpressionHoister(object):
                 # If there's no such an outer loop, they fall in the header,
                 # provided they are within a perfect loop nest (otherwise,
                 # dependencies may be broken)
-                outermost_loop = expr_loops[0]
-                is_outermost_perfect = is_perfect_loop(outermost_loop)
                 if len(dep) == 0:
                     place, wl = self.header, None
-                    next_loop = outermost_loop
-                elif len(dep) == 1 and is_outermost_perfect:
+                    next_loop = expr_outermost_loop
+                elif len(dep) == 1 and is_expr_outermost_perfect:
                     place, wl = self.header, expr_dims_loops[dep[0]]
-                    next_loop = outermost_loop
-                elif len(dep) == 1 and not is_outermost_perfect:
+                    next_loop = expr_outermost_loop
+                elif len(dep) == 1 and len(expr_dims_loops) > 1:
                     place, wl = expr_dims_loops[dep[0]].children[0], None
-                    if len(expr_dims_loops) > 1:
-                        next_loop = od_find_next(expr_dims_loops, dep[0])
-                    else:
-                        next_loop = place.children[-1]
+                    next_loop = od_find_next(expr_dims_loops, dep[0])
+                elif len(dep) == 1:
+                    place, wl = expr_dims_loops[dep[0]].children[0], None
+                    next_loop = place.children[-1]
                 else:
                     dep_block = expr_dims_loops[dep[-2]].children[0]
                     place, wl = dep_block, expr_dims_loops[dep[-1]]
