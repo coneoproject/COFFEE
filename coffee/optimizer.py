@@ -98,7 +98,7 @@ class LoopOptimizer(object):
                 if not expr_info.domain_loops:
                     continue
                 ew.expand()
-                ew.distribute()
+                ew.factorize()
                 ew.licm(merge_and_simplify=True, compact_tmps=True)
 
     def eliminate_zeros(self):

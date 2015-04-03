@@ -174,7 +174,7 @@ class ExpressionRewriter(object):
         self.decls.update(ee.expanded_decls)
         self._expanded = True
 
-    def distribute(self):
+    def factorize(self):
         """Factorize terms in the expression.
         E.g. ::
 
