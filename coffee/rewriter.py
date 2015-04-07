@@ -34,6 +34,7 @@
 from collections import defaultdict
 from copy import deepcopy as dcopy
 import operator
+import itertools
 
 from base import *
 from utils import *
@@ -138,42 +139,66 @@ class ExpressionRewriter(object):
                     self.hoisted.delete_hoisted(sym)
                     self.decls.pop(sym)
 
-    def expand(self):
-        """Expand expressions such that: ::
+    def expand(self, mode='standard'):
+        """Expand expressions over other expressions based on different heuristics.
+        In the simplest example one can have: ::
+
+            (X[i] + Y[j])*F + ...
+
+        which could be transformed into: ::
+
+            (X[i]*F + Y[j]*F) + ...
+
+        When creating the expanded object, if the expanding term had already been
+        hoisted, then the expansion itself is also lifted. For example, if: ::
 
             Y[j] = f(...)
             (X[i]*Y[j])*F + ...
 
-        becomes: ::
+        and we assume it has been decided (see below) the expansion should occur
+        along the loop dimension ``j``, the transformation generates: ::
 
             Y[j] = f(...)*F
             (X[i]*Y[j]) + ...
 
-        This may be useful for several purposes:
+        One may want to expand expressions for several reasons, which include
 
-        * Relieve register pressure; when, for example, ``(X[i]*Y[j])`` is
+        * Exposing factorization opportunities;
+        * Exposing high-level (linear algebra) operations (e.g., matrix multiplies)
+        * Relieving register pressure; when, for example, ``(X[i]*Y[j])`` is
           computed in a loop L' different than the loop L'' in which ``Y[j]``
-          is evaluated, and ``cost(L') > cost(L'')``
-        * It is also a step towards exposing well-known linear algebra
-          operations, like matrix-matrix multiplies."""
+          is evaluated, and ``cost(L') > cost(L'')``;
 
-        # Select the iteration variable along which the expansion should be performed.
-        # The heuristics here is that the expansion occurs along the iteration
-        # variable which appears in more unique arrays. This will allow factorization
-        # to be more effective.
-        dim_occs = dict.fromkeys(self.expr_info.domain, 0)
-        for _, dim in count_occurrences(self.stmt.children[1]).keys():
-            if dim and dim[0] in dim_occs:
-                dim_occs[dim[0]] += 1
-        dim_exp = max(dim_occs.iteritems(), key=operator.itemgetter(1))[0]
+        :param mode: multiple expansion strategies are possible, each exposing
+                     different, "hidden" opportunities for later code motion.
+
+                     * mode == 'standard': this heuristics consists of expanding \
+                                           along the loop dimension appearing \
+                                           the most in different (i.e., unique) \
+                                           arrays. This has the goal of making \
+                                           factorization more effective.
+                     * mode == 'full': expansion is performed aggressively without \
+                                       any specific restrictions.
+        """
+        # Select the expansion strategy
+        if mode == 'standard':
+            occurrences = zip(*count_occurrences(self.stmt.children[1]).keys())[1]
+            occurrences = dict((i, occurrences.count(i)) for i in occurrences)
+            dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
+            should_expand = lambda n: n.rank == dimension
+        elif mode == 'full':
+            should_expand = lambda n: self.decls[n.symbol].is_static_const
+        else:
+            warning('Unknown expansion strategy. Skipping.')
+            return
 
         # Perform the expansion
-        self.expr_expander.expand(dim_occs, dim_exp)
+        self.expr_expander.expand(should_expand)
 
         # Update known declarations
         self.decls.update(self.expr_expander.expanded_decls)
 
-    def factorize(self, mode='default'):
+    def factorize(self, mode='standard'):
         """Factorize terms in the expression. For example: ::
 
             A[i]*B[j] + A[i]*C[j]
@@ -182,8 +207,8 @@ class ExpressionRewriter(object):
 
             A[i]*(B[j] + C[j]).
 
-        :param mode: different factorization strategies are possible, each exposing
-                     distinct, "hidden" opportunities for code motion.
+        :param mode: multiple factorization strategies are possible, each exposing
+                     different, "hidden" opportunities for code motion.
 
                      * mode == 'standard': this simple heuristics consists of \
                                            grouping on symbols that appear the \
@@ -195,6 +220,7 @@ class ExpressionRewriter(object):
         """
         if mode not in ['standard', 'immutable']:
             warning('Unknown factorization strategy. Skipping.')
+            return
         self.expr_factorizer.factorize(mode)
 
 
@@ -468,23 +494,14 @@ class ExpressionHoister(object):
 
 
 class ExpressionExpander(object):
-    """Expand expressions such that: ::
 
-        Y[j] = f(...)
-        (X[i]*Y[j])*F + ...
-
-    becomes: ::
-
-        Y[j] = f(...)*F
-        (X[i]*Y[j]) + ..."""
-
-    CONST = -1
-    ITVAR = -2
+    GRP = 0
+    EXP = 1
 
     # Track all expanded expressions
     _expr_handled = []
     # Temporary variables template
-    _expanded_sym = "CONST_EXP_%(expr_id)d_%(i)d"
+    _expanded_sym = "%(loop_dep)s_EXP_%(expr_id)d_%(i)d"
 
     def __init__(self, stmt, expr_info, hoisted, expr_graph):
         self.stmt = stmt
@@ -500,126 +517,147 @@ class ExpressionExpander(object):
             self.expr_id = self._expr_handled.index(stmt)
 
         self.expanded_decls = {}
-        self.found_consts = {}
-        self.expanded_syms = []
+        self.cache = {}
 
-    def _make_expansion(self, sym, const, op):
-        """Perform the actual expansion. If there are no dependencies, then
-        the already hoisted expression is expanded. Otherwise, if the symbol to
-        be expanded occurs multiple times in the expression, or it depends on
-        other hoisted symbols that will also be expanded, create a new symbol."""
-        old_expr = self.hoisted[sym.symbol].expr
-        var_decl = self.hoisted[sym.symbol].decl
-        loop = self.hoisted[sym.symbol].loop
-        place = self.hoisted[sym.symbol].place
+    def _hoist(self, expansion, exp, grp):
+        """Expand an hoisted expression. If there are no data dependencies,
+        the hoisted expression is expanded and no new symbols are introduced.
+        Otherwise, (e.g., the symbol to be expanded appears multiple times, or
+        it depends on other hoisted symbols), create a new symbol."""
+        exp_symbols = visit(exp)['symbols_dep'].keys()
+        grp_symbols = visit(grp)['symbols_dep'].keys()
 
-        # The expanding expression is first assigned to a temporary value in order
-        # to minimize code size and, possibly, work around compiler's inefficiencies
-        # when doing loop-invariant code motion
-        const_str = str(const)
-        if const_str in self.found_consts:
-            const = dcopy(self.found_consts[const_str])
-        elif not isinstance(const, Symbol):
-            const_sym = Symbol(self._expanded_sym % {'expr_id': self.expr_id,
-                                                     'i': len(self.found_consts)})
-            new_const_decl = Decl(self.expr_info.type, dcopy(const_sym), const)
-            # Keep track of the expansion
-            new_const_decl.scope = LOCAL
-            self.expanded_decls[new_const_decl.sym.symbol] = new_const_decl
-            self.expanded_syms.append(new_const_decl.sym)
-            self.found_consts[const_str] = const_sym
-            self.expr_graph.add_dependency(const_sym, const, False)
+        # First, check if any of the symbols in /exp/ have been hoisted
+        try:
+            exp = [s for s in exp_symbols
+                   if s.symbol in self.hoisted and self.should_expand(s)][0]
+        except:
+            # No hoisted symbols in the expanded expression, so return
+            return None
+
+        # Aliases
+        hoisted_expr = self.hoisted[exp.symbol].expr
+        hoisted_decl = self.hoisted[exp.symbol].decl
+        hoisted_loop = self.hoisted[exp.symbol].loop
+        hoisted_place = self.hoisted[exp.symbol].place
+        op = expansion.__class__
+
+        # Is the grouped symbol hoistable, or does it break some data dependency?
+        lifted_loops = []
+        for l in reversed(self.expr_info.loops):
+            lifted_loops.append(l)
+            if l in hoisted_place.children:
+                break
+            for g in grp_symbols:
+                if any([l.dim in g.rank for l in lifted_loops]):
+                    return None
+
+        # The expression used for expansion is assigned to a temporary value in order
+        # to minimize code size
+        if str(grp) in self.cache:
+            grp = dcopy(self.cache[str(grp)])
+        elif not isinstance(grp, Symbol):
+            grp_sym = Symbol(self._expanded_sym % {'loop_dep': 'CONST',
+                                                   'expr_id': self.expr_id,
+                                                   'i': len(self.cache)})
+            grp_decl = Decl(self.expr_info.type, dcopy(grp_sym), grp)
+            grp_decl.scope = LOCAL
+            # Track the new temporary
+            self.expanded_decls[grp_decl.sym.symbol] = grp_decl
+            self.cache[str(grp)] = grp_sym
+            self.expr_graph.add_dependency(grp_sym, grp, False)
             # Update the AST
-            place.children.insert(place.children.index(loop), new_const_decl)
-            const = const_sym
+            insert_at_elem(hoisted_place.children, hoisted_loop, grp_decl)
+            grp = grp_sym
 
         # No dependencies, just perform the expansion
-        if not self.expr_graph.has_dep(sym):
-            old_expr.children[0] = op(Par(old_expr.children[0]), dcopy(const))
-            self.expr_graph.add_dependency(sym, const, False)
-            return
+        if not self.expr_graph.has_dep(exp):
+            hoisted_expr.children[0] = op(Par(hoisted_expr.children[0]), dcopy(grp))
+            self.expr_graph.add_dependency(exp, grp, False)
+            return exp
 
-        # Create a new symbol, expression, and declaration
-        new_expr = Par(op(dcopy(sym), const))
-        sym = dcopy(sym)
-        sym.symbol += "_EXP%d" % len(self.expanded_syms)
-        new_node = Assign(sym, new_expr)
-        new_var_decl = dcopy(var_decl)
-        new_var_decl.sym.symbol = sym.symbol
-        # Append new expression and declaration
-        loop.body.append(new_node)
-        place.children.insert(place.children.index(var_decl), new_var_decl)
-        self.expanded_decls[new_var_decl.sym.symbol] = new_var_decl
-        self.expanded_syms.append(new_var_decl.sym)
+        # Create new symbol, expression, and declaration
+        expr = Par(op(dcopy(exp), grp))
+        hoisted_exp = dcopy(exp)
+        hoisted_exp.symbol = self._expanded_sym % {'loop_dep': exp.symbol,
+                                                   'expr_id': self.expr_id,
+                                                   'i': len(self.expanded_decls)}
+        decl = dcopy(hoisted_decl)
+        decl.sym.symbol = hoisted_exp.symbol
+        # Update the AST
+        hoisted_loop.body.append(Assign(hoisted_exp, expr))
+        insert_at_elem(hoisted_place.children, hoisted_decl, decl)
+        ast_replace(expansion, {str(exp): hoisted_exp}, copy=True)
         # Update tracked information
-        self.hoisted[sym.symbol] = (new_expr, new_var_decl, loop, place)
-        self.expr_graph.add_dependency(sym, new_expr, 0)
-        return sym
+        self.expanded_decls[decl.sym.symbol] = decl
+        self.hoisted[hoisted_exp.symbol] = (expr, decl, hoisted_loop, hoisted_place)
+        self.expr_graph.add_dependency(hoisted_exp, expr, 0)
+        return hoisted_exp
 
-    def _expand(self, node, parent, dim_occs, dim_exp):
+    def _expand(self, node, parent):
+        op = node.__class__
         if isinstance(node, Symbol):
-            if not node.rank:
-                return ([node], self.CONST)
-            elif node.rank[-1] not in dim_occs.keys():
-                return ([node], self.CONST)
-            else:
-                return ([node], self.ITVAR)
+            return ([node], self.EXP) if self.should_expand(node) else ([node], self.GRP)
         elif isinstance(node, Par):
-            return self._expand(node.children[0], node, dim_occs, dim_exp)
+            return self._expand(node.children[0], node)
         elif isinstance(node, FunCall):
             # Functions are considered potentially expandable
-            return ([node], self.CONST)
+            return ([node], self.GRP)
         elif isinstance(node, (Prod, Div)):
-            l_node, l_type = self._expand(node.children[0], node, dim_occs, dim_exp)
-            r_node, r_type = self._expand(node.children[1], node, dim_occs, dim_exp)
-            if l_type == self.ITVAR and r_type == self.ITVAR:
-                # Found an expandable product
-                to_exp = l_node if l_node[0].rank[-1] == dim_exp else r_node
-                return (to_exp, self.ITVAR)
-            elif l_type == self.CONST and r_type == self.CONST:
-                # Product of constants; they are both used for expansion (if any)
-                return ([node], self.CONST)
-            else:
-                # Do the expansion
-                const = l_node[0] if l_type == self.CONST else r_node[0]
-                expandable, exp_node = (l_node, node.children[0]) \
-                    if l_type == self.ITVAR else (r_node, node.children[1])
-                to_replace = {}
-                for sym in expandable:
-                    # Perform the expansion
-                    if sym.symbol not in self.hoisted:
-                        raise RuntimeError("Expansion error: no symbol: %s" % sym.symbol)
-                    replacing = self._make_expansion(sym, const, node.__class__)
-                    if replacing:
-                        to_replace[str(sym)] = replacing
-                ast_replace(node, to_replace, copy=True)
-                # Update the parent node, since an expression has been expanded
-                if parent.children[0] == node:
-                    parent.children[0] = exp_node
-                elif parent.children[1] == node:
-                    parent.children[1] = exp_node
-                else:
-                    raise RuntimeError("Expansion error: wrong parent-child association")
-                # Replace expanded symbols with the newly used symbols
-                expandable = list(set(e if str(e) not in to_replace
-                                      else to_replace[str(e)] for e in expandable))
-                return (expandable, self.ITVAR)
+            left, right = node.children
+            l_exps, l_type = self._expand(left, node)
+            r_exps, r_type = self._expand(right, node)
+            if l_type == self.GRP and r_type == self.GRP:
+                return ([node], self.GRP)
+            # At least one child is expandable (marked as EXP), whereas the
+            # other could either be expandable as well or groupable (marked
+            # as GRP): so we can perform the expansion
+            to_replace = {}
+            groupable, expandable, expanding_child = \
+                (l_exps, r_exps, right) if l_type == self.GRP else (r_exps, l_exps, left)
+            for exp, grp in itertools.product(expandable, groupable):
+                # In-place expansion
+                expansion = op(exp, dcopy(grp))
+                if exp == expanding_child:
+                    # Implies /expandable/ contains just one symbol, /e/
+                    expanding_child = expansion
+                    continue
+                to_replace[str(exp)] = expansion
+                self.expansions[expansion] = (exp, grp)
+            ast_replace(node, to_replace, copy=True)
+            # Update the parent node, since an expression has just been expanded
+            parent.children[parent.children.index(node)] = expanding_child
+            return (to_replace.values() or [expanding_child], self.EXP)
         elif isinstance(node, (Sum, Sub)):
-            l_node, l_type = self._expand(node.children[0], node, dim_occs, dim_exp)
-            r_node, r_type = self._expand(node.children[1], node, dim_occs, dim_exp)
-            if l_type == self.ITVAR and r_type == self.ITVAR:
-                return (l_node + r_node, self.ITVAR)
-            elif l_type == self.CONST and r_type == self.CONST:
-                return ([node], self.CONST)
+            left, right = node.children
+            l_exps, l_type = self._expand(left, node)
+            r_exps, r_type = self._expand(right, node)
+            if l_type == self.EXP and r_type == self.EXP:
+                return (l_exps + r_exps, self.EXP)
+            elif l_type == self.GRP and r_type == self.GRP:
+                return ([node], self.GRP)
             else:
-                return (None, self.CONST)
+                return ([], self.GRP)
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
 
-    def expand(self, dim_occs, dim_exp):
+    def expand(self, should_expand):
         """Perform the expansion of the expression rooted in ``self.stmt``.
-        Terms are expanded along the iteration variable ``dim_exp``."""
-        self._expand(self.stmt.children[1], self.stmt, dim_occs, dim_exp)
+        Symbols for which the lambda function ``should_expand`` returns
+        True are expansion candidates."""
+        # First, expand according to the /should_expand/ heuristic
+        self.expansions = OrderedDict()
+        self.should_expand = should_expand
+        self._expand(self.stmt.children[1], self.stmt)
+
+        # Then, see if some of the expanded terms are groupable at the level
+        # of hoisted expressions
+        to_remove = set()
+        for expansion, (exp, grp) in self.expansions.items():
+            if self._hoist(expansion, exp, grp):
+                to_remove.add(grp)
+        for grp in to_remove:
+            ast_remove(self.stmt, grp, 'all')
 
 
 class ExpressionFactorizer(object):
