@@ -65,13 +65,18 @@ class ExpressionRewriter(object):
         self.hoisted = hoisted
         self.expr_graph = expr_graph
 
-        # Expression Manipulators used by the Expression Rewriter
+        # Expression manipulators used by the Expression Rewriter
         self.expr_hoister = ExpressionHoister(self.stmt,
                                               self.expr_info,
                                               self.header,
                                               self.decls,
                                               self.hoisted,
                                               self.expr_graph)
+        self.expr_expander = ExpressionExpander(self.stmt,
+                                                self.expr_info,
+                                                self.hoisted,
+                                                self.expr_graph)
+        self.expr_factorizer = ExpressionFactorizer(self.stmt)
 
     def licm(self, merge_and_simplify=False, compact_tmps=False):
         """Perform generalized loop-invariant code motion.
@@ -162,13 +167,11 @@ class ExpressionRewriter(object):
                 dim_occs[dim[0]] += 1
         dim_exp = max(dim_occs.iteritems(), key=operator.itemgetter(1))[0]
 
-        # Perform expansion
-        ee = ExpressionExpander(self.stmt, self.expr_info, self.hoisted,
-                                self.expr_graph, dim_occs, dim_exp)
-        ee.expand()
+        # Perform the expansion
+        self.expr_expander.expand(dim_occs, dim_exp)
 
         # Update known declarations
-        self.decls.update(ee.expanded_decls)
+        self.decls.update(self.expr_expander.expanded_decls)
 
     def factorize(self, mode='default'):
         """Factorize terms in the expression. For example: ::
@@ -192,8 +195,7 @@ class ExpressionRewriter(object):
         """
         if mode not in ['standard', 'immutable']:
             warning('Unknown factorization strategy. Skipping.')
-        ef = ExpressionFactorizer(mode, self.stmt)
-        ef.factorize()
+        self.expr_factorizer.factorize(mode)
 
 
 class ExpressionHoister(object):
@@ -484,13 +486,11 @@ class ExpressionExpander(object):
     # Temporary variables template
     _expanded_sym = "CONST_EXP_%(expr_id)d_%(i)d"
 
-    def __init__(self, stmt, expr_info, hoisted, expr_graph, dim_occs, dim_exp):
+    def __init__(self, stmt, expr_info, hoisted, expr_graph):
         self.stmt = stmt
         self.expr_info = expr_info
         self.hoisted = hoisted
         self.expr_graph = expr_graph
-        self.dim_occs = dim_occs
-        self.dim_exp = dim_exp
 
         # Set counters to create meaningful and unique (temporary) variable names
         try:
@@ -556,25 +556,25 @@ class ExpressionExpander(object):
         self.expr_graph.add_dependency(sym, new_expr, 0)
         return sym
 
-    def _expand(self, node, parent):
+    def _expand(self, node, parent, dim_occs, dim_exp):
         if isinstance(node, Symbol):
             if not node.rank:
                 return ([node], self.CONST)
-            elif node.rank[-1] not in self.dim_occs.keys():
+            elif node.rank[-1] not in dim_occs.keys():
                 return ([node], self.CONST)
             else:
                 return ([node], self.ITVAR)
         elif isinstance(node, Par):
-            return self._expand(node.children[0], node)
+            return self._expand(node.children[0], node, dim_occs, dim_exp)
         elif isinstance(node, FunCall):
             # Functions are considered potentially expandable
             return ([node], self.CONST)
         elif isinstance(node, (Prod, Div)):
-            l_node, l_type = self._expand(node.children[0], node)
-            r_node, r_type = self._expand(node.children[1], node)
+            l_node, l_type = self._expand(node.children[0], node, dim_occs, dim_exp)
+            r_node, r_type = self._expand(node.children[1], node, dim_occs, dim_exp)
             if l_type == self.ITVAR and r_type == self.ITVAR:
                 # Found an expandable product
-                to_exp = l_node if l_node[0].rank[-1] == self.dim_exp else r_node
+                to_exp = l_node if l_node[0].rank[-1] == dim_exp else r_node
                 return (to_exp, self.ITVAR)
             elif l_type == self.CONST and r_type == self.CONST:
                 # Product of constants; they are both used for expansion (if any)
@@ -605,8 +605,8 @@ class ExpressionExpander(object):
                                       else to_replace[str(e)] for e in expandable))
                 return (expandable, self.ITVAR)
         elif isinstance(node, (Sum, Sub)):
-            l_node, l_type = self._expand(node.children[0], node)
-            r_node, r_type = self._expand(node.children[1], node)
+            l_node, l_type = self._expand(node.children[0], node, dim_occs, dim_exp)
+            r_node, r_type = self._expand(node.children[1], node, dim_occs, dim_exp)
             if l_type == self.ITVAR and r_type == self.ITVAR:
                 return (l_node + r_node, self.ITVAR)
             elif l_type == self.CONST and r_type == self.CONST:
@@ -616,16 +616,15 @@ class ExpressionExpander(object):
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
 
-    def expand(self):
+    def expand(self, dim_occs, dim_exp):
         """Perform the expansion of the expression rooted in ``self.stmt``.
-        Terms are expanded along the iteration variable ``self.dim_exp``."""
-        self._expand(self.stmt.children[1], self.stmt)
+        Terms are expanded along the iteration variable ``dim_exp``."""
+        self._expand(self.stmt.children[1], self.stmt, dim_occs, dim_exp)
 
 
 class ExpressionFactorizer(object):
 
-    def __init__(self, mode, stmt):
-        self.mode = mode
+    def __init__(self, stmt):
         self.stmt = stmt
 
     def _find_prod(self, node, occs, factorizable):
@@ -664,8 +663,8 @@ class ExpressionFactorizer(object):
                 return
             factorizable[dist].append(target)
 
-    def factorize(self):
-        if self.mode == 'immutable':
+    def factorize(self, mode):
+        if mode == 'immutable':
             raise NotImplementedError("Strategy yet not implemented")
 
         factorizable = defaultdict(list)
