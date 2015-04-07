@@ -50,10 +50,6 @@ from copy import deepcopy as dcopy
 import itertools
 import operator
 
-# Track the scope of a variable in the kernel
-LOCAL_VAR = 0  # Variable declared and used within the kernel
-PARAM_VAR = 1  # Variable is a kernel parameter (ie declared in the signature)
-
 
 class ASTKernel(object):
 
