@@ -620,7 +620,7 @@ class ZeroLoopScheduler(LoopScheduler):
         # Initialize a dict mapping symbols to their zero columns with the info
         # already available in the kernel's declarations
         for s, d in self.decls.items():
-            nz_col_bounds = d.get_nonzero_columns()
+            nz_col_bounds = d.nonzero
             if nz_col_bounds:
                 # Note that nz_bounds are stored as second element of a 2-tuple,
                 # because the declared array is two-dimensional, in which the

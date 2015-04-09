@@ -99,7 +99,7 @@ class LoopOptimizer(object):
         # Search for zero-valued columns and restructure the iteration spaces;
         # the ZeroLoopScheduler analyzes statements "one by one", and changes
         # the iteration spaces of the enclosing loops accordingly.
-        if not any([d.get_nonzero_columns() for d in self.decls.values()]):
+        if not any([d.nonzero for d in self.decls.values()]):
             return
         zls = ZeroLoopScheduler(self.exprs, self.expr_graph, self.decls, self.hoisted)
         zls.reschedule()

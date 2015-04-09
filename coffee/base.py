@@ -565,8 +565,18 @@ class Decl(Statement, Perfect):
 
     @property
     def is_const(self):
-        """Return True if the declaration is a constant."""
+        """Return True if the declared symbol is constant"""
         return 'const' in self.qual
+
+    @property
+    def is_static(self):
+        """Return True if the declared symbol is static"""
+        return 'static' in self.qual
+
+    @property
+    def is_static_const(self):
+        """Return True if the declared symbol is static and constant"""
+        return self.is_static and self.is_const
 
     @property
     def scope(self):
@@ -580,15 +590,8 @@ class Decl(Statement, Perfect):
             raise RuntimeError("Only %s are valid scopes" % Scope._scopes)
         self._scope = val
 
-    def gencode(self, not_scope=False):
-        if isinstance(self.init, EmptyStatement):
-            return decl(spacer(self.qual), self.typ, self.sym.gencode(),
-                        spacer(self.attr)) + semicolon(not_scope)
-        else:
-            return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                             spacer(self.attr), self.init.gencode()) + semicolon(not_scope)
-
-    def get_nonzero_columns(self):
+    @property
+    def nonzero(self):
         """If the declared array:
 
         * is a bi-dimensional array,
@@ -601,6 +604,14 @@ class Decl(Statement, Perfect):
             return self.init.nonzero_bounds
         else:
             return ()
+
+    def gencode(self, not_scope=False):
+        if isinstance(self.init, EmptyStatement):
+            return decl(spacer(self.qual), self.typ, self.sym.gencode(),
+                        spacer(self.attr)) + semicolon(not_scope)
+        else:
+            return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
+                             spacer(self.attr), self.init.gencode()) + semicolon(not_scope)
 
 
 class Block(Statement):
