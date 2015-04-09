@@ -56,7 +56,9 @@ for_loop = lambda s1, e, s2, s3: "for (%s; %s; %s)\n%s" % (s1, e, s2, s3)
 ternary = lambda e, s1, s2: wrap("%s ? %s : %s" % (e, s1, s2))
 
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
-# Base classes of the AST ###
+
+
+# Meta classes for semantic decoration of AST nodes ##
 
 
 class Perfect(object):
@@ -71,12 +73,22 @@ class Linalg(object):
     pass
 
 
+# Base classes of the AST ###
+
+
 class Node(object):
 
     """The base class of the AST."""
 
-    def __init__(self, children=None):
+    def __init__(self, children=None, pragma=None):
         self.children = map(as_symbol, children) if children else []
+
+        # Pragmas are used to attach semantical information to nodes
+        if not pragma:
+            pragma = set()
+        elif isinstance(pragma, str):
+            pragma = set([pragma])
+        self._pragma = pragma
 
     def gencode(self):
         code = ""
@@ -86,6 +98,17 @@ class Node(object):
 
     def __str__(self):
         return self.gencode()
+
+    @property
+    def pragma(self):
+        return self._pragma
+
+    @pragma.setter
+    def pragma(self, pragma):
+        if isinstance(pragma, list):
+            self._pragma = set(pragma)
+        else:
+            self._pragma.add(pragma)
 
 
 class Root(Node):
@@ -406,12 +429,7 @@ class Statement(Node):
     """Base class for commands productions."""
 
     def __init__(self, children=None, pragma=None):
-        super(Statement, self).__init__(children)
-        if not pragma:
-            pragma = set()
-        elif isinstance(pragma, str):
-            pragma = set([pragma])
-        self.pragma = pragma
+        super(Statement, self).__init__(children, pragma)
 
 
 class EmptyStatement(Statement, Perfect):
@@ -509,13 +527,12 @@ class Decl(Statement, Perfect):
         static const double FE0[3][3] __attribute__(align(32)) = {{...}};"""
 
     def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None, pragma=None):
-        super(Decl, self).__init__()
+        super(Decl, self).__init__(pragma=pragma)
         self.typ = typ
         self.sym = as_symbol(sym)
         self.qual = qualifiers or []
         self.attr = attributes or []
         self.init = as_symbol(init) if init is not None else EmptyStatement()
-        self.pragma = pragma or ""
 
     @property
     def size(self):
@@ -545,9 +562,8 @@ class Decl(Statement, Perfect):
             return decl(spacer(self.qual), self.typ, self.sym.gencode(),
                         spacer(self.attr)) + semicolon(scope)
         else:
-            pragma = self.pragma + "\n" if self.pragma else ""
-            return pragma + decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                                      spacer(self.attr), self.init.gencode()) + semicolon(scope)
+            return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
+                             spacer(self.attr), self.init.gencode()) + semicolon(scope)
 
     def get_nonzero_columns(self):
         """If the declared array:
@@ -880,3 +896,26 @@ def c_flat_for(code, parent):
     parent.children.append(FlatBlock(code))
     parent.children.append(new_block)
     return new_block
+
+
+# Access modes for a symbol ##
+
+
+class Access(object):
+
+    _modes = ["READ", "WRITE", "RW", "INC", "DEC", "IMUL", "IDIV"]
+
+    def __init__(self, mode):
+        self._mode = mode
+
+    def __eq__(self, other):
+        return self._mode == other._mode
+
+
+READ = Access("READ")
+WRITE = Access("WRITE")
+Rw = Access("RW")
+INC = Access("INC")
+DEC = Access("DEC")
+IMUL = Access("IMUL")
+IDIV = Access("IDIV")

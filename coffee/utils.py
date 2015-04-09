@@ -221,6 +221,27 @@ def ast_c_make_alias(node1, node2):
     return node1
 
 
+def ast_c_make_copy(arr1, arr2, region, op):
+    """Create a piece of AST performing a copy from ``arr2`` to ``arr1``.
+    Return also an ``ArrayInit`` object indicating how ``arr1`` should be
+    initialized prior to the copy."""
+    init = ArrayInit("0.0")
+    if op == Assign:
+        init = EmptyStatement()
+
+    arr1, arr2 = dcopy(arr1), dcopy(arr2)
+    op = op(arr1, arr2)
+    rank = []
+    for i, r in enumerate(region):
+        itvar = "i%d" % i
+        rank.append(itvar)
+        if isinstance(init, ArrayInit):
+            init.values = "{%s}" % init.values
+        op = c_for(itvar, r, op, pragma="")
+    arr1.rank, arr2.rank = rank, rank
+    return op, init
+
+
 ###########################################################
 # Functions to visit and to query properties of AST nodes #
 ###########################################################
@@ -231,8 +252,10 @@ def visit(node, parent):
 
     * Function declarations - a list of all function declarations encountered
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
-    * Declarations - a dictionary {variable name (str): declaration (ast node)}
-    * Symbols - a dictionary {symbol (ast node): iter space (tuple of loop indices)}
+    * Declarations - a dictionary {variable name (str): declaration (AST node)}
+    * Symbols - a dictionary {symbol (AST node): iter space (tuple of loop indices)}
+    * Symbols access mode - a dictionary {symbol (AST node): access mode (WRITE, ...)}
+    * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
     * Maximum depth - an integer representing the depth of the most depth loop nest
 
@@ -245,6 +268,8 @@ def visit(node, parent):
         'fors': [],
         'decls': {},
         'symbols': {},
+        'symbols_mode': {},
+        'symbol_refs': defaultdict(list),
         'exprs': {},
         'max_depth': 0,
         'linalg_nodes': []
@@ -268,7 +293,7 @@ def visit(node, parent):
                     # Found high-level optimisation
                     return (parent, fors, (opt_par[1], opt_par[3]))
 
-    def inspect(node, parent, mode=""):
+    def inspect(node, parent, mode=None):
         if isinstance(node, EmptyStatement):
             pass
         elif isinstance(node, (Block, Root)):
@@ -295,13 +320,17 @@ def visit(node, parent):
             info['decls'][node.sym.symbol] = node
             inspect(node.sym, node)
         elif isinstance(node, Symbol):
-            if mode in ['written']:
+            access_mode = (READ, parent.__class__)
+            if mode and mode in [WRITE]:
                 info['symbols_written'][node.symbol] = info['cur_nest']
+                access_mode = (WRITE, parent.__class__)
             dep_itspace = node.loop_dep
             if node.symbol in info['symbols_written']:
                 dep_loops = info['symbols_written'][node.symbol]
                 dep_itspace = tuple(l[0].itvar for l in dep_loops)
             info['symbols'][node] = dep_itspace
+            info['symbols_mode'][node] = access_mode
+            info['symbol_refs'][node.symbol].append((node, parent))
         elif isinstance(node, Expr):
             for child in node.children:
                 inspect(child, node)
@@ -314,7 +343,7 @@ def visit(node, parent):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:
                 info['exprs'][node] = expr
-            inspect(node.children[0], node, "written")
+            inspect(node.children[0], node, WRITE)
             for child in node.children[1:]:
                 inspect(child, node)
         else:
@@ -348,7 +377,7 @@ def inner_loops(node):
     return loops
 
 
-def get_fun_decls(node, mode):
+def get_fun_decls(node, mode='kernel'):
     """Search the ``FunDecl`` node rooted in ``node``.
 
     :param mode: any string in ['kernel', 'all']. If ``kernel`` is passed, then
@@ -361,7 +390,9 @@ def get_fun_decls(node, mode):
     """
 
     def find_fun_decl(node):
-        if isinstance(node, FunDecl):
+        if isinstance(node, FlatBlock):
+            return
+        elif isinstance(node, FunDecl):
             return node
         for n in node.children:
             fundecl = find_fun_decl(n)

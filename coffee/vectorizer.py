@@ -38,7 +38,7 @@ from copy import deepcopy as dcopy
 from collections import defaultdict
 
 from base import *
-from utils import ast_update_ofs, itspace_merge, inner_loops, visit
+from utils import *
 import plan as ap
 
 
@@ -145,24 +145,75 @@ class LoopVectorizer(object):
         info = visit(self.loop_opt.header, None)
 
         # 3) Padding
-        symbols = info['symbols']
-        used_syms = [s.symbol for s in symbols.keys()]
+        symbols_mode = info['symbols_mode']
+        symbol_refs = info['symbol_refs']
+        used_syms = [s.symbol for s in symbols_mode.keys()]
         acc_decls = [d for s, d in decl_scope.items() if s in used_syms]
+        padded_buf_syms = {}
         for d, s in acc_decls:
-            if d.sym.rank:
-                if s == ap.PARAM_VAR:
-                    d.sym.rank = tuple([vect_roundup(r) for r in d.sym.rank])
-                else:
-                    rounded = vect_roundup(d.sym.rank[-1])
-                    d.sym.rank = d.sym.rank[:-1] + (rounded,)
+            if not d.sym.rank:
+                continue
+            if s != ap.PARAM_VAR:
+                d.sym.rank = d.sym.rank[:-1] + (vect_roundup(d.sym.rank[-1]),)
                 self.padded.append(d.sym)
+                continue
+            # Examined symbol is a FunDecl argument
+            old_rank = d.sym.rank
+            new_rank = tuple([vect_roundup(r) for r in d.sym.rank])
+            if old_rank == new_rank:
+                continue
+            # With padding, the computation runs on a /temporary/ padded
+            # array, that in the follow we call buffer
+            # 1- Create and insert the temporary buffer at the top of the AST
+            buf_decl = dcopy(d)
+            buf_sym = buf_decl.sym
+            buf_sym.symbol = "_%s" % buf_sym.symbol
+            buf_sym.rank = new_rank
+            buf_decl.init = ArrayInit('%s0.0%s' % ('{'*len(new_rank),
+                                                   '}'*len(new_rank)))
+            padded_buf_syms[d.sym] = buf_sym
+            self.loop_opt.header.children.insert(0, buf_decl)
+            # 2- Replace occurrences of symbol with the temporary buffer.
+            # Also, determine how the temporary buffer is accessed.
+            s_access_modes = []
+            for s_ref, _ in symbol_refs[d.sym.symbol]:
+                if s_ref is not d.sym:
+                    s_ref.symbol = buf_sym.symbol
+                # Note that the order access modes appear is exactly dictated
+                # by the way the AST is visited. In particular, we can expect
+                # them to be in order with the control flow.
+                s_access_modes.append(symbols_mode[s_ref])
+            # 3- Create and append the loop nest(s) for the copy into or from
+            # the temporary buffer. Depending on how the symbol is accessed
+            # (read only, read and write, incremented, etc.), different sort
+            # of copies are made.
+            first, last = s_access_modes[0], s_access_modes[-1]
+            if first[0] == READ:
+                copy, init = ast_c_make_copy(buf_sym, d.sym, old_rank, Assign)
+                self.loop_opt.header.children.insert(0, copy.children[0])
+            if last[0] == WRITE:
+                # If extra information (i.e., a pragma) is present telling that
+                # the argument does not need to be incremented because it does
+                # not contain any meaningful values, then we can safely write
+                # to it. This is an optimization to avoid increments when not
+                # necessarily required.
+                d_access_mode = [p for p in d.pragma if isinstance(p, Access)]
+                op = Assign if d_access_mode and d_access_mode[0] == WRITE else last[1]
+                copy, init = ast_c_make_copy(d.sym, buf_sym, old_rank, op)
+                self.loop_opt.header.children.append(copy.children[0])
+            self.padded.append(d.sym)
 
         # 4) Handle special nodes
         linalg_nodes = info['linalg_nodes']
         for n in linalg_nodes:
             if isinstance(n, Invert):
-                _, _, lda = n.children
+                sym, _, lda = n.children
                 lda.symbol = vect_roundup(lda.symbol)
+                # Disgusting hack, replace the symbol name with the
+                # padded name.
+                for k, v in padded_buf_syms.iteritems():
+                    if sym.symbol == k.symbol:
+                        sym.symbol = v.symbol
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar
