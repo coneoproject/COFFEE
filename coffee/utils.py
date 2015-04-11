@@ -189,6 +189,50 @@ def ast_replace(node, syms_dict, copy=False):
     return n_replaced
 
 
+def ast_remove(node, to_remove, mode='all'):
+    """Remove the AST Node ``to_remove`` from the tree rooted in ``node``.
+
+    :param mode: either ``all``, in which case ``to_remove`` is turned into a
+                 string (if not a string already) and all of its occurrences are
+                 removed from the AST; or ``symbol``, in which case only (all of)
+                 the references to the provided ``to_remove`` symbol are cut away.
+    """
+
+    def _is_removable(n, tr):
+        n, tr = (str(n), str(tr)) if mode == 'all' else (n, tr)
+        return True if n == tr else False
+
+    def _ast_remove(node, parent, index, tr):
+        if _is_removable(node, tr):
+            return -1
+        if not node.children:
+            return index
+        _may_remove = [_ast_remove(n, node, i, tr) for i, n in enumerate(node.children)]
+        if all([i > -1 for i in _may_remove]):
+            # No removals occurred, so just return
+            return index
+        if all([i == -1 for i in _may_remove]):
+            # Removed all of the children, so I'm also going to remove myself
+            return -1
+        alive = [i for i in _may_remove if i > -1]
+        if len(alive) > 1:
+            # Some children were removed, but not all of them, so no surgery needed
+            return index
+        # One child left, need to reattach it as child of my parent
+        alive = alive[0]
+        parent.children[index] = node.children[alive]
+        return index
+
+    if mode not in ['all', 'symbol']:
+        raise ValueError
+
+    try:
+        for tr in to_remove:
+            _ast_remove(node, None, -1, tr)
+    except TypeError:
+        _ast_remove(node, None, -1, to_remove)
+
+
 def ast_update_ofs(node, ofs):
     """Given a dictionary ``ofs`` s.t. ``{'dim': ofs}``, update the various
     iteration variables in the symbols rooted in ``node``."""
