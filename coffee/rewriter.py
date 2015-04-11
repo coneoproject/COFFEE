@@ -82,6 +82,18 @@ class ExpressionRewriter(object):
     def licm(self, merge_and_simplify=False, compact_tmps=False):
         """Perform generalized loop-invariant code motion.
 
+        Loop-invariant expressions found in the nest are moved "after" the
+        outermost independent loop and "after" the fastest varying dimension
+        loop. Here, "after" means that if the loop nest has two loops ``i``
+        and ``j``, and ``j`` is in the body of ``i``, then ``i`` comes after
+        ``j`` (i.e. the loop nest has to be read from right to left).
+
+        For example, if a sub-expression ``E`` depends on ``[i, j]`` and the
+        loop nest has three loops ``[i, j, k]``, then ``E`` is hoisted out from
+        the body of ``k`` to the body of ``i``). All hoisted expressions are
+        then wrapped and evaluated in a new loop in order to promote compiler
+        autovectorization.
+
         :param merge_and_simpliy: True if should try to merge the loops in which
                                   invariant expressions are evaluated, because they
                                   might be characterized by the same iteration space.
@@ -225,20 +237,6 @@ class ExpressionRewriter(object):
 
 
 class ExpressionHoister(object):
-    """Perform loop-invariant code motion (licm).
-
-    Invariant expressions found in the loop nest are moved "after" the
-    outermost independent loop and "after" the fastest varying dimension
-    loop. Here, "after" means that if the loop nest has two loops ``i``
-    and ``j``, and ``j`` is in the body of ``i``, then ``i`` comes after
-    ``j`` (i.e. the loop nest has to be read from right to left).
-
-    For example, if a sub-expression ``E`` depends on ``[i, j]`` and the
-    loop nest has three loops ``[i, j, k]``, then ``E`` is hoisted out from
-    the body of ``k`` to the body of ``i``). All hoisted expressions are
-    then wrapped within a suitable loop in order to exploit compiler
-    autovectorization. Note that this applies to constant sub-expressions
-    as well, in which case hoisting after the outermost loop takes place."""
 
     # Track all expressions to which LICM has been applied
     _expr_handled = []
@@ -400,96 +398,91 @@ class ExpressionHoister(object):
             self.extracted = False
             self.counter += 1
 
-            for all_deps, expr in expr_dep.items():
+            for all_deps, exprs in expr_dep.items():
                 # -1) Filter dependencies that do not pertain to the expression
                 dep = tuple(d for d in all_deps if d in self.expr_deps)
 
-                # 0) The invariant statements go in the closest outer loop to
-                # dep[-1] which they depend on, and are wrapped by a loop wl
-                # iterating along the same iteration space as dep[-1].
-                # If there's no such an outer loop, they fall in the header,
-                # provided they are within a perfect loop nest (otherwise,
-                # dependencies may be broken)
+                # 0) Determine where it is safe to hoist the statements
                 if len(dep) == 0:
-                    place, wl = self.header, None
+                    place, wrap_loop = self.header, None
                     next_loop = expr_outermost_loop
                 elif len(dep) == 1 and is_expr_outermost_perfect:
-                    place, wl = self.header, expr_dims_loops[dep[0]]
+                    place, wrap_loop = self.header, expr_dims_loops[dep[0]]
                     next_loop = expr_outermost_loop
                 elif len(dep) == 1 and len(expr_dims_loops) > 1:
-                    place, wl = expr_dims_loops[dep[0]].children[0], None
+                    place, wrap_loop = expr_dims_loops[dep[0]].children[0], None
                     next_loop = od_find_next(expr_dims_loops, dep[0])
                 elif len(dep) == 1:
-                    place, wl = expr_dims_loops[dep[0]].children[0], None
+                    place, wrap_loop = expr_dims_loops[dep[0]].children[0], None
                     next_loop = place.children[-1]
                 else:
                     dep_block = expr_dims_loops[dep[-2]].children[0]
-                    place, wl = dep_block, expr_dims_loops[dep[-1]]
+                    place, wrap_loop = dep_block, expr_dims_loops[dep[-1]]
                     next_loop = od_find_next(expr_dims_loops, dep[-2])
 
                 # 1) Remove identical sub-expressions
-                expr = dict([(str(e), e) for e in expr]).values()
+                exprs = dict([(str(e), e) for e in exprs]).values()
 
                 # 2) Create the new invariant sub-expressions and temporaries
-                sym_rank, for_dep = (tuple([wl.size]), tuple([wl.dim])) \
-                    if wl else ((), ())
-                syms = [Symbol(self._hoisted_sym % {
+                sym_rank, loop_dep = (), ()
+                if wrap_loop:
+                    sym_rank, loop_dep = tuple([wrap_loop.size]), tuple([wrap_loop.dim])
+                hoisted_syms = [Symbol(self._hoisted_sym % {
                     'loop_dep': '_'.join(dep).upper() if dep else 'CONST',
                     'expr_id': self.expr_id,
                     'round': self.counter,
                     'i': i
-                }, sym_rank) for i in range(len(expr))]
-                var_decl = [Decl(expr_type, s) for s in syms]
-                for_sym = [Symbol(d.sym.symbol, for_dep) for d in var_decl]
+                }, sym_rank) for i in range(len(exprs))]
+                hoisted_decls = [Decl(expr_type, s) for s in hoisted_syms]
+                inv_loop_syms = [Symbol(d.sym.symbol, loop_dep) for d in hoisted_decls]
 
                 # 3) Create the new for loop containing invariant terms
-                _expr = [Par(dcopy(e)) if not isinstance(e, Par)
-                         else dcopy(e) for e in expr]
-                inv_for = [Assign(s, e) for s, e in zip(dcopy(for_sym), _expr)]
+                _exprs = [Par(dcopy(e)) if not isinstance(e, Par)
+                          else dcopy(e) for e in exprs]
+                inv_loop = [Assign(s, e) for s, e in zip(dcopy(inv_loop_syms), _exprs)]
 
                 # 4) Update the dictionary of known declarations
-                for d in var_decl:
+                for d in hoisted_decls:
                     d.scope = LOCAL
                     self.decls[d.sym.symbol] = d
 
                 # 5) Replace invariant sub-trees with the proper tmp variable
-                n_replaced = dict(zip([str(s) for s in for_sym], [0]*len(for_sym)))
-                ast_replace(self.stmt.children[1], dict(zip([str(i) for i in expr],
-                                                        for_sym)), n_replaced)
+                to_replace = dict(zip([str(i) for i in exprs], inv_loop_syms))
+                n_replaced = ast_replace(self.stmt.children[1], to_replace)
 
                 # 6) Track hoisted symbols and symbols dependencies
-                sym_info = [(i, j, inv_for) for i, j in zip(_expr, var_decl)]
-                self.hoisted.update(zip([s.symbol for s in for_sym], sym_info))
-                for s, e in zip(for_sym, expr):
+                sym_info = [(i, j, inv_loop) for i, j in zip(_exprs, hoisted_decls)]
+                self.hoisted.update(zip([s.symbol for s in inv_loop_syms], sym_info))
+                for s, e in zip(inv_loop_syms, exprs):
                     self.expr_graph.add_dependency(s, e, n_replaced[str(s)] > 1)
                     self.symbols[s] = dep
 
                 # 7a) Update expressions hoisted along a known dimension (same dep)
-                inv_info = (for_dep, place, next_loop, wl)
+                inv_info = (loop_dep, place, next_loop, wrap_loop)
                 if inv_info in inv_dep:
-                    _var_decl, _inv_for = inv_dep[inv_info]
-                    _var_decl.extend(var_decl)
-                    _inv_for.extend(inv_for)
+                    _hoisted_decls, _inv_loop = inv_dep[inv_info]
+                    _hoisted_decls.extend(hoisted_decls)
+                    _inv_loop.extend(inv_loop)
                     continue
 
                 # 7b) Keep track of hoisted stuff
-                inv_dep[inv_info] = (var_decl, inv_for)
+                inv_dep[inv_info] = (hoisted_decls, inv_loop)
 
         for inv_info, dep_info in sorted(inv_dep.items()):
-            var_decl, inv_for = dep_info
-            _, place, next_loop, wl = inv_info
+            hoisted_decls, inv_loop = dep_info
+            _, place, next_loop, wrap_loop = inv_info
             # Create the hoisted code
-            if wl:
-                new_for = [dcopy(wl)]
-                new_for[0].children[0] = Block(inv_for, open_scope=True)
-                inv_for = inv_code = new_for
+            if wrap_loop:
+                new_loop = [dcopy(wrap_loop)]
+                new_loop[0].children[0] = Block(inv_loop, open_scope=True)
+                inv_loop = inv_code = new_loop
             else:
                 inv_code = [None]
             # Insert the new nodes at the right level in the loop nest
             ofs = place.children.index(next_loop)
-            place.children[ofs:ofs] = var_decl + inv_for + [FlatBlock("\n")]
+            place.children[ofs:ofs] = hoisted_decls + inv_loop + [FlatBlock("\n")]
             # Update hoisted symbols metadata
-            for i in var_decl:
+            for i in hoisted_decls:
                 self.hoisted.update_stmt(i.sym.symbol, loop=inv_code[0], place=place)
 
 
@@ -533,7 +526,7 @@ class ExpressionExpander(object):
                    if s.symbol in self.hoisted and self.should_expand(s)][0]
         except:
             # No hoisted symbols in the expanded expression, so return
-            return None
+            return {}
 
         # Aliases
         hoisted_expr = self.hoisted[exp.symbol].expr
@@ -550,7 +543,7 @@ class ExpressionExpander(object):
                 break
             for g in grp_symbols:
                 if any([l.dim in g.rank for l in lifted_loops]):
-                    return None
+                    return {}
 
         # The expression used for expansion is assigned to a temporary value in order
         # to minimize code size
@@ -574,7 +567,7 @@ class ExpressionExpander(object):
         if not self.expr_graph.has_dep(exp):
             hoisted_expr.children[0] = op(Par(hoisted_expr.children[0]), dcopy(grp))
             self.expr_graph.add_dependency(exp, grp, False)
-            return exp
+            return {str(exp): exp}
 
         # Create new symbol, expression, and declaration
         expr = Par(op(dcopy(exp), grp))
@@ -587,12 +580,11 @@ class ExpressionExpander(object):
         # Update the AST
         hoisted_loop.body.append(Assign(hoisted_exp, expr))
         insert_at_elem(hoisted_place.children, hoisted_decl, decl)
-        ast_replace(expansion, {str(exp): hoisted_exp}, copy=True)
         # Update tracked information
         self.expanded_decls[decl.sym.symbol] = decl
         self.hoisted[hoisted_exp.symbol] = (expr, decl, hoisted_loop, hoisted_place)
         self.expr_graph.add_dependency(hoisted_exp, expr, 0)
-        return hoisted_exp
+        return {str(exp): hoisted_exp}
 
     def _expand(self, node, parent):
         op = node.__class__
@@ -652,10 +644,13 @@ class ExpressionExpander(object):
 
         # Then, see if some of the expanded terms are groupable at the level
         # of hoisted expressions
-        to_remove = set()
+        to_replace, to_remove = {}, set()
         for expansion, (exp, grp) in self.expansions.items():
-            if self._hoist(expansion, exp, grp):
+            hoisted = self._hoist(expansion, exp, grp)
+            if hoisted:
+                to_replace.update(hoisted)
                 to_remove.add(grp)
+        ast_replace(self.stmt, to_replace, copy=True)
         for grp in to_remove:
             ast_remove(self.stmt, grp, 'all')
 
