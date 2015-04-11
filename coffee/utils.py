@@ -167,23 +167,26 @@ def postprocess(node):
 #####################################
 
 
-def ast_replace(node, syms_dict, n_replaced={}, copy=False):
+def ast_replace(node, syms_dict, copy=False):
     """Given a dictionary ``syms_dict`` s.t. ``{'syms': to_replace}``, replace the
     various ``syms`` rooted in ``node`` with ``to_replace``. If ``copy`` is True,
     a deep copy of the replacing symbol is created."""
 
-    to_replace = {}
-    for i, n in enumerate(node.children):
-        replacing = syms_dict.get(str(n)) or syms_dict.get(str(Par(n)))
-        if replacing:
-            to_replace[i] = replacing if not copy else dcopy(replacing)
-            if n_replaced:
+    def _ast_replace(node, syms_dict, n_replaced):
+        to_replace = {}
+        for i, n in enumerate(node.children):
+            replacing = syms_dict.get(str(n)) or syms_dict.get(str(Par(n)))
+            if replacing:
+                to_replace[i] = replacing if not copy else dcopy(replacing)
                 n_replaced[str(replacing)] += 1
-        elif not isinstance(n, Symbol):
-            # Useless to traverse the tree if the child is a symbol
-            ast_replace(n, syms_dict, n_replaced, copy)
-    for i, r in to_replace.items():
-        node.children[i] = r
+            else:
+                _ast_replace(n, syms_dict, n_replaced)
+        for i, r in to_replace.items():
+            node.children[i] = r
+
+    n_replaced = defaultdict(int)
+    _ast_replace(node, syms_dict, n_replaced)
+    return n_replaced
 
 
 def ast_update_ofs(node, ofs):
