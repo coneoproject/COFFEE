@@ -193,9 +193,12 @@ class ExpressionRewriter(object):
                      * mode == 'full': expansion is performed aggressively without \
                                        any specific restrictions.
         """
+        info = visit(self.stmt.children[1])
+        symbols_dep = info['symbols_dep']
+
         # Select the expansion strategy
         if mode == 'standard':
-            occurrences = zip(*count(self.stmt.children[1]).keys())[1]
+            occurrences = [s.rank for s in symbols_dep.keys()]
             occurrences = dict((i, occurrences.count(i)) for i in occurrences)
             dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
             should_expand = lambda n: n.rank == dimension
