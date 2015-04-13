@@ -234,10 +234,23 @@ class ExpressionRewriter(object):
                                             grouped together, within the obvious \
                                             limits imposed by the expression itself.
         """
+        info = visit(self.stmt.children[1])
+        symbols_dep = info['symbols_dep']
+
+        # Select the factorization strategy
+        if mode == 'standard':
+            occurrences = [s.rank for s in symbols_dep.keys()]
+            occurrences = dict((i, occurrences.count(i)) for i in occurrences)
+            dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
+            should_factorize = lambda n: n.rank == dimension
+        elif mode == 'immutable':
+            should_factorize = lambda n: self.decls[n.symbol].is_static_const
         if mode not in ['standard', 'immutable']:
             warning('Unknown factorization strategy. Skipping.')
             return
-        self.expr_factorizer.factorize(mode)
+
+        # Perform the factorization
+        self.expr_factorizer.factorize(should_factorize)
 
 
 class ExpressionHoister(object):
@@ -660,60 +673,107 @@ class ExpressionExpander(object):
 
 class ExpressionFactorizer(object):
 
+    class Term():
+
+        def __init__(self, operands, factors=None):
+            # Example: in the Term /a*(b+c)/, /a/ is an 'operand', while /b/ and
+            # /c/ are 'factors'
+            self.operands = operands
+            self.factors = factors or set()
+
+        @property
+        def operands_ast(self):
+            return ast_make_expr(Prod, tuple(self.operands))
+
+        @property
+        def factors_ast(self):
+            return ast_make_expr(Sum, tuple(self.factors))
+
+        @property
+        def generate_ast(self):
+            n_operands, n_factors = len(self.operands), len(self.factors)
+            if n_operands == 0 and n_factors == 0:
+                return None
+            elif n_operands == 1 and n_factors == 0:
+                return self.operands_ast
+            elif n_operands == 0 and n_factors == 1:
+                return self.factors_ast
+            else:
+                return Par(Prod(self.operands_ast, self.factors_ast))
+
+        @staticmethod
+        def process(symbols, should_factorize):
+            operands = set(s for s in symbols if should_factorize(s))
+            factors = set(s for s in symbols if not should_factorize(s))
+            return ExpressionFactorizer.Term(operands, factors)
+
     def __init__(self, stmt, expr_info):
         self.stmt = stmt
         self.expr_info = expr_info
 
-    def _find_prod(self, node, occs, factorizable):
-        if isinstance(node, Symbol):
-            return
-        elif isinstance(node, Par):
-            self._find_prod(node.children[0], occs, factorizable)
-        elif isinstance(node, Sum):
-            left, right = (node.children[0], node.children[1])
-            self._find_prod(left, occs, factorizable)
-            self._find_prod(right, occs, factorizable)
-        elif isinstance(node, Prod):
-            left, right = (node.children[0], node.children[1])
-            self._find_prod(left, occs, factorizable)
-            self._find_prod(right, occs, factorizable)
-            l_str, r_str = (str(left), str(right))
-            if occs[l_str] > 1 and occs[r_str] > 1:
-                if occs[l_str] > occs[r_str]:
-                    dist = l_str
-                    target = (left, right)
-                    occs[r_str] -= 1
+    def _simplify_sum(self, terms):
+        unique_terms = {}
+        for t in terms:
+            unique_terms.setdefault(str(t.generate_ast), list()).append(t)
+
+        for t_repr, t_list in unique_terms.items():
+            occurrences = len(t_list)
+            unique_terms[t_repr] = t_list[0]
+            if occurrences > 1:
+                unique_terms[t_repr].operands.add(Symbol(occurrences))
+
+        terms[:] = unique_terms.values()
+
+    def _analyze_node(self, node):
+
+        def __analyze_node(self, node, root, children):
+            for n in node.children:
+                if n.__class__ == root or isinstance(n, Par):
+                    __analyze_node(self, n, root, children)
                 else:
-                    dist = r_str
-                    target = (right, left)
-                    occs[l_str] -= 1
-            elif occs[l_str] > 1 and occs[r_str] == 1:
-                dist = l_str
-                target = (left, right)
-            elif occs[r_str] > 1 and occs[l_str] == 1:
-                dist = r_str
-                target = (right, left)
-            elif occs[l_str] == 1 and occs[r_str] == 1:
-                dist = l_str
-                target = (left, right)
-            else:
-                return
-            factorizable[dist].append(target)
+                    children.append(n)
 
-    def factorize(self, mode):
-        if mode == 'immutable':
-            raise NotImplementedError("Strategy yet not implemented")
+        children = []
+        __analyze_node(self, node, node.__class__, children)
+        return children
 
-        factorizable = defaultdict(list)
-        occurrences = count(self.stmt.children[1], mode='symbol_str')
-        self._find_prod(self.stmt.children[1], occurrences, factorizable)
+    def _factorize(self, node, parent, index):
+        if isinstance(node, Par):
+            return self._factorize(node.children[0], node, 0)
 
-        if not factorizable:
-            return
+        elif isinstance(node, FunCall):
+            return [self.Term(set([node]))]
 
-        new_prods = []
-        for d in factorizable.values():
-            dist, target = zip(*d)
-            target = Par(ast_make_sum(target)) if len(target) > 1 else ast_make_sum(target)
-            new_prods.append(Par(Prod(dist[0], target)))
-        self.stmt.children[1] = Par(ast_make_sum(new_prods))
+        elif isinstance(node, (Prod, Div)):
+            children = self._analyze_node(node)
+            symbols = [n for n in children if isinstance(n, Symbol)]
+            other_nodes = [n for n in children if n not in symbols]
+            return [self.Term.process(symbols, self.should_factorize)] + \
+                [self._factorize(n, node, i) for i, n in enumerate(other_nodes)]
+
+        # The fundamental case is when /node/ is a Sum (or Sub, equivalently).
+        # Here, we try to factorize the terms composing the operation
+        elif isinstance(node, (Sum, Sub)):
+            children = self._analyze_node(node)
+            # First try to factorize within /node/'s children
+            terms = [self._factorize(n, node, i) for i, n in enumerate(children)]
+            terms = list(flatten(terms))
+            # Then check if it's possible to aggregate operations
+            # Example: replace (a*b)+(a*b) with 2*(a*b)
+            self._simplify_sum(terms)
+            # Finally try to factorize some of the operands composing the operation
+            factorized = defaultdict(self.Term)
+            for t in terms:
+                operand = ast_make_expr(Prod, tuple(t.operands))
+                _t = factorized.setdefault(str(operand), self.Term(set([operand]), t.factors))
+                _t.factors |= t.factors
+            node = ast_make_expr(Sum, [t.generate_ast for t in factorized.values()])
+            parent.children[index] = node
+            return [self.Term([node])]
+
+        else:
+            raise RuntimeError("Factorization error: unknown node: %s" % str(node))
+
+    def factorize(self, should_factorize):
+        self.should_factorize = should_factorize
+        self._factorize(self.stmt.children[1], self.stmt, 1)

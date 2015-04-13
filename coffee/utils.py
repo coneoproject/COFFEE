@@ -290,10 +290,17 @@ def ast_make_for(stmts, loop, copy=False):
     return new_loop
 
 
-def ast_make_sum(symbols):
-    """Create a ``Sum`` object starting from a symbols list ``symbols``. If
-    the length of ``symbols`` is 1, return the only symbol present."""
-    return symbols[0] if len(symbols) == 1 else Sum(symbols[0], ast_make_sum(symbols[1:]))
+def ast_make_expr(op, nodes):
+    """Create an ``Expr`` Node of type ``op``, with children given in ``nodes``."""
+
+    def _ast_make_expr(nodes):
+        return nodes[0] if len(nodes) == 1 else op(nodes[0], _ast_make_expr(nodes[1:]))
+
+    try:
+        expr = _ast_make_expr(nodes)
+        return expr if len(nodes) == 1 else Par(expr)
+    except IndexError:
+        return None
 
 
 def ast_make_alias(node1, node2):
