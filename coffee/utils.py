@@ -505,7 +505,7 @@ def is_perfect_loop(loop):
     return check_perfectness(loop)
 
 
-def count_occurrences(node, key=0, read_only=False):
+def count(node, mode='symbol', read_only=False):
     """For each variable ``node``, count how many times it appears as involved
     in some expressions. For example, for the expression: ::
 
@@ -516,24 +516,36 @@ def count_occurrences(node, key=0, read_only=False):
         ``{a: 2, b: 1, c: 1}``
 
     :param node: Root of the visited AST
-    :param key: This can be any value in [0, 1, 2]. The keys used in the returned
-                dictionary can be:
-                * ``key == 0``: a tuple (symbol name, symbol rank)
-                * ``key == 1``: the symbol name
-                * ``key == 2``: a string representation of the symbol
+    :param mode: Accepted values are ['symbol', 'symbol_id', 'symbol_str']. This
+                 parameter drives the counting and impacts the format of the
+                 returned dictionary. In particular, the keys in such dictionary
+                 will be:
+
+                * mode == 'symbol': a tuple (symbol name, symbol rank)
+                * mode == 'symbol_id': the symbol name only (a string). This \
+                                       implies that all symbol occurrences \
+                                       accumulate on the same counter, regardless \
+                                       of iteration spaces. For example, if \
+                                       under ``node`` appear both ``A[0]`` and \
+                                       ``A[i][j]``, ``A`` will be counted twice
+                * mode == 'symbol_str': a string representation of the symbol
+
     :param read_only: True if only variables on the right-hand side of a statement
                       should be counted; False if any appearance should be counted.
     """
+    modes = ['symbol', 'symbol_id', 'symbol_str']
+    if mode == 'symbol':
+        key = lambda n: (n.symbol, n.rank)
+    elif mode == 'symbol_id':
+        key = lambda n: n.symbol
+    elif mode == 'symbol_str':
+        key = lambda n: str(n)
+    else:
+        raise RuntimeError("`Count` function got a wrong mode (valid: %s)" % modes)
 
     def count(node, counter):
         if isinstance(node, Symbol):
-            if key == 0:
-                node = (node.symbol, node.rank)
-            elif key == 1:
-                node = node.symbol
-            elif key == 2:
-                node = str(node)
-            counter[node] += 1
+            counter[key(node)] += 1
         elif isinstance(node, FlatBlock):
             return
         else:
@@ -543,8 +555,6 @@ def count_occurrences(node, key=0, read_only=False):
             for c in to_traverse:
                 count(c, counter)
 
-    if key not in [0, 1, 2]:
-        raise RuntimeError("Count_occurrences got a wrong key (valid: 0, 1, 2)")
     counter = defaultdict(int)
     count(node, counter)
     return counter

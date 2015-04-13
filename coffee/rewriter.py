@@ -119,11 +119,11 @@ class ExpressionRewriter(object):
         # Remove temporaries created yet accessed only once
         if compact_tmps:
             stmt_occs = dict((k, v)
-                             for d in [count_occurrences(stmt, key=1, read_only=True)
+                             for d in [count(stmt, mode='symbol_id', read_only=True)
                                        for stmt in stmt_hoisted]
                              for k, v in d.items())
             for l in self.hoisted.all_loops:
-                l_occs = count_occurrences(l, key=0, read_only=True)
+                l_occs = count(l, read_only=True)
                 to_replace, to_delete = {}, []
                 for sym_rank, sym_occs in l_occs.items():
                     # If the symbol appears once, then it is a potential candidate
@@ -195,7 +195,7 @@ class ExpressionRewriter(object):
         """
         # Select the expansion strategy
         if mode == 'standard':
-            occurrences = zip(*count_occurrences(self.stmt.children[1]).keys())[1]
+            occurrences = zip(*count(self.stmt.children[1]).keys())[1]
             occurrences = dict((i, occurrences.count(i)) for i in occurrences)
             dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
             should_expand = lambda n: n.rank == dimension
@@ -702,7 +702,7 @@ class ExpressionFactorizer(object):
             raise NotImplementedError("Strategy yet not implemented")
 
         factorizable = defaultdict(list)
-        occurrences = count_occurrences(self.stmt.children[1], key=2)
+        occurrences = count(self.stmt.children[1], mode='symbol_str')
         self._find_prod(self.stmt.children[1], occurrences, factorizable)
 
         if not factorizable:
