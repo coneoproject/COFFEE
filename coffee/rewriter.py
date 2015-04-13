@@ -77,7 +77,8 @@ class ExpressionRewriter(object):
                                                 self.expr_info,
                                                 self.hoisted,
                                                 self.expr_graph)
-        self.expr_factorizer = ExpressionFactorizer(self.stmt)
+        self.expr_factorizer = ExpressionFactorizer(self.stmt,
+                                                    self.expr_info)
 
     def licm(self, merge_and_simplify=False, compact_tmps=False):
         """Perform generalized loop-invariant code motion.
@@ -656,8 +657,9 @@ class ExpressionExpander(object):
 
 class ExpressionFactorizer(object):
 
-    def __init__(self, stmt):
+    def __init__(self, stmt, expr_info):
         self.stmt = stmt
+        self.expr_info = expr_info
 
     def _find_prod(self, node, occs, factorizable):
         if isinstance(node, Symbol):
