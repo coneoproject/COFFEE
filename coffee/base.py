@@ -335,6 +335,22 @@ class Par(UnaryExpr):
         return wrap(self.children[0].gencode(not_scope, self))
 
 
+class Deref(UnaryExpr):
+
+    """Dereference an address."""
+
+    def gencode(self):
+        return "*%s" % wrap(self.children[0].gencode())
+
+
+class Addr(UnaryExpr):
+
+    """Get the address."""
+
+    def gencode(self):
+        return "&%s" % wrap(self.children[0].gencode())
+
+
 class Sum(BinExpr):
     """Binary sum."""
     op = "+"
@@ -353,6 +369,14 @@ class Prod(BinExpr):
 class Div(BinExpr):
     """Binary division."""
     op = "/"
+
+
+class Mod(BinExpr):
+
+    """Modulo operation."""
+
+    def __init__(self, expr1, expr2):
+        super(Mod, self).__init__(expr1, expr2, "%")
 
 
 class Eq(BinExpr):
