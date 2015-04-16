@@ -34,7 +34,7 @@
 """COFFEE's optimization plan constructor."""
 
 from base import *
-from utils import increase_stack, unroll_factors, flatten, bind
+from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer
 from autotuner import Autotuner
@@ -201,7 +201,7 @@ class ASTKernel(object):
                         ('vect', {'rewrite': 2, 'align_pad': True,
                                   'vectorize': (V_OP_UAJ, 3)})]
 
-        def _generate_cpu_code(self, **kwargs):
+        def _generate_cpu_code(self, kernel, **kwargs):
             """Generate kernel code according to the various optimization options."""
 
             rewrite = kwargs.get('rewrite')
@@ -233,7 +233,7 @@ class ASTKernel(object):
             if permute and v_type and v_type != AUTOVECT:
                 raise RuntimeError("Outer-product vectorization needs no permute")
 
-            decls, fors = self._visit_ast(self.ast, fors=[], decls={})
+            decls, fors = self._visit_ast(kernel, fors=[], decls={})
             loop_opts = [CPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
             for loop_opt in loop_opts:
                 # Only optimize compute-intensive expressions
@@ -297,9 +297,12 @@ class ASTKernel(object):
 
             return loop_opts
 
+        kernels = visit(self.ast, None, search=FunDecl)['search'][FunDecl]
         if opts.get('autotune'):
             if not (compiler and intrinsics):
                 raise RuntimeError("Must initialize COFFEE prior to autotuning")
+            if len(kernels) > 1:
+                raise RuntimeError("Cannot autotune if multiple functions are present")
             # Set granularity of autotuning
             resolution = autotune_resolution
             autotune_configs = autotune_all
@@ -315,7 +318,7 @@ class ASTKernel(object):
             original_ast = dcopy(self.ast)
             for opt, params in autotune_configs:
                 # Generate basic kernel variants
-                loop_opts = _generate_cpu_code(self, **params)
+                loop_opts = _generate_cpu_code(self, self.ast, **params)
                 if not loop_opts:
                     # No expressions, nothing to tune
                     tunable = False
@@ -352,7 +355,7 @@ class ASTKernel(object):
 
             # On top of some of the basic kernel variants, apply unroll/unroll-and-jam
             for _, params in autotune_configs_uf:
-                loop_opts = _generate_cpu_code(self, **params)
+                loop_opts = _generate_cpu_code(self, self.ast, **params)
                 variants.append((self.ast, params))
                 self.ast = dcopy(original_ast)
 
@@ -405,11 +408,17 @@ class ASTKernel(object):
         else:
             params = opts
 
-        # Generate a specific code version
-        loop_opts = _generate_cpu_code(self, **params)
+        # The optimization passes are performed individually (i.e., "locally") for
+        # each function (or "kernel") found in the provided AST
+        for kernel in kernels:
+            # Generate a specific code version
+            loop_opts = _generate_cpu_code(self, kernel, **params)
 
-        # Increase stack size if too much space is used on the stack
-        increase_stack(loop_opts)
+            # Increase stack size if too much space is used on the stack
+            increase_stack(loop_opts)
+
+            # Post processing of the AST ensures higher-quality code
+            postprocess(kernel)
 
     def gencode(self):
         """Generate a string representation of the AST."""

@@ -31,11 +31,8 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from copy import deepcopy as dcopy
-
 from base import *
-from utils import inner_loops, visit, is_perfect_loop, flatten, ast_update_rank
-from utils import set_itspace, ast_c_for
+from utils import *
 from expression import MetaExpr
 from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
@@ -51,27 +48,31 @@ class LoopOptimizer(object):
     def __init__(self, loop, header, kernel_decls):
         """Initialize the LoopOptimizer.
 
-        :arg loop:         root loop node o a loop nest.
-        :arg header:       parent of the root loop node
-        :arg kernel_decls: list of declarations of the variables that are visible
-                           within ``loop``."""
+        :param loop: root AST node of a loop nest
+        :param header: parent AST node of ``loop``
+        :param kernel_decls: list of Decl objects accessible in ``loop``
+        """
         self.loop = loop
         self.header = header
         self.kernel_decls = kernel_decls
-        # Track nonzero regions accessed in the various loops
-        self.nz_in_fors = {}
-        # Expression graph tracking data dependencies
+
+        # Track nonzero regions accessed in the loop nest
+        self.nonzero_info = {}
+        # Track data dependencies
         self.expr_graph = ExpressionGraph()
-        # Dictionary contaning various information about hoisted expressions
+        # Track hoisted expressions
         self.hoisted = StmtTracker()
 
         # Inspect the loop nest and collect info
         info = visit(self.loop, self.header)
-        self.decls, self.exprs = ({}, {})
+        self.decls, self.exprs = (OrderedDict(), OrderedDict())
         for decl_str, decl in info['decls'].items():
             self.decls[decl_str] = (decl, plan.LOCAL_VAR)
+        all_decls = dict([(decl_str, decl_scope[0]) for decl_str, decl_scope
+                          in self.kernel_decls.items() + self.decls.items()])
         for stmt, expr_info in info['exprs'].items():
-            self.exprs[stmt] = MetaExpr(*expr_info)
+            expr_type = check_type(stmt, all_decls)
+            self.exprs[stmt] = MetaExpr(expr_type, *expr_info)
 
     def rewrite(self, level):
         """Rewrite a compute-intensive expression found in the loop nest so as to
@@ -84,25 +85,23 @@ class LoopOptimizer(object):
         4. Zero-valued columns avoidance
         5. Precomputation of integration-dependent terms
 
-        :arg level: The optimization level (0, 1, 2, 3, 4). The higher, the more
-                    invasive is the re-writing of the expression, trying to
-                    eliminate unnecessary floating point operations.
+        :param level: The optimization level (0, 1, 2, 3, 4). The higher, the more
+                      invasive is the re-writing of the expression, trying to
+                      eliminate unnecessary floating point operations.
 
-                    * level == 1: performs "basic" generalized loop-invariant \
-                                  code motion
-                    * level == 2: level 1 + expansion of terms, factorization of \
-                                  basis functions appearing multiple times in the \
-                                  same expression, and finally another run of \
-                                  loop-invariant code motion to move invariant \
-                                  sub-expressions exposed by factorization
-                    * level == 3: level 2 + avoid computing zero-columns
-                    * level == 4: level 3 + precomputation of read-only expressions \
-                                  out of the loop nest
+                      * level == 1: performs "basic" generalized loop-invariant \
+                                    code motion
+                      * level == 2: level 1 + expansion of terms, factorization of \
+                                    basis functions appearing multiple times in the \
+                                    same expression, and finally another run of \
+                                    loop-invariant code motion to move invariant \
+                                    sub-expressions exposed by factorization
+                      * level == 3: level 2 + avoid computing zero-columns
+                      * level == 4: level 3 + precomputation of read-only expressions \
+                                    out of the loop nest
         """
-
-        kernel_info = (self.header, self.kernel_decls)
         for stmt_info in self.exprs.items():
-            ew = ExpressionRewriter(stmt_info, self.decls, kernel_info,
+            ew = ExpressionRewriter(stmt_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             if level > 0:
                 ew.licm()
@@ -121,7 +120,7 @@ class LoopOptimizer(object):
         zls = ZeroLoopScheduler(self.exprs, self.expr_graph,
                                 (self.kernel_decls, self.hoisted))
         zls.reschedule()
-        self.nz_in_fors = zls.nz_in_fors
+        self.nonzero_info = zls.nonzero_info
 
     def precompute(self, mode=0):
         """Precompute statements out of ``self.loop``, which implies scalar
@@ -187,9 +186,9 @@ class LoopOptimizer(object):
             elif isinstance(node, For):
                 # Precompute and/or Vector-expand inner statements
                 new_children = []
-                for n in node.children[0].children:
+                for n in node.body:
                     precompute_stmt(n, precomputed, new_children)
-                node.children[0].children = new_children
+                node.body = new_children
                 new_outer_block.append(node)
             else:
                 raise RuntimeError("Precompute error: unexpteced node: %s" % str(node))
@@ -210,7 +209,7 @@ class LoopOptimizer(object):
                     do_not_precompute.add(l.decl)
                     do_not_precompute.add(l.loop)
         to_remove, precomputed_block, precomputed_syms = ([], [], {})
-        for i in self.loop.children[0].children:
+        for i in self.loop.body:
             if i in flatten(self.expr_unit_stride_loops):
                 break
             elif i not in do_not_precompute:
@@ -218,7 +217,7 @@ class LoopOptimizer(object):
                 to_remove.append(i)
         # Remove precomputed statements
         for i in to_remove:
-            self.loop.children[0].children.remove(i)
+            self.loop.body.remove(i)
 
         # Wrap hoisted for/assignments/increments within a loop
         new_outer_block = []
@@ -264,7 +263,7 @@ class CPULoopOptimizer(LoopOptimizer):
     def unroll(self, loop_uf):
         """Unroll loops enclosing expressions as specified by ``loop_uf``.
 
-        :arg loop_uf: dictionary from iteration spaces to unroll factors."""
+        :param loop_uf: dictionary from iteration spaces to unroll factors."""
 
         def update_expr(node, var, factor):
             """Add an offset ``factor`` to every iteration variable ``var`` in
@@ -409,7 +408,7 @@ class GPULoopOptimizer(LoopOptimizer):
 
         info = visit(self.loop, self.header)
         fors_list = info['fors']
-        syms = info['symbols']
+        symbols = info['symbols_dep']
 
         itspace_vrs = set()
         for fors in fors_list:
@@ -417,12 +416,11 @@ class GPULoopOptimizer(LoopOptimizer):
                 if '#pragma pyop2 itspace' not in node.pragma:
                     continue
                 parent = parent.children
-                for n in node.children[0].children:
+                for n in node.body:
                     parent.insert(parent.index(node), n)
                 parent.remove(node)
                 itspace_vrs.add(node.itvar)
 
-        from utils import any_in
-        accessed_vrs = [s for s in syms if any_in(s.rank, itspace_vrs)]
+        accessed_vrs = [s for s in symbols if any_in(s.rank, itspace_vrs)]
 
         return (itspace_vrs, accessed_vrs)

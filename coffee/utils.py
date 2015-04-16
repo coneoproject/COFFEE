@@ -81,8 +81,8 @@ def unroll_factors(loops):
     a chance of auto-vectorizing them; 2) loops sizes must be a multiple of the
     unroll factor.
 
-    :arg:loops: list of for loops for which a suitable unroll factor has to be
-                determined.
+    :param loops: list of for loops for which a suitable unroll factor has to be
+                  determined.
     """
 
     loops_unroll = OrderedDict()
@@ -98,6 +98,70 @@ def unroll_factors(loops):
             loops_unroll[l.itvar] = [i+1 for i in range(l.size) if l.size % (i+1) == 0]
 
     return loops_unroll
+
+
+def postprocess(node):
+    """Rearrange the Nodes in the AST rooted in ``node`` to improve the code quality
+    when unparsing the tree."""
+
+    class Process:
+        start = None
+        end = None
+        decls = {}
+        blockable = []
+        _processed = []
+
+        @staticmethod
+        def mark(node):
+            if Process.start is not None:
+                Process._processed.append((node, Process.start, Process.end,
+                                           Process.decls, Process.blockable))
+            Process.start = None
+            Process.end = None
+            Process.decls = {}
+            Process.blockable = []
+
+    def init_decl(stmt):
+        if not isinstance(stmt, Assign):
+            return False
+        lhs, rhs = stmt.children
+        decl = Process.decls.get(lhs.symbol)
+        if decl:
+            decl.init = rhs
+            return True
+        return False
+
+    def update(node, parent):
+        index = parent.children.index(node)
+        if Process.start is None:
+            Process.start = index
+        Process.end = index
+        if not init_decl(node):
+            Process.blockable.append(node)
+
+    def make_blocks():
+        for node, start, end, _, blockable in reversed(Process._processed):
+            node.children[start:end+1] = [Block(blockable, open_scope=False)]
+
+    def _postprocess(node, parent):
+        if isinstance(node, FlatBlock) and str(node).isspace():
+            update(node, parent)
+        elif isinstance(node, (For, If, Switch, FunCall, FunDecl, FlatBlock, LinAlg,
+                               Block, Root)):
+            Process.mark(parent)
+            for n in node.children:
+                _postprocess(n, node)
+            Process.mark(node)
+        elif isinstance(node, Decl):
+            if not (node.init and not isinstance(node.init, EmptyStatement)) and \
+                    not node.sym.rank:
+                Process.decls[node.sym.symbol] = node
+            update(node, parent)
+        elif isinstance(node, (Assign, Incr, Decr, IMul, IDiv)):
+            update(node, parent)
+
+    _postprocess(node, None)
+    make_blocks()
 
 
 #####################################
@@ -221,25 +285,26 @@ def ast_c_make_alias(node1, node2):
     return node1
 
 
-def ast_c_make_copy(arr1, arr2, region, op):
-    """Create a piece of AST performing a copy from ``arr2`` to ``arr1``.
+def ast_c_make_copy(arr1, arr2, itspace, op):
+    """Create an AST performing a copy from ``arr2`` to ``arr1``.
     Return also an ``ArrayInit`` object indicating how ``arr1`` should be
     initialized prior to the copy."""
     init = ArrayInit("0.0")
     if op == Assign:
         init = EmptyStatement()
-
+    rank = ()
+    for i, (start, end) in enumerate(itspace):
+        rank += ("i%d" % i,)
     arr1, arr2 = dcopy(arr1), dcopy(arr2)
-    op = op(arr1, arr2)
-    rank = []
-    for i, r in enumerate(region):
-        itvar = "i%d" % i
-        rank.append(itvar)
+    body = []
+    for a1, a2 in zip(arr1, arr2):
+        a1.rank, a2.rank = rank, a2.rank[:-len(rank)] + rank
+        body.append(op(a1, a2))
+    for i, (start, end) in enumerate(itspace):
         if isinstance(init, ArrayInit):
             init.values = "{%s}" % init.values
-        op = c_for(itvar, r, op, pragma="")
-    arr1.rank, arr2.rank = rank, rank
-    return op, init
+        body = c_for(rank[i], end, body, pragma="", init=start)
+    return body, init
 
 
 ###########################################################
@@ -247,33 +312,34 @@ def ast_c_make_copy(arr1, arr2, region, op):
 ###########################################################
 
 
-def visit(node, parent):
+def visit(node, parent=None, search=None):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
-    * Function declarations - a list of all function declarations encountered
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
     * Declarations - a dictionary {variable name (str): declaration (AST node)}
-    * Symbols - a dictionary {symbol (AST node): iter space (tuple of loop indices)}
-    * Symbols access mode - a dictionary {symbol (AST node): access mode (WRITE, ...)}
+    * Symbols (dependencies) - a dictionary {symbol (AST node): [loops] it depends on}
+    * Symbols (access mode) - a dictionary {symbol (AST node): access mode (WRITE, ...)}
     * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
     * Maximum depth - an integer representing the depth of the most depth loop nest
+    * Searched nodes - a dictionary {types of AST node: list of occurrences}
 
-    :arg node:   AST root node of the visit
-    :arg parent: parent node of ``node``
+    :param node: AST root node of the visit
+    :param parent: parent node of ``node``
+    :param search: type(s) of AST nodes to be searched and tracked in the visit
     """
 
     info = {
-        'fun_decls': [],
         'fors': [],
-        'decls': {},
-        'symbols': {},
-        'symbols_mode': {},
+        'decls': OrderedDict(),
+        'symbols_dep': OrderedDict(),
+        'symbols_mode': OrderedDict(),
         'symbol_refs': defaultdict(list),
-        'exprs': {},
+        'exprs': OrderedDict(),
         'max_depth': 0,
-        'linalg_nodes': []
+        'search': defaultdict(list)
     }
+
     _inner_loops = inner_loops(node)
 
     def check_opts(node, parent, fors):
@@ -294,13 +360,15 @@ def visit(node, parent):
                     return (parent, fors, (opt_par[1], opt_par[3]))
 
     def inspect(node, parent, mode=None):
+        if search and isinstance(node, search):
+            info['search'][type(node)].append(node)
+
         if isinstance(node, EmptyStatement):
             pass
         elif isinstance(node, (Block, Root)):
             for n in node.children:
                 inspect(n, node)
         elif isinstance(node, FunDecl):
-            info['fun_decls'].append(node)
             for n in node.children:
                 inspect(n, node)
             for n in node.args:
@@ -320,15 +388,18 @@ def visit(node, parent):
             info['decls'][node.sym.symbol] = node
             inspect(node.sym, node)
         elif isinstance(node, Symbol):
+            cur_nest = info['cur_nest']
+            # First, assume it's READ-only...
             access_mode = (READ, parent.__class__)
+            dep = [l for l, _ in cur_nest if l.itvar in node.rank]
             if mode and mode in [WRITE]:
-                info['symbols_written'][node.symbol] = info['cur_nest']
+                # ...adjust if actually a WRITE...
+                info['symbols_written'][node.symbol] = cur_nest
                 access_mode = (WRITE, parent.__class__)
-            dep_itspace = node.loop_dep
             if node.symbol in info['symbols_written']:
-                dep_loops = info['symbols_written'][node.symbol]
-                dep_itspace = tuple(l[0].itvar for l in dep_loops)
-            info['symbols'][node] = dep_itspace
+                # ...Finally update loop dependencies if not read-only
+                dep = tuple(l for l, _ in info['symbols_written'][node.symbol])
+            info['symbols_dep'][node] = dep
             info['symbols_mode'][node] = access_mode
             info['symbol_refs'][node.symbol].append((node, parent))
         elif isinstance(node, Expr):
@@ -337,8 +408,6 @@ def visit(node, parent):
         elif isinstance(node, FunCall):
             for child in node.children:
                 inspect(child, node)
-        elif isinstance(node, Linalg):
-            info['linalg_nodes'].append(node)
         elif isinstance(node, Perfect):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:
@@ -377,36 +446,6 @@ def inner_loops(node):
     return loops
 
 
-def get_fun_decls(node, mode='kernel'):
-    """Search the ``FunDecl`` node rooted in ``node``.
-
-    :param mode: any string in ['kernel', 'all']. If ``kernel`` is passed, then
-                 only one ``FunDecl`` is expected in the tree rooted in ``node``
-                 (the name "kernel" is to denote that the tree represents a
-                 self-contained piece of code in a function); a search is performed
-                 and the corresponding node returned. If ``all`` is passed, the
-                 whole tree in inspected and all ``FunDecl`` nodes are returned
-                 in a list.
-    """
-
-    def find_fun_decl(node):
-        if isinstance(node, FlatBlock):
-            return
-        elif isinstance(node, FunDecl):
-            return node
-        for n in node.children:
-            fundecl = find_fun_decl(n)
-            if fundecl:
-                return fundecl
-
-    allowed = ['kernel', 'all']
-    if mode == 'kernel':
-        return find_fun_decl(node)
-    if mode == 'all':
-        return visit(node, None)['fun_decls']
-    raise RuntimeError("Only %s modes are allowed by `get_fun_decls`" % allowed)
-
-
 def is_perfect_loop(loop):
     """Return True if ``loop`` is part of a perfect loop nest, False otherwise."""
 
@@ -440,14 +479,14 @@ def count_occurrences(node, key=0, read_only=False):
 
         ``{a: 2, b: 1, c: 1}``
 
-    :arg key: This can be any value in [0, 1, 2]. The keys used in the returned
-              dictionary can be:
-
-              * ``key == 0``: a tuple (symbol name, symbol rank)
-              * ``key == 1``: the symbol name
-              * ``key == 2``: a string representation of the symbol
-    :arg read_only: True if only variables on the right-hand side of a statement
-                    should be counted; False if any appearance should be counted.
+    :param node: Root of the visited AST
+    :param key: This can be any value in [0, 1, 2]. The keys used in the returned
+                dictionary can be:
+                * ``key == 0``: a tuple (symbol name, symbol rank)
+                * ``key == 1``: the symbol name
+                * ``key == 2``: a string representation of the symbol
+    :param read_only: True if only variables on the right-hand side of a statement
+                      should be counted; False if any appearance should be counted.
     """
 
     def count(node, counter):
@@ -473,6 +512,29 @@ def count_occurrences(node, key=0, read_only=False):
     counter = defaultdict(int)
     count(node, counter)
     return counter
+
+
+def check_type(stmt, decls):
+    """Check the types of the ``stmt``'s LHS and RHS. If they match as expected,
+    return the type itself. Otherwise, an error is generated, suggesting an issue
+    in either the AST itself (i.e., a bug inherent the AST) or, possibly, in the
+    optimization process.
+
+    :param stmt: the AST node statement to be checked
+    :param decls: a dictionary from symbol identifiers (i.e., strings representing
+                  the name of a symbol) to Decl nodes
+    """
+    lhs_symbol = visit(stmt.children[0], stmt)['symbol_refs'].keys()[0]
+    rhs_symbols = visit(stmt.children[1], stmt)['symbol_refs'].keys()
+
+    lhs_decl = decls[lhs_symbol]
+    rhs_decls = [decls[s] for s in rhs_symbols if s in decls]
+
+    type = lambda d: d.typ.replace('*', '')
+    if any([type(lhs_decl) != type(rhs_decl) for rhs_decl in rhs_decls]):
+        raise RuntimeError("Non matching types in %s" % str(stmt))
+
+    return type(lhs_decl)
 
 
 #######################################################################
@@ -537,7 +599,7 @@ def itspace_to_for(itspaces, loop_parent):
     return (tuple(loops_info), inner_block)
 
 
-def itspace_from_for(loops, mode):
+def itspace_from_for(loops, mode=0):
     """Given an iterator of for ``loops``, return a tuple that rather contains
     the iteration space of each loop, i.e. given: ::
 

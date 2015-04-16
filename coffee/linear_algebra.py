@@ -118,15 +118,15 @@ class LinearAlgebra(object):
 
         # 1) Split potential MMM into different perfect loop nests
         to_transform, to_transpose = (OrderedDict(), [])
-        for middle_loop in self.outer_loop.children[0].children:
+        for middle_loop in self.outer_loop.body:
             if not isinstance(middle_loop, For):
                 continue
             found = False
-            inner_loop = middle_loop.children[0].children
+            inner_loop = middle_loop.body
             if not (len(inner_loop) == 1 and isinstance(inner_loop[0], For)):
                 continue
             # Found a perfect loop nest, now check body operation
-            body = inner_loop[0].children[0].children
+            body = inner_loop[0].body
             if not (len(body) == 1 and isinstance(body[0], Incr)):
                 continue
             # The body is actually a single statement, as expected
@@ -149,7 +149,7 @@ class LinearAlgebra(object):
                 rhs = (rhs[1], rhs[0])
             if found:
                 new_outer = dcopy(self.outer_loop)
-                new_outer.children[0].children = [middle_loop]
+                new_outer.body = [middle_loop]
                 self.header.children.insert(ofs, new_outer)
                 loop_itvars = (self.outer_loop.itvar, middle_loop.itvar,
                                inner_loop[0].itvar)

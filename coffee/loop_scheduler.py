@@ -58,17 +58,16 @@ class LoopScheduler(object):
 
 class SSALoopMerger(LoopScheduler):
 
-    """Analyze data dependencies and iteration spaces, then merge fusable
-    loops.
+    """Analyze data dependencies and iteration spaces, then merge fusible loops.
     Statements must be in "soft" SSA form: they can be declared and initialized
     at declaration time, then they can be assigned a value in only one place."""
 
     def __init__(self, root, expr_graph):
         """Initialize the SSALoopMerger.
 
-        :arg expr_graph: the ExpressionGraph tracking all data dependencies
-                         involving identifiers that appear in ``root``.
-        :arg root: the node where loop scheduling takes place."""
+        :param expr_graph: the ExpressionGraph tracking all data dependencies
+                           involving identifiers that appear in ``root``.
+        :param root: the node where loop scheduling takes place."""
         self.root = root
         self.expr_graph = expr_graph
         self.merged_loops = []
@@ -224,7 +223,7 @@ class SSALoopMerger(LoopScheduler):
               A[i] = B[i] + C[i]
               D[i] = A[i]
 
-        Note this last step is not done by compilers like intel's (version 14).
+        Note this last step is not done by compilers like Intel's (version 14).
         """
 
         def replace_expr(node, parent, parent_idx, itvar, hoisted_expr):
@@ -245,7 +244,7 @@ class SSALoopMerger(LoopScheduler):
 
         hoisted_expr = {}
         for loop in self.merged_loops:
-            block = loop.children[0].children
+            block = loop.body
             for stmt in block:
                 sym, expr = stmt.children
                 replace_expr(expr.children[0], expr, 0, loop.itvar, hoisted_expr)
@@ -261,7 +260,7 @@ class ExpressionFissioner(LoopScheduler):
     def __init__(self, cut):
         """Initialize the ExpressionFissioner.
 
-        :arg cut: number of operands requested to fission expressions."""
+        :param cut: number of operands requested to fission expressions."""
         self.cut = cut
 
     def _split_sum(self, node, parent, is_left, found, sum_count):
@@ -334,7 +333,8 @@ class ExpressionFissioner(LoopScheduler):
 
             # Append the left-split expression, reusing existing loop nest
             expr_parent.children[index] = stmt_left
-            split = (stmt_left, MetaExpr(expr_parent,
+            split = (stmt_left, MetaExpr(expr_info.type,
+                                         expr_parent,
                                          expr_info.loops_info,
                                          expr_info.unit_stride_itvars))
 
@@ -342,7 +342,7 @@ class ExpressionFissioner(LoopScheduler):
             if copy_loops:
                 # Create a new loop nest
                 new_unit_stride_outerloop = dcopy(unit_stride_outerloop)
-                new_unit_stride_innerloop = new_unit_stride_outerloop.children[0].children[0]
+                new_unit_stride_innerloop = new_unit_stride_outerloop.body[0]
                 new_unit_stride_innerloop_block = new_unit_stride_innerloop.children[0]
                 new_unit_stride_innerloop_block.children[0] = stmt_right
                 new_unit_stride_outerloop_info = (new_unit_stride_outerloop,
@@ -357,7 +357,8 @@ class ExpressionFissioner(LoopScheduler):
                 expr_parent.children.insert(index, stmt_right)
                 new_unit_stride_innerloop_block = expr_parent
                 new_loops_info = expr_info.loops_info
-            splittable = (stmt_right, MetaExpr(new_unit_stride_innerloop_block,
+            splittable = (stmt_right, MetaExpr(expr_info.type,
+                                               new_unit_stride_innerloop_block,
                                                new_loops_info,
                                                expr_info.unit_stride_itvars))
             return (split, splittable)
@@ -371,14 +372,14 @@ class ExpressionFissioner(LoopScheduler):
         Return a dictionary of all of the split chunks, in which each entry has
         the same format of ``stmt_info``.
 
-        :arg stmt_info:  the expression that needs to be split. This is given as
-                         a tuple of two elements: the former is the expression
-                         root node; the latter includes info about the expression,
-                         particularly iteration variables of the enclosing loops,
-                         the enclosing loops themselves, and the parent block.
-        :arg copy_loops: true if the split expressions should be placed in two
-                         separate, adjacent loop nests (iterating, of course,
-                         along the same iteration space); false, otherwise."""
+        :param stmt_info: the expression that needs to be split. This is given as
+                          a tuple of two elements: the former is the expression
+                          root node; the latter includes info about the expression,
+                          particularly iteration variables of the enclosing loops,
+                          the enclosing loops themselves, and the parent block.
+        :param copy_loops: true if the split expressions should be placed in two
+                           separate, adjacent loop nests (iterating, of course,
+                           along the same iteration space); false, otherwise."""
 
         split_stmts = {}
         splittable_stmt = stmt_info
@@ -413,12 +414,12 @@ class ZeroLoopScheduler(LoopScheduler):
     def __init__(self, exprs, expr_graph, decls):
         """Initialize the ZeroLoopScheduler.
 
-        :arg exprs: the expressions for which the zero-elimination is performed.
-        :arg expr_graph: the ExpressionGraph tracking all data dependencies involving
-                         identifiers that appear in ``root``.
-        :arg decls: lists of array declarations. A 2-tuple is expected: the first
-                    element is the list of kernel declarations; the second element
-                    is the list of hoisted temporaries declarations.
+        :param exprs: the expressions for which the zero-elimination is performed.
+        :param expr_graph: the ExpressionGraph tracking all data dependencies involving
+                           identifiers that appear in ``root``.
+        :param decls: lists of array declarations. A 2-tuple is expected: the first
+                      element is the list of kernel declarations; the second element
+                      is the list of hoisted temporaries declarations.
         """
         self.exprs = exprs
         self.expr_graph = expr_graph
@@ -427,7 +428,7 @@ class ZeroLoopScheduler(LoopScheduler):
         self.nz_in_syms = {}
         # Track blocks accessed for evaluating symbols in the various for loops
         # rooted in root
-        self.nz_in_fors = OrderedDict()
+        self.nonzero_info = OrderedDict()
 
     def _get_nz_bounds(self, node):
         if isinstance(node, Symbol):
@@ -555,7 +556,7 @@ class ZeroLoopScheduler(LoopScheduler):
         If A is modified by some statements rooted in ``node``, then
         ``self.nz_in_syms["A"]`` will be modified accordingly.
 
-        This method also updates ``self.nz_in_fors``, which maps loop nests to
+        This method also updates ``self.nonzero_info``, which maps loop nests to
         the enclosed symbols' non-zero blocks. For example, given the following
         code: ::
 
@@ -567,14 +568,13 @@ class ZeroLoopScheduler(LoopScheduler):
               B = ...
         }
 
-        Once traversed the AST, ``self.nz_in_fors`` will contain a (key, value)
+        Once traversed the AST, ``self.nonzero_info`` will contain a (key, value)
         such that:
         ((<for i>, <for j>), root) -> {A: (i, (nz_along_i)), (j, (nz_along_j))}
 
-        :arg node:      the node being currently inspected for tracking zero
-                        blocks
-        :arg parent:    the parent node of ``node``
-        :arg loop_nest: tuple of for loops enclosing ``node``
+        :param node: the node being currently inspected for tracking zero blocks
+        :param parent: the parent node of ``node``
+        :param loop_nest: tuple of for loops enclosing ``node``
         """
         if isinstance(node, (Assign, Incr, Decr)):
             symbol = node.children[0].symbol
@@ -609,9 +609,9 @@ class ZeroLoopScheduler(LoopScheduler):
                 key = loop_nest
                 itvar_nz_bounds = dict([(k, v) for k, v in itvar_nz_bounds.items()
                                         if k in [l.itvar for l in loop_nest]])
-                if key not in self.nz_in_fors:
-                    self.nz_in_fors[key] = []
-                self.nz_in_fors[key].append((node, itvar_nz_bounds))
+                if key not in self.nonzero_info:
+                    self.nonzero_info[key] = []
+                self.nonzero_info[key].append((node, itvar_nz_bounds))
         if isinstance(node, For):
             self._track_nz_blocks(node.children[0], node, loop_nest + (node,))
         if isinstance(node, (Root, Block)):
@@ -671,9 +671,9 @@ class ZeroLoopScheduler(LoopScheduler):
         """
 
         new_exprs = {}
-        new_nz_in_fors = {}
+        _nonzero_info = {}
         track_exprs = {}
-        for loop, stmt_itspaces in self.nz_in_fors.items():
+        for loop, stmt_itspaces in self.nonzero_info.items():
             fissioned_loops = defaultdict(list)
             # Fission the loops on an intermediate representation
             for stmt, stmt_itspace in stmt_itspaces:
@@ -705,13 +705,13 @@ class ZeroLoopScheduler(LoopScheduler):
                                                            'loops_info': loops_info})
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              **{'loop': loops_info[0][0], 'place': root})
-                new_nz_in_fors[loops_info[-1][0]] = stmt_ofs
+                _nonzero_info[loops_info[-1][0]] = stmt_ofs
                 # Append the created loops to the root
                 index = root.children.index(loop[0])
                 root.children.insert(index, loops_info[0][0])
             root.children.remove(loop[0])
 
-        self.nz_in_fors = new_nz_in_fors
+        self.nonzero_info = _nonzero_info
         return new_exprs
 
     def reschedule(self):

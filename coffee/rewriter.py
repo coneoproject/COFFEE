@@ -50,30 +50,27 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt_info, decls, kernel_info, hoisted, expr_graph):
+    def __init__(self, stmt_info, decls, header, hoisted, expr_graph):
         """Initialize the ExpressionRewriter.
 
-        :arg stmt_info:   an AST node statement containing an expression and meta
-                          information (MetaExpr) related to the expression itself.
-                          including the iteration space it depends on.
-        :arg decls:       list of AST declarations of the various symbols in ``syms``.
-        :arg kernel_info: contains information about the AST nodes sorrounding the
-                          expression.
-        :arg hoisted:     dictionary that tracks hoisted expressions
-        :arg expr_graph:  expression graph that tracks symbol dependencies
+        :param stmt_info: an AST node statement containing an expression and meta
+                         information (MetaExpr) related to the expression itself.
+                         including the iteration space it depends on.
+        :param decls: list of AST declarations of the various symbols in ``syms``.
+        :param header: the parent Block of the loop in which ``stmt`` was found.
+        :param hoisted: dictionary that tracks hoisted expressions
+        :param expr_graph: expression graph that tracks symbol dependencies
         """
         self.stmt, self.expr_info = stmt_info
         self.decls = decls
-        self.header, self.kernel_decls = kernel_info
+        self.header = header
         self.hoisted = hoisted
         self.expr_graph = expr_graph
 
         # Expression Manipulators used by the Expression Rewriter
-        typ = self.kernel_decls[self.stmt.children[0].symbol][0].typ
         self.expr_hoister = ExpressionHoister(self.stmt,
                                               self.expr_info,
                                               self.header,
-                                              typ,
                                               self.decls,
                                               self.hoisted,
                                               self.expr_graph)
@@ -84,15 +81,16 @@ class ExpressionRewriter(object):
     def licm(self, merge_and_simplify=False, compact_tmps=False):
         """Perform generalized loop-invariant code motion.
 
-        :arg merge_and_simpliy: True if should try to merge the loops in which
-                                invariant expressions are evaluated, because they
-                                might be characterized by the same iteration space.
-                                In this process, computation which is redundant
-                                because performed in at least two merged loops, is
-                                eliminated.
-        :arg compact_tmps: True if temporaries accessed only once should be inlined.
+        :param merge_and_simpliy: True if should try to merge the loops in which
+                                  invariant expressions are evaluated, because they
+                                  might be characterized by the same iteration space.
+                                  In this process, computation which is redundant
+                                  because performed in at least two merged loops, is
+                                  eliminated.
+        :param compact_tmps: True if temporaries accessed only once should be inlined.
         """
         self.expr_hoister.licm()
+        stmt_hoisted = self.expr_hoister._expr_handled
 
         # Try to merge the hoisted loops, because they might have the same
         # iteration space (call to merge()), and also possibly share some
@@ -106,14 +104,15 @@ class ExpressionRewriter(object):
 
         # Remove temporaries created yet accessed only once
         if compact_tmps:
-            stmt_occs = count_occurrences(self.stmt, key=1, read_only=True)
+            stmt_occs = {k: v for d in [count_occurrences(stmt, key=1, read_only=True)
+                         for stmt in stmt_hoisted] for k, v in d.items()}
             for l in self.hoisted.all_loops:
                 l_occs = count_occurrences(l, key=0, read_only=True)
                 to_replace, to_delete = {}, []
                 for sym_rank, sym_occs in l_occs.items():
-                    # If the symbol appears once is a potential candidate for
-                    # being removed. It is actually removed if it does't appear
-                    # in the expression from which was extracted. Symbols appearing
+                    # If the symbol appears once, then it is a potential candidate
+                    # for removal. It is actually removed if it does't appear in
+                    # the expression from which was extracted. Symbols appearing
                     # more than once are removed if they host an expression made
                     # of just one symbol
                     sym, rank = sym_rank
@@ -131,7 +130,7 @@ class ExpressionRewriter(object):
                     to_replace[str(Symbol(sym, rank))] = expr
                     to_delete.append(sym)
 
-                for stmt in l.children[0].children:
+                for stmt in l.body:
                     symbol, expr = stmt.children
                     sym = symbol.symbol
                     ast_replace(expr, to_replace, copy=True)
@@ -161,14 +160,18 @@ class ExpressionRewriter(object):
         # The heuristics here is that the expansion occurs along the iteration
         # variable which appears in more unique arrays. This will allow factorization
         # to be more effective.
-        itvars_occs = dict.fromkeys(self.expr_info.unit_stride_itvars, 0)
+        itvar_occs = dict.fromkeys(self.expr_info.unit_stride_itvars, 0)
         for _, itvar in count_occurrences(self.stmt.children[1]).keys():
-            if itvar and itvar[0] in itvars_occs:
-                itvars_occs[itvar[0]] += 1
+            if itvar and itvar[0] in itvar_occs:
+                itvar_occs[itvar[0]] += 1
+        itvar_exp = max(itvar_occs.iteritems(), key=operator.itemgetter(1))[0]
 
-        itvar_exp = max(itvars_occs.iteritems(), key=operator.itemgetter(1))[0]
-        ee = ExpressionExpander(self.hoisted, self.expr_graph)
-        ee.expand(self.stmt.children[1], self.stmt, itvars_occs, itvar_exp)
+        # Perform expansion
+        ee = ExpressionExpander(self.stmt, self.expr_info, self.hoisted,
+                                self.expr_graph, itvar_occs, itvar_exp)
+        ee.expand()
+
+        # Update known declarations
         self.decls.update(ee.expanded_decls)
         self._expanded = True
 
@@ -247,23 +250,26 @@ class ExpressionHoister(object):
     autovectorization. Note that this applies to constant sub-expressions
     as well, in which case hoisting after the outermost loop takes place."""
 
-    # Global counting the total number of expressions for which licm was licm
-    # was performed
-    GLOBAL_LICM_COUNTER = 0
+    # Track all expressions to which LICM has been applied
+    _expr_handled = []
+    # Temporary variables template
+    _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
 
-    def __init__(self, stmt, expr_info, header, typ, decls, hoisted, expr_graph):
+    def __init__(self, stmt, expr_info, header, decls, hoisted, expr_graph):
         """Initialize the ExpressionHoister."""
         self.stmt = stmt
         self.expr_info = expr_info
         self.header = header
-        self.typ = typ
         self.decls = decls
         self.hoisted = hoisted
         self.expr_graph = expr_graph
 
-        # Count how many iterations of hoisting were performed. This is used to
-        # create sensible variable names
-        self.glb_counter = ExpressionHoister.GLOBAL_LICM_COUNTER
+        # Set counters to create meaningful and unique (temporary) variable names
+        try:
+            self.expr_id = self._expr_handled.index(stmt)
+        except ValueError:
+            self._expr_handled.append(stmt)
+            self.expr_id = self._expr_handled.index(stmt)
         self.counter = 0
 
         # Constants used by the extract method to charaterize sub-expressions
@@ -289,9 +295,10 @@ class ExpressionHoister(object):
         if isinstance(node, Symbol):
             return (self.symbols[node], self.INV, 1)
         if isinstance(node, FunCall):
-            arg_deps = flatten([self._extract_exprs(n, expr_dep, length)[0]
-                                for n in node.children])
-            return (tuple(set(arg_deps)), self.INV, length)
+            arg_deps = [self._extract_exprs(n, expr_dep, length) for n in node.children]
+            dep = tuple(set(flatten([dep for dep, _, _ in arg_deps])))
+            info = self.INV if all([i == self.INV for _, i, _ in arg_deps]) else self.HOI
+            return (dep, info, length)
         if isinstance(node, Par):
             return (self._extract_exprs(node.children[0], expr_dep, length))
 
@@ -372,13 +379,16 @@ class ExpressionHoister(object):
     def licm(self):
         """Perform loop-invariant code motion for the expression passed in at
         object construction time."""
+        expr_type = self.expr_info.type
 
         expr_loops = self.expr_info.loops
         dict_expr_loops = loops_as_dict(expr_loops)
         real_deps = dict_expr_loops.keys()
 
-        # (Re)set global parameters of the extract recursive function
-        self.symbols = visit(self.header, None)['symbols']
+        # (Re)set global parameters for the /extract/ function
+        self.symbols = visit(self.header, None)['symbols_dep']
+        self.symbols = {s: [l.itvar for l in dep] for s, dep in self.symbols.items()}
+
         self.real_deps = real_deps
         self.extracted = False
 
@@ -427,9 +437,13 @@ class ExpressionHoister(object):
                 # 2) Create the new invariant sub-expressions and temporaries
                 sym_rank, for_dep = (tuple([wl.size]), tuple([wl.itvar])) \
                     if wl else ((), ())
-                syms = [Symbol("LI_%s_%d_%s" % ("".join(dep).upper() if dep else "C",
-                        self.counter, i), sym_rank) for i in range(len(expr))]
-                var_decl = [Decl(self.typ, _s) for _s in syms]
+                syms = [Symbol(self._hoisted_sym % {
+                    'loop_dep': '_'.join(dep).upper() if dep else 'CONST',
+                    'expr_id': self.expr_id,
+                    'round': self.counter,
+                    'i': i
+                }, sym_rank) for i in range(len(expr))]
+                var_decl = [Decl(expr_type, _s) for _s in syms]
                 for_sym = [Symbol(_s.sym.symbol, for_dep) for _s in var_decl]
 
                 # 3) Create the new for loop containing invariant terms
@@ -474,17 +488,13 @@ class ExpressionHoister(object):
                 inv_for = inv_code = new_for
             else:
                 inv_code = [None]
-            # Append the new node at the right level in the loop nest
+            # Insert the new nodes at the right level in the loop nest
             ofs = place.children.index(next_loop)
-            new_block = var_decl + inv_for + [FlatBlock("\n")] + place.children[ofs:]
-            place.children = place.children[:ofs] + new_block
-            # Update information about hoisted symbols
+            place.children[ofs:ofs] = var_decl + inv_for + [FlatBlock("\n")]
+            # Update hoisted symbols metadata
             for i in var_decl:
                 self.hoisted.update_stmt(i.sym.symbol, **{'loop': inv_code[0],
                                                           'place': place})
-
-        # Increase the global counter for subsequent calls to licm
-        ExpressionHoister.GLOBAL_LICM_COUNTER += 1
 
 
 class ExpressionExpander(object):
@@ -501,19 +511,35 @@ class ExpressionExpander(object):
     CONST = -1
     ITVAR = -2
 
-    def __init__(self, hoisted, expr_graph):
+    # Track all expanded expressions
+    _expr_handled = []
+    # Temporary variables template
+    _expanded_sym = "CONST_EXP_%(expr_id)d_%(i)d"
+
+    def __init__(self, stmt, expr_info, hoisted, expr_graph, itvar_occs, itvar_exp):
+        self.stmt = stmt
+        self.expr_info = expr_info
         self.hoisted = hoisted
         self.expr_graph = expr_graph
+        self.itvar_occs = itvar_occs
+        self.itvar_exp = itvar_exp
+
+        # Set counters to create meaningful and unique (temporary) variable names
+        try:
+            self.expr_id = self._expr_handled.index(stmt)
+        except ValueError:
+            self._expr_handled.append(stmt)
+            self.expr_id = self._expr_handled.index(stmt)
+
         self.expanded_decls = {}
         self.found_consts = {}
         self.expanded_syms = []
 
-    def _do_expand(self, sym, const, op):
+    def _make_expansion(self, sym, const, op):
         """Perform the actual expansion. If there are no dependencies, then
         the already hoisted expression is expanded. Otherwise, if the symbol to
         be expanded occurs multiple times in the expression, or it depends on
         other hoisted symbols that will also be expanded, create a new symbol."""
-
         old_expr = self.hoisted[sym.symbol].expr
         var_decl = self.hoisted[sym.symbol].decl
         loop = self.hoisted[sym.symbol].loop
@@ -526,8 +552,9 @@ class ExpressionExpander(object):
         if const_str in self.found_consts:
             const = dcopy(self.found_consts[const_str])
         elif not isinstance(const, Symbol):
-            const_sym = Symbol("const%d" % len(self.found_consts), ())
-            new_const_decl = Decl("double", dcopy(const_sym), const)
+            const_sym = Symbol(self._expanded_sym % {'expr_id': self.expr_id,
+                                                     'i': len(self.found_consts)})
+            new_const_decl = Decl(self.expr_info.type, dcopy(const_sym), const)
             # Keep track of the expansion
             self.expanded_decls[new_const_decl.sym.symbol] = (new_const_decl,
                                                               plan.LOCAL_VAR)
@@ -552,7 +579,7 @@ class ExpressionExpander(object):
         new_var_decl = dcopy(var_decl)
         new_var_decl.sym.symbol = sym.symbol
         # Append new expression and declaration
-        loop.children[0].children.append(new_node)
+        loop.body.append(new_node)
         place.children.insert(place.children.index(var_decl), new_var_decl)
         self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, plan.LOCAL_VAR)
         self.expanded_syms.append(new_var_decl.sym)
@@ -561,28 +588,25 @@ class ExpressionExpander(object):
         self.expr_graph.add_dependency(sym, new_expr, 0)
         return sym
 
-    def expand(self, node, parent, itvars_occs, itvar_exp):
-        """Perform the expansion of the expression rooted in ``node``. Terms are
-        expanded along the iteration variable ``itvar_exp``."""
-
+    def _expand(self, node, parent):
         if isinstance(node, Symbol):
             if not node.rank:
                 return ([node], self.CONST)
-            elif node.rank[-1] not in itvars_occs.keys():
+            elif node.rank[-1] not in self.itvar_occs.keys():
                 return ([node], self.CONST)
             else:
                 return ([node], self.ITVAR)
         elif isinstance(node, Par):
-            return self.expand(node.children[0], node, itvars_occs, itvar_exp)
+            return self._expand(node.children[0], node)
         elif isinstance(node, FunCall):
             # Functions are considered potentially expandable
             return ([node], self.CONST)
         elif isinstance(node, (Prod, Div)):
-            l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
-            r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
+            l_node, l_type = self._expand(node.children[0], node)
+            r_node, r_type = self._expand(node.children[1], node)
             if l_type == self.ITVAR and r_type == self.ITVAR:
                 # Found an expandable product
-                to_exp = l_node if l_node[0].rank[-1] == itvar_exp else r_node
+                to_exp = l_node if l_node[0].rank[-1] == self.itvar_exp else r_node
                 return (to_exp, self.ITVAR)
             elif l_type == self.CONST and r_type == self.CONST:
                 # Product of constants; they are both used for expansion (if any)
@@ -597,7 +621,7 @@ class ExpressionExpander(object):
                     # Perform the expansion
                     if sym.symbol not in self.hoisted:
                         raise RuntimeError("Expansion error: no symbol: %s" % sym.symbol)
-                    replacing = self._do_expand(sym, const, node.__class__)
+                    replacing = self._make_expansion(sym, const, node.__class__)
                     if replacing:
                         to_replace[str(sym)] = replacing
                 ast_replace(node, to_replace, copy=True)
@@ -613,8 +637,8 @@ class ExpressionExpander(object):
                                       else to_replace[str(e)] for e in expandable))
                 return (expandable, self.ITVAR)
         elif isinstance(node, (Sum, Sub)):
-            l_node, l_type = self.expand(node.children[0], node, itvars_occs, itvar_exp)
-            r_node, r_type = self.expand(node.children[1], node, itvars_occs, itvar_exp)
+            l_node, l_type = self._expand(node.children[0], node)
+            r_node, r_type = self._expand(node.children[1], node)
             if l_type == self.ITVAR and r_type == self.ITVAR:
                 return (l_node + r_node, self.ITVAR)
             elif l_type == self.CONST and r_type == self.CONST:
@@ -623,3 +647,8 @@ class ExpressionExpander(object):
                 return (None, self.CONST)
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
+
+    def expand(self):
+        """Perform the expansion of the expression rooted in ``self.stmt``.
+        Terms are expanded along the iteration variable ``self.itvar_exp``."""
+        self._expand(self.stmt.children[1], self.stmt)
