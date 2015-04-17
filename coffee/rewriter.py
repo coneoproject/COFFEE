@@ -735,7 +735,10 @@ class ExpressionFactorizer(object):
         return children
 
     def _factorize(self, node, parent, index):
-        if isinstance(node, Par):
+        if isinstance(node, Symbol):
+            return [self.Term.process([node], self.should_factorize)]
+
+        elif isinstance(node, Par):
             return self._factorize(node.children[0], node, 0)
 
         elif isinstance(node, FunCall):
