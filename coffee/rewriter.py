@@ -104,8 +104,10 @@ class ExpressionRewriter(object):
 
         # Remove temporaries created yet accessed only once
         if compact_tmps:
-            stmt_occs = {k: v for d in [count_occurrences(stmt, key=1, read_only=True)
-                         for stmt in stmt_hoisted] for k, v in d.items()}
+            stmt_occs = dict((k, v)
+                             for d in [count_occurrences(stmt, key=1, read_only=True)
+                                       for stmt in stmt_hoisted]
+                             for k, v in d.items())
             for l in self.hoisted.all_loops:
                 l_occs = count_occurrences(l, key=0, read_only=True)
                 to_replace, to_delete = {}, []
@@ -387,7 +389,7 @@ class ExpressionHoister(object):
 
         # (Re)set global parameters for the /extract/ function
         self.symbols = visit(self.header, None)['symbols_dep']
-        self.symbols = {s: [l.itvar for l in dep] for s, dep in self.symbols.items()}
+        self.symbols = dict((s, [l.itvar for l in dep]) for s, dep in self.symbols.items())
 
         self.real_deps = real_deps
         self.extracted = False
