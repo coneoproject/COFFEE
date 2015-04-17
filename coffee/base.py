@@ -117,7 +117,7 @@ class Root(Node):
 
     """Root of the AST."""
 
-    def gencode(self):
+    def gencode(self, scope=True):
         header = '// This code is generated visiting a COFFEE AST\n\n'
         return header + Node.gencode(self)
 
