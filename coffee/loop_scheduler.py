@@ -516,7 +516,7 @@ class ZeroLoopScheduler(LoopScheduler):
 
         If there are no zero-columns, return {}."""
         if isinstance(node, Symbol):
-            if node.offset:
+            if any([o != (1, 0) for o in node.offset]):
                 raise RuntimeError("Zeros error: offsets not supported: %s" % str(node))
             nz_bounds = self.nonzero_syms.get(node.symbol)
             if nz_bounds:
