@@ -553,14 +553,11 @@ class ExpressionExpander(object):
         op = expansion.__class__
 
         # Is the grouped symbol hoistable, or does it break some data dependency?
-        lifted_loops = []
         for l in reversed(self.expr_info.loops):
-            lifted_loops.append(l)
+            if any([l.dim in g.rank for g in grp_symbols]):
+                return {}
             if l in hoisted_place.children:
                 break
-            for g in grp_symbols:
-                if any([l.dim in g.rank for l in lifted_loops]):
-                    return {}
 
         # The expression used for expansion is assigned to a temporary value in order
         # to minimize code size
