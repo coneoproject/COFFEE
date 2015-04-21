@@ -42,7 +42,7 @@ except ImportError:
 import resource
 import operator
 from warnings import warn as warning
-from copy import deepcopy as dcopy
+from copy import deepcopy as dcopy, copy as wcopy
 from collections import defaultdict
 
 from base import *
@@ -439,7 +439,7 @@ def visit(node, parent=None, search=None, stop_on_search=False):
             access_mode = (kwargs.get('mode', READ), parent.__class__)
             dep = [l for l, _ in cur_nest if l.dim in node.rank]
             if access_mode[0] == WRITE:
-                info['symbols_written'][node.symbol] = cur_nest
+                info['symbols_written'][node.symbol] = wcopy(cur_nest)
             if node.symbol in info['symbols_written']:
                 dep = tuple(l for l, _ in info['symbols_written'][node.symbol])
             info['symbols_dep'][node] = dep
