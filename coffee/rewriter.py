@@ -607,14 +607,16 @@ class ExpressionExpander(object):
         return {str(exp): hoisted_exp}
 
     def _expand(self, node, parent):
-        op = node.__class__
         if isinstance(node, Symbol):
             return ([node], self.EXP) if self.should_expand(node) else ([node], self.GRP)
+
         elif isinstance(node, Par):
             return self._expand(node.child, node)
+
         elif isinstance(node, FunCall):
             # Functions are considered potentially expandable
             return ([node], self.GRP)
+
         elif isinstance(node, (Prod, Div)):
             l_exps, l_type = self._expand(node.left, node)
             r_exps, r_type = self._expand(node.right, node)
@@ -629,7 +631,7 @@ class ExpressionExpander(object):
             to_replace = {}
             for exp, grp in itertools.product(expandable, groupable):
                 # In-place expansion
-                expansion = op(exp, dcopy(grp))
+                expansion = node.__class__(exp, dcopy(grp))
                 if exp == expanding_child:
                     # Implies /expandable/ contains just one symbol, /e/
                     expanding_child = expansion
@@ -640,15 +642,15 @@ class ExpressionExpander(object):
             # Update the parent node, since an expression has just been expanded
             parent.children[parent.children.index(node)] = expanding_child
             return (to_replace.values() or [expanding_child], self.EXP)
+
         elif isinstance(node, (Sum, Sub)):
             l_exps, l_type = self._expand(node.left, node)
             r_exps, r_type = self._expand(node.right, node)
             if l_type == self.EXP and r_type == self.EXP:
                 return (l_exps + r_exps, self.EXP)
-            elif l_type == self.GRP and r_type == self.GRP:
-                return ([node], self.GRP)
             else:
-                return ([], self.GRP)
+                return ([node], self.GRP)
+
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
 
