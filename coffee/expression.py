@@ -96,6 +96,10 @@ class MetaExpr(object):
         return tuple(set(self.loops_info) - set(self.domain_loops_info))
 
     @property
+    def out_loop(self):
+        return self.loops[0]
+
+    @property
     def perfect_loops(self):
         """Return the loops in a perfect loop nest for the expression."""
         return [l for l in self.loops if is_perfect_loop(l)]
