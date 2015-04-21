@@ -343,6 +343,18 @@ class Deref(UnaryExpr):
         return "*%s" % wrap(self.children[0].gencode())
 
 
+class Cast(UnaryExpr):
+
+    """Cast a variable to a different type."""
+
+    def __init__(self, cast_type, expr):
+        super(Cast, self).__init__(expr)
+        self.cast_type = as_symbol(cast_type)
+
+    def gencode(self, scope=True):
+        return "(%s) %s" % (str(self.cast_type), wrap(self.children[0].gencode()))
+
+
 class Addr(UnaryExpr):
 
     """Get the address."""
@@ -823,6 +835,29 @@ class For(Statement):
         elif isinstance(self.init, Assign):
             return self.init.children[0]
 
+    def set_itvar(self, new_var):
+        # Change the name of the index init
+        if isinstance(self.init, Decl):
+            self.init.sym.symbol = new_var
+        elif isinstance(self.init, Assign):
+            self.init.children[0].symbol = new_var
+        else:
+            raise NotImplemented("Don't know how to change index name in this init node.")
+        # Change the name of the index in the comparison
+        if isinstance(self.cond.children[0], Symbol):
+            self.cond.children[0].symbol = new_var
+        elif isinstance(self.cond.children[0], str):
+            self.cond.children[0] = new_var
+        else:
+            raise NotImplemented("Don't know how to change index name in this condition node.")
+        # Change the name of the index in the increment
+        if isinstance(self.incr.children[0], Symbol):
+            self.incr.children[0].symbol = new_var
+        elif isinstance(self.incr.children[0], str):
+            self.incr.children[0] = new_var
+        else:
+            raise NotImplemented("Don't know how to change index name in this increment node.")
+
     @property
     def start(self):
         return self.init.rvalue.symbol
@@ -893,14 +928,22 @@ class Switch(Statement):
 
 
 class If(Statement):
-    """If-else construct.
+    """If-then-else construct.
 
     :param if_expr: The expression driving the jump
-    :param branches: A 2-tuple of AST nodes, respectively the 'if' and the 'else'
+    :param branches: A 2-tuple of AST nodes, respectively the 'then' and the 'else'
                      branches
     """
 
     def __init__(self, if_expr, branches):
+        # TODO: Re-implement this using two arguments a then branch and an optional else branch
+        self.then_body = branches[0]
+        if not isinstance(branches[0], Node):
+            self.then_body = Block(branches[0], open_scope=True)
+        if len(branches) == 2:
+            self.else_body = branches[1]
+            if not isinstance(branches[1], Node):
+                self.else_body = Block(branches[1], open_scope=True)
         super(If, self).__init__(branches)
         self.if_expr = if_expr
 
@@ -913,8 +956,8 @@ class If(Statement):
     def gencode(self, not_scope=False):
         else_branch = ""
         if len(self.children) == 2:
-            else_branch = "else %s" % str(self.children[1])
-        return "if (%s) %s %s" % (self.if_expr, str(self.children[0]), else_branch)
+            else_branch = "else %s" % str(self.else_body)
+        return "if (%s) %s %s" % (str(self.if_expr), str(self.then_body), else_branch)
 
 
 class FunDecl(Statement):
