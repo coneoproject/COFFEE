@@ -676,11 +676,12 @@ class ExpressionFactorizer(object):
 
     class Term():
 
-        def __init__(self, operands, factors=None):
-            # Example: in the Term /a*(b+c)/, /a/ is an 'operand', while /b/ and
-            # /c/ are 'factors'
+        def __init__(self, operands, factors=None, op=None):
+            # Example: in the Term /a*(b+c)/, /a/ is an 'operand', /b/ and /c/
+            # are 'factors', and /+/ is the 'op'
             self.operands = operands
             self.factors = factors or set()
+            self.op = op
 
         @property
         def operands_ast(self):
@@ -688,7 +689,7 @@ class ExpressionFactorizer(object):
 
         @property
         def factors_ast(self):
-            return ast_make_expr(Sum, tuple(self.factors))
+            return ast_make_expr(self.op, tuple(self.factors))
 
         @property
         def generate_ast(self):
@@ -703,10 +704,10 @@ class ExpressionFactorizer(object):
                 return Par(Prod(self.operands_ast, self.factors_ast))
 
         @staticmethod
-        def process(symbols, should_factorize):
+        def process(symbols, should_factorize, op=None):
             operands = set(s for s in symbols if should_factorize(s))
             factors = set(s for s in symbols if not should_factorize(s))
-            return ExpressionFactorizer.Term(operands, factors)
+            return ExpressionFactorizer.Term(operands, factors, op)
 
     def __init__(self, stmt, expr_info):
         self.stmt = stmt
@@ -736,6 +737,9 @@ class ExpressionFactorizer(object):
 
         children = []
         __analyze_node(self, node, node.__class__, children)
+        # Nodes are sorted because factorization uses string representation as
+        # key to identify common operands
+        children = zip(*sorted([(str(i), i) for i in children]))[1]
         return children
 
     def _factorize(self, node, parent, index):
@@ -752,7 +756,7 @@ class ExpressionFactorizer(object):
             children = self._analyze_node(node)
             symbols = [n for n in children if isinstance(n, Symbol)]
             other_nodes = [n for n in children if n not in symbols]
-            return [self.Term.process(symbols, self.should_factorize)] + \
+            return [self.Term.process(symbols, self.should_factorize, node.__class__)] + \
                 [self._factorize(n, node, i) for i, n in enumerate(other_nodes)]
 
         # The fundamental case is when /node/ is a Sum (or Sub, equivalently).
@@ -766,11 +770,13 @@ class ExpressionFactorizer(object):
             # Example: replace (a*b)+(a*b) with 2*(a*b)
             self._simplify_sum(terms)
             # Finally try to factorize some of the operands composing the operation
-            factorized = defaultdict(self.Term)
+            factorized = {}
             for t in terms:
                 operand = ast_make_expr(Prod, tuple(t.operands))
-                _t = factorized.setdefault(str(operand), self.Term(set([operand]), t.factors))
-                _t.factors |= t.factors
+                factor = set([t.factors_ast]) if t.factors_ast else set()
+                factorized_term = self.Term(set([operand]), factor, node.__class__)
+                _t = factorized.setdefault(str(operand), factorized_term)
+                _t.factors |= factor
             node = ast_make_expr(Sum, [t.generate_ast for t in factorized.values()])
             parent.children[index] = node
             return [self.Term([node])]
