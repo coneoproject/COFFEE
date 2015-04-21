@@ -534,12 +534,9 @@ class ExpressionExpander(object):
         the hoisted expression is expanded and no new symbols are introduced.
         Otherwise, (e.g., the symbol to be expanded appears multiple times, or
         it depends on other hoisted symbols), create a new symbol."""
-        exp_symbols = visit(exp)['symbols_dep'].keys()
-        grp_symbols = visit(grp)['symbols_dep'].keys()
-
         # First, check if any of the symbols in /exp/ have been hoisted
         try:
-            exp = [s for s in exp_symbols
+            exp = [s for s in visit(exp)['symbols_dep'].keys()
                    if s.symbol in self.hoisted and self.should_expand(s)][0]
         except:
             # No hoisted symbols in the expanded expression, so return
@@ -553,9 +550,13 @@ class ExpressionExpander(object):
         op = expansion.__class__
 
         # Is the grouped symbol hoistable, or does it break some data dependency?
+        grp_symbols = visit(grp)['symbol_refs'].keys()
         for l in reversed(self.expr_info.loops):
-            if any([l.dim in g.rank for g in grp_symbols]):
-                return {}
+            for g in grp_symbols:
+                g_refs = self.info['symbol_refs'][g]
+                g_deps = set(flatten([self.info['symbols_dep'][r[0]] for r in g_refs]))
+                if any([l.dim in g.dim for g in g_deps]):
+                    return {}
             if l in hoisted_place.children:
                 break
 
@@ -651,12 +652,15 @@ class ExpressionExpander(object):
         """Perform the expansion of the expression rooted in ``self.stmt``.
         Symbols for which the lambda function ``should_expand`` returns
         True are expansion candidates."""
-        # First, expand according to the /should_expand/ heuristic
+        # Preload and set data structures for expansion
         self.expansions = OrderedDict()
         self.should_expand = should_expand
+        self.info = visit(self.expr_info.out_loop)
+
+        # Expand according to the /should_expand/ heuristic
         self._expand(self.stmt.children[1], self.stmt)
 
-        # Then, see if some of the expanded terms are groupable at the level
+        # Now see if some of the expanded terms are groupable at the level
         # of hoisted expressions
         to_replace, to_remove = {}, set()
         for expansion, (exp, grp) in self.expansions.items():
