@@ -739,39 +739,38 @@ class ExpressionFactorizer(object):
                 if n.__class__ == root or isinstance(n, Par):
                     __analyze_node(self, n, root, children)
                 else:
-                    children.append(n)
+                    children.append((n, node))
 
         children = []
         __analyze_node(self, node, node.__class__, children)
         # Nodes are sorted because factorization uses string representation as
         # key to identify common operands
-        children = zip(*sorted([(str(i), i) for i in children]))[1]
+        children = zip(*sorted([(str(i[0]), i) for i in children]))[1]
         return children
 
-    def _factorize(self, node, parent, index):
+    def _factorize(self, node, parent):
         if isinstance(node, Symbol):
             return [self.Term.process([node], self.should_factorize)]
 
         elif isinstance(node, Par):
-            return self._factorize(node.child, node, 0)
+            return self._factorize(node.child, node)
 
         elif isinstance(node, FunCall):
             return [self.Term(set([node]))]
 
         elif isinstance(node, (Prod, Div)):
             children = self._analyze_node(node)
-            symbols = [n for n in children if isinstance(n, Symbol)]
-            other_nodes = [n for n in children if n not in symbols]
+            symbols = [n for n, _ in children if isinstance(n, Symbol)]
+            other_nodes = [(n, p) for n, p in children if n not in symbols]
             return [self.Term.process(symbols, self.should_factorize, node.__class__)] + \
-                [self._factorize(n, node, i) for i, n in enumerate(other_nodes)]
+                [self._factorize(n, p) for n, p in other_nodes]
 
         # The fundamental case is when /node/ is a Sum (or Sub, equivalently).
         # Here, we try to factorize the terms composing the operation
         elif isinstance(node, (Sum, Sub)):
             children = self._analyze_node(node)
             # First try to factorize within /node/'s children
-            terms = [self._factorize(n, node, i) for i, n in enumerate(children)]
-            terms = list(flatten(terms))
+            terms = list(flatten([self._factorize(n, p) for n, p in children]))
             # Then check if it's possible to aggregate operations
             # Example: replace (a*b)+(a*b) with 2*(a*b)
             self._simplify_sum(terms)
@@ -783,8 +782,8 @@ class ExpressionFactorizer(object):
                 factorized_term = self.Term(set([operand]), factor, node.__class__)
                 _t = factorized.setdefault(str(operand), factorized_term)
                 _t.factors |= factor
-            node = ast_make_expr(Sum, [t.generate_ast for t in factorized.values()])
-            parent.children[index] = node
+            factorized = ast_make_expr(Sum, [t.generate_ast for t in factorized.values()])
+            parent.children[parent.children.index(node)] = factorized
             return [self.Term([node])]
 
         else:
@@ -792,4 +791,4 @@ class ExpressionFactorizer(object):
 
     def factorize(self, should_factorize):
         self.should_factorize = should_factorize
-        self._factorize(self.stmt.children[1], self.stmt, 1)
+        self._factorize(self.stmt.children[1], self.stmt)
