@@ -150,8 +150,11 @@ class BinExpr(Expr):
         by the classic ``deepcopy`` method, is ignored."""
         return self.__class__(dcopy(self.children[0]), dcopy(self.children[1]))
 
-    def gencode(self, not_scope=True):
-        return (" "+self.op+" ").join([n.gencode(not_scope) for n in self.children])
+    def gencode(self, not_scope=True, parent=None):
+        subtree = (" "+self.op+" ").join([n.gencode(not_scope, self) for n in self.children])
+        if parent and not isinstance(parent, (Par, self.__class__)):
+            return wrap(subtree)
+        return subtree
 
     @property
     def left(self):
@@ -184,8 +187,8 @@ class UnaryExpr(Expr):
 class Neg(UnaryExpr):
 
     "Unary negation of an expression"
-    def gencode(self, not_scope=False):
-        return "-%s" % wrap(self.children[0].gencode()) + semicolon(not_scope)
+    def gencode(self, not_scope=False, parent=None):
+        return "-%s" % wrap(self.child.gencode(not_scope, self)) + semicolon(not_scope)
 
 
 class ArrayInit(Expr):
@@ -201,7 +204,7 @@ class ArrayInit(Expr):
     def __init__(self, values):
         self.values = values
 
-    def gencode(self):
+    def gencode(self, not_scope=True, parent=None):
         return self.values
 
 
@@ -221,7 +224,7 @@ class ColSparseArrayInit(ArrayInit):
         self.nonzero_bounds = nonzero_bounds
         self.numpy_values = numpy_values
 
-    def gencode(self):
+    def gencode(self, not_scope=True, parent=None):
         return self.values
 
 
@@ -229,8 +232,8 @@ class Par(UnaryExpr):
 
     """Parenthesis object."""
 
-    def gencode(self, not_scope=True):
-        return wrap(self.children[0].gencode(not_scope))
+    def gencode(self, not_scope=True, parent=None):
+        return wrap(self.children[0].gencode(not_scope, self))
 
 
 class Sum(BinExpr):
@@ -320,8 +323,8 @@ class Not(UnaryExpr):
     def __init__(self, expr):
         super(Not, self).__init__(expr)
 
-    def gencode(self, not_scope=True):
-        return "!%s" % self.children[0].gencode(not_scope)
+    def gencode(self, not_scope=True, parent=None):
+        return "!%s" % self.child.gencode(not_scope, self)
 
 
 class FunCall(Expr, Perfect):
@@ -332,7 +335,7 @@ class FunCall(Expr, Perfect):
         super(Expr, self).__init__(args)
         self.funcall = as_symbol(function_name)
 
-    def gencode(self, not_scope=False):
+    def gencode(self, not_scope=False, parent=None):
         return self.funcall.gencode() + \
             wrap(", ".join([n.gencode(not_scope) for n in self.children])) + \
             semicolon(not_scope)
@@ -344,8 +347,8 @@ class Ternary(Expr):
     def __init__(self, expr, true_stmt, false_stmt):
         super(Ternary, self).__init__([expr, true_stmt, false_stmt])
 
-    def gencode(self, not_scope=True):
-        return ternary(*[c.gencode(True) for c in self.children]) + \
+    def gencode(self, not_scope=True, parent=None):
+        return ternary(*[c.gencode(True, self) for c in self.children]) + \
             semicolon(not_scope)
 
 
@@ -367,7 +370,7 @@ class Symbol(Expr):
         self.rank = rank
         self.offset = offset
 
-    def gencode(self, not_scope=True):
+    def gencode(self, not_scope=True, parent=None):
         points = ""
         if not self.offset:
             for p in self.rank:
@@ -401,7 +404,7 @@ class AVXSub(Sub):
 
     def gencode(self, not_scope=True):
         op1, op2 = self.children
-        return "_mm256_add_pd (%s, %s)" % (op1.gencode(), op2.gencode())
+        return "_mm256_sub_pd (%s, %s)" % (op1.gencode(), op2.gencode())
 
 
 class AVXProd(Prod):
