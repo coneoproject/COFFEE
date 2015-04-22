@@ -252,6 +252,11 @@ class ExpressionRewriter(object):
         # Perform the factorization
         self.expr_factorizer.factorize(should_factorize)
 
+    @staticmethod
+    def reset():
+        ExpressionHoister._expr_handled[:] = []
+        ExpressionExpander._expr_handled[:] = []
+
 
 class ExpressionHoister(object):
 

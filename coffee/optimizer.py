@@ -82,6 +82,7 @@ class LoopOptimizer(object):
                                     code motion opportunities); and a final pass of \
                                     generalized loop-invariant code motion.
         """
+        ExpressionRewriter.reset()
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
