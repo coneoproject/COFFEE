@@ -153,6 +153,14 @@ class BinExpr(Expr):
     def gencode(self, not_scope=True):
         return (" "+self.op+" ").join([n.gencode(not_scope) for n in self.children])
 
+    @property
+    def left(self):
+        return self.children[0]
+
+    @property
+    def right(self):
+        return self.children[1]
+
 
 class UnaryExpr(Expr):
 
@@ -167,6 +175,10 @@ class UnaryExpr(Expr):
         dictionary tracking the objects copied up to ``self``, which is used
         by the classic ``deepcopy`` method, is ignored."""
         return self.__class__(dcopy(self.children[0]))
+
+    @property
+    def child(self):
+        return self.children[0]
 
 
 class Neg(UnaryExpr):

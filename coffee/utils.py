@@ -429,7 +429,7 @@ def visit(node, parent=None, search=None, stop_on_search=False):
                 info['fors'].append(info['cur_nest'])
             info['cur_nest'] = info['cur_nest'][:-1]
         elif isinstance(node, Par):
-            inspect(node.children[0], node)
+            inspect(node.child, node)
         elif isinstance(node, Decl):
             node.scope = kwargs.get('scope', LOCAL)
             info['decls'][node.sym.symbol] = node

@@ -104,11 +104,10 @@ class LinearAlgebra(object):
             - Sum -> ()
             - Prod(Sum, s1) -> ()"""
             if isinstance(node, Par):
-                return check_prod(node.children[0])
+                return check_prod(node.child)
             elif isinstance(node, Prod):
-                left, right = (node.children[0], node.children[1])
-                if isinstance(left, Expr) and isinstance(right, Expr):
-                    return (left, right)
+                if isinstance(node.left, Expr) and isinstance(node.right, Expr):
+                    return (node.left, node.right)
                 return ()
             return ()
 

@@ -441,10 +441,10 @@ class OuterProduct():
             else:
                 return decls[node_ide]
         elif isinstance(node, Par):
-            return self._vect_expr(node.children[0], ofs, regs, decls, vrs)
+            return self._vect_expr(node.child, ofs, regs, decls, vrs)
         else:
-            left = self._vect_expr(node.children[0], ofs, regs, decls, vrs)
-            right = self._vect_expr(node.children[1], ofs, regs, decls, vrs)
+            left = self._vect_expr(node.left, ofs, regs, decls, vrs)
+            right = self._vect_expr(node.right, ofs, regs, decls, vrs)
             if isinstance(node, Sum):
                 return plan.isa["add"](left, right)
             elif isinstance(node, Sub):

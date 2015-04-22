@@ -269,15 +269,12 @@ class ExpressionFissioner(LoopScheduler):
         if isinstance(node, Symbol):
             return False
         elif isinstance(node, Par):
-            return self._split_sum(node.children[0], (node, 0), is_left, found,
-                                   sum_count)
+            return self._split_sum(node.child, (node, 0), is_left, found, sum_count)
         elif isinstance(node, Prod) and found:
             return False
         elif isinstance(node, Prod) and not found:
-            if not self._split_sum(node.children[0], (node, 0), is_left, found,
-                                   sum_count):
-                return self._split_sum(node.children[1], (node, 1), is_left, found,
-                                       sum_count)
+            if not self._split_sum(node.left, (node, 0), is_left, found, sum_count):
+                return self._split_sum(node.right, (node, 1), is_left, found, sum_count)
             return True
         elif isinstance(node, Sum):
             sum_count += 1
@@ -288,16 +285,14 @@ class ExpressionFissioner(LoopScheduler):
                 # Perform the cut
                 if is_left:
                     parent, parent_leaf = parent
-                    parent.children[parent_leaf] = node.children[0]
+                    parent.children[parent_leaf] = node.left
                 else:
                     found, found_leaf = found
-                    found.children[found_leaf] = node.children[1]
+                    found.children[found_leaf] = node.right
                 return True
             else:
-                if not self._split_sum(node.children[0], (node, 0), is_left,
-                                       found, sum_count):
-                    return self._split_sum(node.children[1], (node, 1), is_left,
-                                           found, sum_count)
+                if not self._split_sum(node.left, (node, 0), is_left, found, sum_count):
+                    return self._split_sum(node.right, (node, 1), is_left, found, sum_count)
                 return True
         else:
             raise RuntimeError("Split error: found unknown node: %s" % str(node))
@@ -430,7 +425,7 @@ class ZeroLoopScheduler(LoopScheduler):
         if isinstance(node, Symbol):
             return (node.rank[-1], self.nonzero_syms[node.symbol])
         elif isinstance(node, Par):
-            return self._get_nz_bounds(node.children[0])
+            return self._get_nz_bounds(node.child)
         elif isinstance(node, Prod):
             return tuple([self._get_nz_bounds(n) for n in node.children])
         else:

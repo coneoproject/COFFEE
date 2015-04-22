@@ -305,7 +305,7 @@ class ExpressionHoister(object):
             info = self.INV if all([i == self.INV for _, i, _ in arg_deps]) else self.HOI
             return (dep, info, length)
         if isinstance(node, Par):
-            return (self._extract_exprs(node.children[0], expr_dep, length))
+            return (self._extract_exprs(node.child, expr_dep, length))
 
         # Traverse the expression tree
         left, right = node.children
@@ -611,22 +611,22 @@ class ExpressionExpander(object):
         if isinstance(node, Symbol):
             return ([node], self.EXP) if self.should_expand(node) else ([node], self.GRP)
         elif isinstance(node, Par):
-            return self._expand(node.children[0], node)
+            return self._expand(node.child, node)
         elif isinstance(node, FunCall):
             # Functions are considered potentially expandable
             return ([node], self.GRP)
         elif isinstance(node, (Prod, Div)):
-            left, right = node.children
-            l_exps, l_type = self._expand(left, node)
-            r_exps, r_type = self._expand(right, node)
+            l_exps, l_type = self._expand(node.left, node)
+            r_exps, r_type = self._expand(node.right, node)
             if l_type == self.GRP and r_type == self.GRP:
                 return ([node], self.GRP)
             # At least one child is expandable (marked as EXP), whereas the
             # other could either be expandable as well or groupable (marked
             # as GRP): so we can perform the expansion
+            groupable, expandable, expanding_child = r_exps, l_exps, node.left
+            if l_type == self.GRP:
+                groupable, expandable, expanding_child = l_exps, r_exps, node.right
             to_replace = {}
-            groupable, expandable, expanding_child = \
-                (l_exps, r_exps, right) if l_type == self.GRP else (r_exps, l_exps, left)
             for exp, grp in itertools.product(expandable, groupable):
                 # In-place expansion
                 expansion = op(exp, dcopy(grp))
@@ -641,9 +641,8 @@ class ExpressionExpander(object):
             parent.children[parent.children.index(node)] = expanding_child
             return (to_replace.values() or [expanding_child], self.EXP)
         elif isinstance(node, (Sum, Sub)):
-            left, right = node.children
-            l_exps, l_type = self._expand(left, node)
-            r_exps, r_type = self._expand(right, node)
+            l_exps, l_type = self._expand(node.left, node)
+            r_exps, r_type = self._expand(node.right, node)
             if l_type == self.EXP and r_type == self.EXP:
                 return (l_exps + r_exps, self.EXP)
             elif l_type == self.GRP and r_type == self.GRP:
@@ -752,7 +751,7 @@ class ExpressionFactorizer(object):
             return [self.Term.process([node], self.should_factorize)]
 
         elif isinstance(node, Par):
-            return self._factorize(node.children[0], node, 0)
+            return self._factorize(node.child, node, 0)
 
         elif isinstance(node, FunCall):
             return [self.Term(set([node]))]
