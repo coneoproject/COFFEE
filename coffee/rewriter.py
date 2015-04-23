@@ -627,7 +627,7 @@ class ExpressionExpander(object):
             groupable, expandable, expanding_child = r_exps, l_exps, node.left
             if l_type == self.GRP:
                 groupable, expandable, expanding_child = l_exps, r_exps, node.right
-            to_replace = {}
+            to_replace = defaultdict(list)
             for exp, grp in itertools.product(expandable, groupable):
                 # In-place expansion
                 expansion = node.__class__(exp, dcopy(grp))
@@ -635,8 +635,9 @@ class ExpressionExpander(object):
                     # Implies /expandable/ contains just one symbol, /e/
                     expanding_child = expansion
                     continue
-                to_replace[str(exp)] = expansion
+                to_replace[str(exp)].append(expansion)
                 self.expansions[expansion] = (exp, grp)
+            to_replace = {k: ast_make_expr(Sum, v) for k, v in to_replace.items()}
             ast_replace(node, to_replace, copy=True)
             # Update the parent node, since an expression has just been expanded
             parent.children[parent.children.index(node)] = expanding_child
@@ -645,8 +646,10 @@ class ExpressionExpander(object):
         elif isinstance(node, (Sum, Sub)):
             l_exps, l_type = self._expand(node.left, node)
             r_exps, r_type = self._expand(node.right, node)
-            if l_type == self.EXP and r_type == self.EXP:
+            if l_type == self.EXP and r_type == self.EXP and isinstance(node, Sum):
                 return (l_exps + r_exps, self.EXP)
+            elif l_type == self.EXP and r_type == self.EXP and isinstance(node, Sub):
+                return (l_exps + [Neg(r) for r in r_exps], self.EXP)
             else:
                 return ([node], self.GRP)
 
