@@ -613,11 +613,10 @@ class ExpressionExpander(object):
         elif isinstance(node, Par):
             return self._expand(node.child, node)
 
-        elif isinstance(node, FunCall):
-            # Functions are considered potentially expandable
+        elif isinstance(node, (Div, FunCall)):
             return ([node], self.GRP)
 
-        elif isinstance(node, (Prod, Div)):
+        elif isinstance(node, Prod):
             l_exps, l_type = self._expand(node.left, node)
             r_exps, r_type = self._expand(node.right, node)
             if l_type == self.GRP and r_type == self.GRP:
