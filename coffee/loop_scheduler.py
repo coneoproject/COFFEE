@@ -710,7 +710,7 @@ class ZeroLoopScheduler(LoopScheduler):
         roots, new_exprs = set(), {}
         elf = ExpressionFissioner(1)
         for stmt, expr_info in self.exprs.items():
-            if expr_info.dimension == 0:
+            if expr_info.is_scalar:
                 continue
             elif expr_info.dimension > 1:
                 # Split expressions based on sum's associativity. This exposes more

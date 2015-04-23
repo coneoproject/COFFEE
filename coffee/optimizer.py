@@ -88,7 +88,7 @@ class LoopOptimizer(object):
                                     self.hoisted, self.expr_graph)
             if level > 0:
                 ew.licm()
-            if level > 1 and expr_info.dimension:
+            if level > 1 and expr_info.is_tensor:
                 ew.expand()
                 ew.factorize()
                 ew.licm(merge_and_simplify=True, compact_tmps=True)

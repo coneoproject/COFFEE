@@ -114,7 +114,15 @@ class MetaExpr(object):
 
     @property
     def dimension(self):
-        return len(self._domain)
+        return len(self._domain) if not self.is_scalar else 0
+
+    @property
+    def is_scalar(self):
+        return all([isinstance(i, int) for i in self.domain])
+
+    @property
+    def is_tensor(self):
+        return not self.is_scalar
 
 
 def copy_metaexpr(expr_info, **kwargs):
