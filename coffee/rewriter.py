@@ -199,7 +199,7 @@ class ExpressionRewriter(object):
         # Select the expansion strategy
         if mode == 'standard':
             occurrences = [s.rank for s in symbols_dep.keys()]
-            occurrences = dict((i, occurrences.count(i)) for i in occurrences)
+            occurrences = dict((i, occurrences.count(i)) for i in occurrences if i)
             dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
             should_expand = lambda n: n.rank == dimension
         elif mode == 'full':
@@ -240,7 +240,7 @@ class ExpressionRewriter(object):
         # Select the factorization strategy
         if mode == 'standard':
             occurrences = [s.rank for s in symbols_dep.keys()]
-            occurrences = dict((i, occurrences.count(i)) for i in occurrences)
+            occurrences = dict((i, occurrences.count(i)) for i in occurrences if i)
             dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
             should_factorize = lambda n: n.rank == dimension
         elif mode == 'immutable':
