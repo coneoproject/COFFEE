@@ -637,7 +637,7 @@ class ExpressionExpander(object):
                 to_replace[exp].append(expansion)
                 self.expansions.append(expansion)
             to_replace = {k: ast_make_expr(Sum, v) for k, v in to_replace.items()}
-            ast_replace(node, to_replace, copy=True, mode='symbol')
+            ast_replace(node, to_replace, mode='symbol')
             # Update the parent node, since an expression has just been expanded
             parent.children[parent.children.index(node)] = expanding_child
             return (to_replace.values() or [expanding_child], self.EXP)
