@@ -469,7 +469,7 @@ class ExpressionHoister(object):
                     self.decls[d.sym.symbol] = d
 
                 # 5) Replace invariant sub-trees with the proper tmp variable
-                to_replace = dict(zip([str(i) for i in exprs], inv_loop_syms))
+                to_replace = dict(zip(exprs, inv_loop_syms))
                 n_replaced = ast_replace(self.stmt.children[1], to_replace)
 
                 # 6) Track hoisted symbols and symbols dependencies

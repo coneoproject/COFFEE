@@ -167,25 +167,39 @@ def postprocess(node):
 #####################################
 
 
-def ast_replace(node, syms_dict, copy=False):
-    """Given a dictionary ``syms_dict`` s.t. ``{'syms': to_replace}``, replace the
-    various ``syms`` rooted in ``node`` with ``to_replace``. If ``copy`` is True,
-    a deep copy of the replacing symbol is created."""
+def ast_replace(node, to_replace, copy=False, mode='all'):
+    """Given a dictionary ``to_replace`` s.t. ``{sym: new_sym}``, replace the
+    various ``syms`` rooted in ``node`` with ``new_sym``.
 
-    def _ast_replace(node, syms_dict, n_replaced):
-        to_replace = {}
+    :param copy: if True, a deep copy of the replacing symbol is created.
+    :param mode: either ``all``, in which case ``to_replace``'s keys are turned
+                 into strings, and all of the occurrences are removed from the
+                 AST; or ``symbol``, in which case only (all of) the references
+                 to the symbols given in ``to_replace`` are replaced.
+    """
+
+    if mode == 'all':
+        to_replace = dict(zip([str(s) for s in to_replace.keys()], to_replace.values()))
+        __ast_replace = lambda n: to_replace.get(str(n)) or to_replace.get(str(Par(n)))
+    elif mode == 'symbol':
+        __ast_replace = lambda n: to_replace.get(n)
+    else:
+        raise ValueError
+
+    def _ast_replace(node, to_replace, n_replaced):
+        replaced = {}
         for i, n in enumerate(node.children):
-            replacing = syms_dict.get(str(n)) or syms_dict.get(str(Par(n)))
+            replacing = __ast_replace(n)
             if replacing:
-                to_replace[i] = replacing if not copy else dcopy(replacing)
+                replaced[i] = replacing if not copy else dcopy(replacing)
                 n_replaced[str(replacing)] += 1
             else:
-                _ast_replace(n, syms_dict, n_replaced)
-        for i, r in to_replace.items():
+                _ast_replace(n, to_replace, n_replaced)
+        for i, r in replaced.items():
             node.children[i] = r
 
     n_replaced = defaultdict(int)
-    _ast_replace(node, syms_dict, n_replaced)
+    _ast_replace(node, to_replace, n_replaced)
     return n_replaced
 
 
