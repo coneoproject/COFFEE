@@ -587,7 +587,7 @@ class ExpressionExpander(object):
         if not self.expr_graph.has_dep(exp):
             hoisted_expr.children[0] = op(Par(hoisted_expr.children[0]), dcopy(grp))
             self.expr_graph.add_dependency(exp, grp, False)
-            return {str(exp): exp}
+            return {exp: exp}
 
         # Create new symbol, expression, and declaration
         expr = Par(op(dcopy(exp), grp))
@@ -604,7 +604,7 @@ class ExpressionExpander(object):
         self.expanded_decls[decl.sym.symbol] = decl
         self.hoisted[hoisted_exp.symbol] = (expr, decl, hoisted_loop, hoisted_place)
         self.expr_graph.add_dependency(hoisted_exp, expr, 0)
-        return {str(exp): hoisted_exp}
+        return {exp: hoisted_exp}
 
     def _expand(self, node, parent):
         if isinstance(node, Symbol):
@@ -629,16 +629,15 @@ class ExpressionExpander(object):
                 groupable, expandable, expanding_child = l_exps, r_exps, node.right
             to_replace = defaultdict(list)
             for exp, grp in itertools.product(expandable, groupable):
-                # In-place expansion
                 expansion = node.__class__(exp, dcopy(grp))
                 if exp == expanding_child:
-                    # Implies /expandable/ contains just one symbol, /e/
+                    # Implies /expandable/ contains just one node, /e/
                     expanding_child = expansion
-                    continue
-                to_replace[str(exp)].append(expansion)
-                self.expansions[expansion] = (exp, grp)
+                    break
+                to_replace[exp].append(expansion)
+                self.expansions.append(expansion)
             to_replace = {k: ast_make_expr(Sum, v) for k, v in to_replace.items()}
-            ast_replace(node, to_replace, copy=True)
+            ast_replace(node, to_replace, copy=True, mode='symbol')
             # Update the parent node, since an expression has just been expanded
             parent.children[parent.children.index(node)] = expanding_child
             return (to_replace.values() or [expanding_child], self.EXP)
@@ -661,7 +660,7 @@ class ExpressionExpander(object):
         Symbols for which the lambda function ``should_expand`` returns
         True are expansion candidates."""
         # Preload and set data structures for expansion
-        self.expansions = OrderedDict()
+        self.expansions = []
         self.should_expand = should_expand
         self.info = visit(self.expr_info.out_loop)
 
@@ -671,13 +670,14 @@ class ExpressionExpander(object):
         # Now see if some of the expanded terms are groupable at the level
         # of hoisted expressions
         to_replace, to_remove = {}, set()
-        for expansion, (exp, grp) in self.expansions.items():
+        for expansion in self.expansions:
+            exp, grp = expansion.left, expansion.right
             hoisted = self._hoist(expansion, exp, grp)
             if hoisted:
                 to_replace.update(hoisted)
                 to_remove.add(grp)
         ast_replace(self.stmt, to_replace, copy=True)
-        ast_remove(self.stmt, to_remove, 'all')
+        ast_remove(self.stmt, to_remove)
 
 
 class ExpressionFactorizer(object):
