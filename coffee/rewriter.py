@@ -778,10 +778,10 @@ class ExpressionFactorizer(object):
             # Finally try to factorize some of the operands composing the operation
             factorized = {}
             for t in terms:
-                operand = ast_make_expr(Prod, tuple(t.operands))
-                factor = set([t.factors_ast]) if t.factors_ast else set()
-                factorized_term = self.Term(set([operand]), factor, node.__class__)
-                _t = factorized.setdefault(str(operand), factorized_term)
+                operand = set([t.operands_ast]) if t.operands else set()
+                factor = set([t.factors_ast]) if t.factors else set()
+                factorized_term = self.Term(operand, factor, node.__class__)
+                _t = factorized.setdefault(str(t.operands_ast), factorized_term)
                 _t.factors |= factor
             factorized = ast_make_expr(Sum, [t.generate_ast for t in factorized.values()])
             parent.children[parent.children.index(node)] = factorized
