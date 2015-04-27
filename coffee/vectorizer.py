@@ -44,18 +44,22 @@ class VectStrategy():
 
     """Supported vectorization modes."""
 
-    # Generate scalar code suitable to compiler auto-vectorization
+    """Generate scalar code suitable to compiler auto-vectorization"""
     AUTO = 1
-    # Specialized (intrinsics-based) vectorization using padding
+
+    """Specialized (intrinsics-based) vectorization using padding"""
     SPEC_PADD = 2
-    # Specialized (intrinsics-based) vectorization using peel loop
+
+    """Specialized (intrinsics-based) vectorization using peel loop"""
     SPEC_PEEL = 3
-    # Specialized (intrinsics-based) vectorization composed with unroll-and-jam
-    # of outer loops, padding (to enforce data alignment), and peeling of padded
-    # iterations.
+
+    """Specialized (intrinsics-based) vectorization composed with unroll-and-jam
+    of outer loops, padding (to enforce data alignment), and peeling of padded
+    iterations"""
     SPEC_UAJ_PADD = 4
-    # Specialized (intrinsics-based) vectorization composed with unroll-and-jam
-    # of outer loops and padding (to enforce data alignment).
+
+    """Specialized (intrinsics-based) vectorization composed with unroll-and-jam
+    of outer loops and padding (to enforce data alignment)"""
     SPEC_UAJ_PADD_FULL = 5
 
 

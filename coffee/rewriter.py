@@ -265,10 +265,10 @@ class ExpressionHoister(object):
     # Temporary variables template
     _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
 
-    # Constants used by the extract method to charaterize sub-expressions
-    INV = 0  # Invariant term, hoistable if part of an invariant expression
-    KSE = 1  # Invariant expression, potentially part of larger invariant
-    HOI = 2  # Variant expression, hoisted, can't hoist anymore
+    # Constants used by the extract method to charaterize expressions:
+    INV = 0  # /INVariant/: expression is loop invariant
+    KSE = 1  # /KeepSEarching/: expression is potentially in a larger invariant
+    HOI = 2  # /HOIsted/: expression is *not* invariant, should be hoisted
 
     def __init__(self, stmt, expr_info, header, decls, hoisted, expr_graph):
         """Initialize the ExpressionHoister."""
@@ -424,20 +424,28 @@ class ExpressionHoister(object):
                 # -1) Filter dependencies that do not pertain to the expression
                 dep = tuple(d for d in all_deps if d in self.expr_deps)
 
-                # 0) Determine where it is safe to hoist the statements
+                # 0) Determine the loop nest level where invariant expressions
+                # should be hoisted. The goal is to hoist them as far as possible
+                # in the loop nest, while minimising temporary storage.
+                # We distinguish five hoisting cases:
                 if len(dep) == 0:
+                    # As scalar (/wrap_loop=None/), outside of the loop nest;
                     place, wrap_loop = self.header, None
                     next_loop = expr_outermost_loop
                 elif len(dep) == 1 and is_expr_outermost_perfect:
+                    # As vector, outside of the loop nest;
                     place, wrap_loop = self.header, expr_dims_loops[dep[0]]
                     next_loop = expr_outermost_loop
                 elif len(dep) == 1 and len(expr_dims_loops) > 1:
+                    # As scalar, within the loop imposing the dependency
                     place, wrap_loop = expr_dims_loops[dep[0]].children[0], None
                     next_loop = od_find_next(expr_dims_loops, dep[0])
                 elif len(dep) == 1:
+                    # As scalar, at the bottom of the loop imposing the dependency
                     place, wrap_loop = expr_dims_loops[dep[0]].children[0], None
                     next_loop = place.children[-1]
                 else:
+                    # As vector, within the outermost loop imposing the dependency
                     dep_block = expr_dims_loops[dep[-2]].children[0]
                     place, wrap_loop = dep_block, expr_dims_loops[dep[-1]]
                     next_loop = od_find_next(expr_dims_loops, dep[-2])
