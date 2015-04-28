@@ -261,6 +261,51 @@ class ExpressionRewriter(object):
         # Perform the factorization
         self.expr_factorizer.factorize(should_factorize)
 
+    def reassociate(self):
+        """Reorder symbols in associative operations following a convention.
+        By default, the convention is to order the symbols based on their rank.
+        For example, the terms in the expression ::
+
+            a*b[i]*c[i][j]*d
+
+        are reordered as ::
+
+            a*d*b[i]*c[i][j]
+
+        This as achieved by reorganizing the AST of the expression.
+        """
+
+        def _reassociate(node, parent):
+            if isinstance(node, (Symbol, Div)):
+                return
+
+            elif isinstance(node, Par):
+                _reassociate(node.child, node)
+
+            elif isinstance(node, (Sum, Sub, FunCall)):
+                for n in node.children:
+                    _reassociate(n, node)
+
+            elif isinstance(node, Prod):
+                children = explore_operator(node)
+                # Reassociate symbols
+                symbols = [(n.rank, n, p) for n, p in children if isinstance(n, Symbol)]
+                symbols.sort(key=lambda n: (len(n[0]), n[0]))
+                # Capture the other children and recur on them
+                other_nodes = [(n, p) for n, p in children if not isinstance(n, Symbol)]
+                for n, p in other_nodes:
+                    _reassociate(n, p)
+                # Create the reassociated product and modify the original AST
+                children = zip(*symbols)[1]
+                children += zip(*other_nodes)[0] if other_nodes else ()
+                reassociated_node = ast_make_expr(Prod, children)
+                parent.children[parent.children.index(node)] = reassociated_node
+
+            else:
+                warning('Unexpect node of type %s while reassociating', typ(node))
+
+        _reassociate(self.stmt.children[1], self.stmt)
+
     @staticmethod
     def reset():
         ExpressionHoister._expr_handled[:] = []

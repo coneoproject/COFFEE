@@ -117,6 +117,7 @@ class LoopOptimizer(object):
                 if expr_info.is_tensor:
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
+                    ew.reassociate()
                     ew.licm(nrank_tmps=True, merge_and_simplify=True, compact_tmps=True)
 
     def eliminate_zeros(self):
