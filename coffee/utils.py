@@ -395,6 +395,22 @@ def visit(node, parent=None):
     return info
 
 
+def explore_operator(node):
+    """Return a list of the operands composing the operation whose root is
+    ``node``."""
+
+    def _explore_operator(node, operator, children):
+        for n in node.children:
+            if n.__class__ == operator or isinstance(n, Par):
+                _explore_operator(n, operator, children)
+            else:
+                children.append((n, node))
+
+    children = []
+    _explore_operator(node, node.__class__, children)
+    return children
+
+
 def inner_loops(node):
     """Find inner loops in the subtree rooted in ``node``."""
 
