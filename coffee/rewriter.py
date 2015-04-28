@@ -81,7 +81,7 @@ class ExpressionRewriter(object):
         self.expr_factorizer = ExpressionFactorizer(self.stmt,
                                                     self.expr_info)
 
-    def licm(self, merge_and_simplify=False, compact_tmps=False):
+    def licm(self, **kwargs):
         """Perform generalized loop-invariant code motion.
 
         Loop-invariant expressions found in the nest are moved "after" the
@@ -96,15 +96,23 @@ class ExpressionRewriter(object):
         then wrapped and evaluated in a new loop in order to promote compiler
         autovectorization.
 
-        :param merge_and_simpliy: True if should try to merge the loops in which
-                                  invariant expressions are evaluated, because they
-                                  might be characterized by the same iteration space.
-                                  In this process, computation which is redundant
-                                  because performed in at least two merged loops, is
-                                  eliminated.
-        :param compact_tmps: True if temporaries accessed only once should be inlined.
+        :param kwargs:
+            * merge_and_simpliy: True if should try to merge the loops in which
+                invariant expressions are evaluated, because they might be
+                characterized by the same iteration space. In this process,
+                computation which is redundant because performed in at least
+                two merged loops, is eliminated
+            * compact_tmps: True if temporaries accessed only once should be inlined
+            * nrank_tmps: True if ``n``-dimensional arrays are allowed for hoisting
+                expressions crossing ``n`` loops in the nest.
+            * outer_only: True if only outer-loop invariant terms should be hoisted
         """
-        self.expr_hoister.licm()
+        merge_and_simplify = kwargs.get('merge_and_simplify')
+        compact_tmps = kwargs.get('compact_tmps')
+        nrank_tmps = kwargs.get('nranks_tmps')
+        outer_only = kwargs.get('outer_only')
+
+        self.expr_hoister.licm(nrank_tmps, outer_only)
         stmt_hoisted = self.expr_hoister._expr_handled
 
         # Try to merge the hoisted loops, because they might have the same
@@ -389,7 +397,7 @@ class ExpressionHoister(object):
         always is a legal transformation."""
         return all([is_perfect_loop(l) for l in loops[1:]])
 
-    def licm(self):
+    def licm(self, nrank_tmps, outer_only):
         """Perform generalized loop-invariant code motion."""
         # Aliases
         expr_type = self.expr_info.type
@@ -405,6 +413,8 @@ class ExpressionHoister(object):
         self.symbols = visit(self.header, None)['symbols_dep']
         self.symbols = dict((s, [l.dim for l in dep]) for s, dep in self.symbols.items())
         self.extracted = False
+        self.nrank_tmps = nrank_tmps
+        self.outer_only = outer_only
 
         expr_dims_loops = For.fromloops(expr_loops)
         self.expr_deps = expr_dims_loops.keys()

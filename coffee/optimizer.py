@@ -64,7 +64,7 @@ class LoopOptimizer(object):
         # Track hoisted expressions
         self.hoisted = StmtTracker()
 
-    def rewrite(self, level):
+    def rewrite(self, mode):
         """Rewrite a compute-intensive expression found in the loop nest so as to
         minimize floating point operations and to relieve register pressure.
         This involves several possible transformations:
@@ -73,26 +73,51 @@ class LoopOptimizer(object):
         2. Factorization of common loop-dependent terms
         3. Expansion of constants over loop-dependent terms
 
-        :param level: The optimization level (0, 1, 2). The higher, the more
-                      invasive is the re-writing of the expression, trying to
-                      eliminate unnecessary floating point operations.
+        :param mode: Any value in (0, 1, 2, 3). Each ``mode`` corresponds to a
+            different expression rewriting strategy. A strategy impacts the aspects:
+            amount of floating point calculations required to evaluate the expression;
+            amount of temporary storage introduced; accuracy of the result.
 
-                      * level == 1: performs generalized loop-invariant code motion only
-                      * level == 2: level 1; terms expansion (to expose factorization \
-                                    opportunities); terms factorization (to expose \
-                                    code motion opportunities); and a final pass of \
-                                    generalized loop-invariant code motion.
+            * mode == 0: No rewriting is performed
+            * mode == 1: Apply one pass: generalized loop-invariant code motion.
+                Safest: accuracy not affected
+            * mode == 2: Apply four passes: generalized loop-invariant code motion;
+                expansion of inner-loop dependent expressions; factorization of
+                inner-loop dependent terms; generalized loop-invariant code motion.
+                Barely affects accuracy, improves performance while trying to
+                minimize temporary storage
+            * mode == 3: Apply four passes: generalized loop-invariant code motion
+                of outer-loop dependent expressions; expansion of inner-loop dependent
+                expressions; factorization of inner-loop dependent terms; 'aggressive'
+                generalized loop-invariant code motion (in which n-rank temporary
+                arrays can be allocated to keep expressions independent of more than
+                one loop). Due to hoisting less expressions, factorization can be
+                more aggressive, so accuracy can be more affected than in modes 0, 1,
+                and 2. This ``mode`` is ideal if one wants to precompute as much
+                expressions as possible outside the whole loop nest. Therefore, it is
+                recommended to execute a ``precompute`` pass after ``rewrite(mode=3)``.
+                This aggressively reduces flops, but also increases temporary storage
         """
         ExpressionRewriter.reset()
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
-            if level > 0:
+            if mode == 1:
                 ew.licm()
-            if level > 1 and expr_info.is_tensor:
-                ew.expand()
-                ew.factorize()
-                ew.licm(merge_and_simplify=True, compact_tmps=True)
+
+            if mode == 2:
+                ew.licm()
+                if expr_info.is_tensor:
+                    ew.expand()
+                    ew.factorize()
+                    ew.licm(merge_and_simplify=True, compact_tmps=True)
+
+            if mode == 3:
+                ew.licm(outer_only=True)
+                if expr_info.is_tensor:
+                    ew.expand(mode='full')
+                    ew.factorize(mode='immutable')
+                    ew.licm(nrank_tmps=True, merge_and_simplify=True, compact_tmps=True)
 
     def eliminate_zeros(self):
         """Avoid accessing blocks of contiguous (i.e. unit-stride) zero-valued
