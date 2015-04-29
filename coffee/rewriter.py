@@ -346,6 +346,9 @@ class ExpressionHoister(object):
         Hoistable sub-expressions are stored in expr_dep."""
 
         def hoist(node, dep, expr_dep, _extract=True):
+            if self.outer_only and dep:
+                if self.expr_deps and dep != (self.expr_deps[0],):
+                    _extract = False
             if _extract:
                 node = Par(node) if isinstance(node, Symbol) else node
                 expr_dep[dep].append(node)
