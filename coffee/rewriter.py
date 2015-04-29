@@ -763,11 +763,14 @@ class ExpressionFactorizer(object):
 
         @property
         def operands_ast(self):
-            return ast_make_expr(Prod, tuple(self.operands))
+            # Exploiting associativity, establish an order for the operands
+            operands = sorted(list(self.operands), key=lambda o: str(o))
+            return ast_make_expr(Prod, tuple(operands))
 
         @property
         def factors_ast(self):
-            return ast_make_expr(self.op, tuple(self.factors))
+            factors = sorted(list(self.factors), key=lambda f: str(f))
+            return ast_make_expr(self.op, tuple(factors))
 
         @property
         def generate_ast(self):
@@ -801,9 +804,6 @@ class ExpressionFactorizer(object):
 
         terms[:] = unique_terms.values()
 
-    def _expose_operands(self, children):
-        return zip(*sorted([(str(i[0]), i) for i in children]))[1]
-
     def _factorize(self, node, parent):
         if isinstance(node, Symbol):
             return self.Term.process([node], self.should_factorize)
@@ -815,7 +815,7 @@ class ExpressionFactorizer(object):
             return self.Term(set([node]))
 
         elif isinstance(node, Prod):
-            children = self._expose_operands(explore_operator(node))
+            children = explore_operator(node)
             symbols = [n for n, _ in children if isinstance(n, Symbol)]
             other_nodes = [(n, p) for n, p in children if n not in symbols]
             term = self.Term.process(symbols, self.should_factorize, Prod)
@@ -826,7 +826,7 @@ class ExpressionFactorizer(object):
         # The fundamental case is when /node/ is a Sum (or Sub, equivalently).
         # Here, we try to factorize the terms composing the operation
         elif isinstance(node, (Sum, Sub)):
-            children = self._expose_operands(explore_operator(node))
+            children = explore_operator(node)
             # First try to factorize within /node/'s children
             terms = [self._factorize(n, p) for n, p in children]
             # Then check if it's possible to aggregate operations
