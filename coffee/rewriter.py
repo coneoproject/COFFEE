@@ -343,35 +343,37 @@ class ExpressionHoister(object):
             self.expr_id = self._expr_handled.index(stmt)
         self.counter = 0
 
-    def _extract_exprs(self, node, expr_dep, length=0):
+    def _extract_exprs(self, node, expr_dep):
         """Extract invariant sub-expressions from the original expression.
         Hoistable sub-expressions are stored in expr_dep."""
 
-        def hoist(node, dep, expr_dep, _extract=True):
-            if self.outer_only and dep:
+        def hoist(node, dep, expr_dep):
+            should_extract = True
+            if isinstance(node, Symbol):
+                should_extract = False
+            elif self.outer_only and dep:
                 if self.expr_deps and dep != (self.expr_deps[0],):
-                    _extract = False
-            if _extract:
+                    should_extract = False
+            if should_extract:
                 node = Par(node) if isinstance(node, Symbol) else node
                 expr_dep[dep].append(node)
-            self.extracted = self.extracted or _extract
+            self.extracted = self.extracted or should_extract
 
         if isinstance(node, Symbol):
-            return (self.symbols[node], self.INVARIANT, 1)
+            return (self.symbols[node], self.INVARIANT)
         if isinstance(node, FunCall):
-            arg_deps = [self._extract_exprs(n, expr_dep, length) for n in node.children]
-            dep = tuple(set(flatten([dep for dep, _, _ in arg_deps])))
-            info = self.INVARIANT if all([i == self.INVARIANT for _, i, _ in arg_deps]) \
+            arg_deps = [self._extract_exprs(n, expr_dep) for n in node.children]
+            dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
+            info = self.INVARIANT if all([i == self.INVARIANT for _, i in arg_deps]) \
                 else self.HOISTED
-            return (dep, info, length)
+            return (dep, info)
         if isinstance(node, Par):
-            return (self._extract_exprs(node.child, expr_dep, length))
+            return (self._extract_exprs(node.child, expr_dep))
 
         # Traverse the expression tree
         left, right = node.children
-        dep_l, info_l, len_l = self._extract_exprs(left, expr_dep, length)
-        dep_r, info_r, len_r = self._extract_exprs(right, expr_dep, length)
-        node_len = len_l + len_r
+        dep_l, info_l = self._extract_exprs(left, expr_dep)
+        dep_r, info_r = self._extract_exprs(right, expr_dep)
 
         # Filter out false dependencies
         dep_l = tuple(d for d in dep_l if d in self.expr_deps)
@@ -382,62 +384,62 @@ class ExpressionHoister(object):
                 # E.g. (A[i]*alpha + D[i])*(B[j]*beta + C[j])
                 hoist(left, dep_l, expr_dep)
                 hoist(right, dep_r, expr_dep)
-                return ((), self.HOISTED, node_len)
+                return ((), self.HOISTED)
             else:
                 # E.g. (A[i]*alpha)+(B[i]*beta)
-                return (dep_l, self.SEARCH, node_len)
+                return (dep_l, self.SEARCH)
         elif info_l == self.SEARCH and info_r == self.INVARIANT:
             # E.g. (A[i] + B[i])*C[j]
             hoist(left, dep_l, expr_dep)
-            hoist(right, dep_r, expr_dep, not self.counter or len_r > 1)
-            return ((), self.HOISTED, node_len)
+            hoist(right, dep_r, expr_dep)
+            return ((), self.HOISTED)
         elif info_l == self.INVARIANT and info_r == self.SEARCH:
             # E.g. A[i]*(B[j] + C[j])
             hoist(right, dep_r, expr_dep)
-            hoist(left, dep_l, expr_dep, not self.counter or len_l > 1)
-            return ((), self.HOISTED, node_len)
+            hoist(left, dep_l, expr_dep)
+            return ((), self.HOISTED)
         elif info_l == self.INVARIANT and info_r == self.INVARIANT:
             if not dep_l and not dep_r:
                 # E.g. alpha*beta
-                return ((), self.INVARIANT, node_len)
+                return ((), self.INVARIANT)
             elif dep_l and dep_r and dep_l != dep_r:
                 if set(dep_l).issubset(set(dep_r)):
                     # E.g. A[i]*B[i,j]
-                    return (dep_r, self.SEARCH, node_len)
+                    return (dep_r, self.SEARCH)
                 elif set(dep_r).issubset(set(dep_l)):
                     # E.g. A[i,j]*B[i]
-                    return (dep_l, self.SEARCH, node_len)
+                    return (dep_l, self.SEARCH)
                 else:
                     # dep_l != dep_r:
                     # E.g. A[i]*B[j]
-                    hoist(left, dep_l, expr_dep, not self.counter or len_l > 1)
-                    hoist(right, dep_r, expr_dep, not self.counter or len_r > 1)
-                    return ((), self.HOISTED, node_len)
+                    hoist(left, dep_l, expr_dep)
+                    hoist(right, dep_r, expr_dep)
+                    return ((), self.HOISTED)
             elif dep_l and dep_r and dep_l == dep_r:
                 # E.g. A[i] + B[i]
-                return (dep_l, self.INVARIANT, node_len)
+                return (dep_l, self.INVARIANT)
             elif dep_l and not dep_r:
                 # E.g. A[i]*alpha
-                hoist(right, dep_r, expr_dep, len_r > 1)
-                return (dep_l, self.SEARCH, node_len)
+                hoist(right, dep_r, expr_dep)
+                return (dep_l, self.SEARCH)
             elif dep_r and not dep_l:
                 # E.g. alpha*A[i]
-                hoist(left, dep_l, expr_dep, len_l > 1)
-                return (dep_r, self.SEARCH, node_len)
+                hoist(left, dep_l, expr_dep)
+                return (dep_r, self.SEARCH)
             else:
                 raise RuntimeError("Error while hoisting invariant terms")
         elif info_l == self.HOISTED:
             if info_r == self.INVARIANT:
-                hoist(right, dep_r, expr_dep, not self.counter)
+                hoist(right, dep_r, expr_dep)
             elif info_r == self.SEARCH:
-                hoist(right, dep_r, expr_dep, len_r > 2)
-            return ((), self.HOISTED, node_len)
+                hoist(right, dep_r, expr_dep)
+            return ((), self.HOISTED)
         elif info_r == self.HOISTED:
             if info_l == self.INVARIANT:
-                hoist(left, dep_l, expr_dep, not self.counter)
+                hoist(left, dep_l, expr_dep)
             elif info_l == self.SEARCH:
-                hoist(left, dep_l, expr_dep, len_l > 2)
-            return ((), self.HOISTED, node_len)
+                hoist(left, dep_l, expr_dep)
+            return ((), self.HOISTED)
         else:
             raise RuntimeError("Fatal error while finding hoistable terms")
 
