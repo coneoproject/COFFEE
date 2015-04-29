@@ -212,7 +212,8 @@ class ExpressionRewriter(object):
             dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
             should_expand = lambda n: n.rank == dimension
         elif mode == 'full':
-            should_expand = lambda n: self.decls[n.symbol].is_static_const
+            should_expand = lambda n: \
+                n.symbol in self.decls and self.decls[n.symbol].is_static_const
         else:
             warning('Unknown expansion strategy. Skipping.')
             return
@@ -253,7 +254,8 @@ class ExpressionRewriter(object):
             dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
             should_factorize = lambda n: n.rank == dimension
         elif mode == 'immutable':
-            should_factorize = lambda n: self.decls[n.symbol].is_static_const
+            should_factorize = lambda n: \
+                n.symbol in self.decls and self.decls[n.symbol].is_static_const
         if mode not in ['standard', 'immutable']:
             warning('Unknown factorization strategy. Skipping.')
             return
