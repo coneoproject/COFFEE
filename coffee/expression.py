@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from utils import is_perfect_loop
+from utils import *
 
 
 class MetaExpr(object):
@@ -60,8 +60,16 @@ class MetaExpr(object):
         return self._type
 
     @property
+    def dims(self):
+        return [l.dim for l in self.loops]
+
+    @property
     def loops(self):
         return zip(*self._loops_info)[0]
+
+    @property
+    def loops_from_dims(self):
+        return OrderedDict(zip(self.dims, self.loops))
 
     @property
     def loops_parents(self):

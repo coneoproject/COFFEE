@@ -37,7 +37,7 @@ import resource
 import operator
 from warnings import warn as warning
 from copy import deepcopy as dcopy
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 from base import *
 from coffee.visitors import inspectors
