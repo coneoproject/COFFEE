@@ -355,7 +355,6 @@ class ExpressionHoister(object):
                 if self.expr_deps and dep != (self.expr_deps[0],):
                     should_extract = False
             if should_extract:
-                node = Par(node) if isinstance(node, Symbol) else node
                 expr_dep[dep].append(node)
             self.extracted = self.extracted or should_extract
 

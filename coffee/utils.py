@@ -168,7 +168,7 @@ def ast_replace(node, to_replace, copy=False, mode='all'):
 
     if mode == 'all':
         to_replace = dict(zip([str(s) for s in to_replace.keys()], to_replace.values()))
-        __ast_replace = lambda n: to_replace.get(str(n)) or to_replace.get(str(Par(n)))
+        __ast_replace = lambda n: to_replace.get(str(n))
     elif mode == 'symbol':
         __ast_replace = lambda n: to_replace.get(n)
     else:
@@ -299,8 +299,7 @@ def ast_make_expr(op, nodes):
         return nodes[0] if len(nodes) == 1 else op(nodes[0], _ast_make_expr(nodes[1:]))
 
     try:
-        expr = _ast_make_expr(nodes)
-        return expr if len(nodes) == 1 else Par(expr)
+        return _ast_make_expr(nodes)
     except IndexError:
         return None
 
