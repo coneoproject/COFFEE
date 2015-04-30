@@ -38,7 +38,6 @@ import itertools
 
 from base import *
 from utils import *
-from loop_scheduler import SSALoopMerger
 from coffee.visitors import SymbolReferences
 
 
@@ -97,69 +96,14 @@ class ExpressionRewriter(object):
         autovectorization.
 
         :param kwargs:
-            * merge_and_simpliy: True if should try to merge the loops in which
-                invariant expressions are evaluated, because they might be
-                characterized by the same iteration space. In this process,
-                computation which is redundant because performed in at least
-                two merged loops, is eliminated
-            * compact_tmps: True if temporaries accessed only once should be inlined
             * nrank_tmps: True if ``n``-dimensional arrays are allowed for hoisting
                 expressions crossing ``n`` loops in the nest.
             * outer_only: True if only outer-loop invariant terms should be hoisted
         """
-        merge_and_simplify = kwargs.get('merge_and_simplify')
-        compact_tmps = kwargs.get('compact_tmps')
         nrank_tmps = kwargs.get('nrank_tmps')
         outer_only = kwargs.get('outer_only')
 
         self.expr_hoister.licm(nrank_tmps, outer_only)
-        stmt_hoisted = self.expr_hoister._expr_handled
-
-        # Try to merge the hoisted loops, because they might have the same
-        # iteration space (call to merge()), and also possibly share some
-        # redundant computation (call to simplify())
-        if merge_and_simplify:
-            lm = SSALoopMerger(self.header, self.expr_graph)
-            merged_loops = lm.merge()
-            for merged, merged_in in merged_loops:
-                [self.hoisted.update_loop(l, merged_in) for l in merged]
-            lm.simplify()
-
-        # Remove temporaries created yet accessed only once
-        if compact_tmps:
-            stmt_occs = dict((k, v)
-                             for d in [count(stmt, mode='symbol_id', read_only=True)
-                                       for stmt in stmt_hoisted]
-                             for k, v in d.items())
-            for l in self.hoisted.all_loops:
-                l_occs = count(l, read_only=True)
-                to_replace, to_delete = {}, []
-                for sym_rank, sym_occs in l_occs.items():
-                    # If the symbol appears once, then it is a potential candidate
-                    # for removal. It is actually removed if it does't appear in
-                    # the expression from which was extracted. Symbols appearing
-                    # more than once are removed if they host an expression made
-                    # of just one symbol
-                    sym, rank = sym_rank
-                    if sym not in self.hoisted or sym in stmt_occs:
-                        continue
-                    loop = self.hoisted[sym].loop
-                    if loop is not l:
-                        continue
-                    expr = self.hoisted[sym].expr
-                    if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
-                        continue
-                    if not self.hoisted[sym].loop:
-                        continue
-
-                    to_replace[str(Symbol(sym, rank))] = expr
-                    to_delete.append(sym)
-                for stmt in l.body:
-                    _, expr = stmt.children
-                    ast_replace(expr, to_replace, copy=True)
-                for sym in to_delete:
-                    self.hoisted.delete_hoisted(sym)
-                    self.decls.pop(sym)
 
     def expand(self, mode='standard'):
         """Expand expressions over other expressions based on different heuristics.

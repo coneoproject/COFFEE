@@ -33,7 +33,7 @@
 
 from base import *
 from utils import *
-from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
+from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler, SSALoopMerger
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
@@ -102,23 +102,61 @@ class LoopOptimizer(object):
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
+            # 1) Rewrite the expressions
             if mode == 1:
                 ew.licm()
-
             if mode == 2:
                 ew.licm()
                 if expr_info.is_tensor:
                     ew.expand()
                     ew.factorize()
-                    ew.licm(merge_and_simplify=True, compact_tmps=True)
-
+                    ew.licm()
             if mode == 3:
                 ew.licm(outer_only=True)
                 if expr_info.is_tensor:
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
                     ew.reassociate()
-                    ew.licm(nrank_tmps=True, merge_and_simplify=True, compact_tmps=True)
+                    ew.licm(nrank_tmps=True)
+
+            # 2) Try merging and optimizing the loops created by rewriting
+            lm = SSALoopMerger(self.header, ew.expr_graph)
+            merged_loops = lm.merge()
+            for merged, merged_in in merged_loops:
+                [self.hoisted.update_loop(l, merged_in) for l in merged]
+            lm.simplify()
+
+        # 3) Reduce storage by removing temporaries read in only one place
+        stmt_occs = dict((k, v)
+                         for d in [count(stmt, mode='symbol_id', read_only=True)
+                                   for stmt in self.exprs.keys()]
+                         for k, v in d.items())
+        for l in self.hoisted.all_loops:
+            l_occs = count(l, read_only=True)
+            to_replace, to_delete = {}, []
+            for (sym, rank), sym_occs in l_occs.items():
+                # If the symbol appears once, then it is a potential candidate
+                # for removal. It is actually removed if it does't appear in
+                # the expression from which was extracted. Symbols appearing
+                # more than once are removed if they host an expression made
+                # of just one symbol
+                if sym not in self.hoisted or sym in stmt_occs:
+                    continue
+                loop = self.hoisted[sym].loop
+                if loop is not l:
+                    continue
+                expr = self.hoisted[sym].expr
+                if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
+                    continue
+                if not self.hoisted[sym].loop:
+                    continue
+                to_replace[str(Symbol(sym, rank))] = expr
+                to_delete.append(sym)
+            for stmt in l.body:
+                ast_replace(stmt.children[1], to_replace, copy=True)
+            for sym in to_delete:
+                self.hoisted.delete_hoisted(sym)
+                self.decls.pop(sym)
 
     def eliminate_zeros(self):
         """Avoid accessing blocks of contiguous (i.e. unit-stride) zero-valued
