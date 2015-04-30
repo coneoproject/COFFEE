@@ -317,7 +317,7 @@ class FunCall(Expr, Perfect):
 
     def gencode(self, not_scope=False):
         return self.funcall.gencode() + \
-            wrap(", ".join([n.gencode(not_scope) for n in self.children])) + \
+            wrap(", ".join([n.gencode(True) for n in self.children])) + \
             semicolon(not_scope)
 
 
