@@ -377,6 +377,7 @@ class ExpressionHoister(object):
         # Filter out false dependencies
         dep_l = tuple(d for d in dep_l if d in self.expr_info.dims)
         dep_r = tuple(d for d in dep_r if d in self.expr_info.dims)
+        dep_n = dep_l + tuple(d for d in dep_r if d not in dep_l)
 
         if info_l == self.SEARCH and info_r == self.SEARCH:
             if dep_l != dep_r:
@@ -415,8 +416,11 @@ class ExpressionHoister(object):
                     return (dep_l, self.SEARCH)
                 else:
                     # E.g. A[i]*B[j]
-                    hoist(left, dep_l)
-                    hoist(right, dep_r)
+                    if self.nrank_tmps:
+                        hoist(node, dep_n)
+                    else:
+                        hoist(left, dep_l)
+                        hoist(right, dep_r)
                     return ((), self.HOISTED)
         else:
             # must be: info_l == self.HOISTED or info_r == self.HOISTED
@@ -544,8 +548,8 @@ class ExpressionHoister(object):
             # Create the hoisted code
             if wrap_loop:
                 wrap_loop = dcopy(wrap_loop)
-                wrap_loop[0].children[0] = Block(inv_loop, open_scope=True)
-                inv_loop = inv_code = list(wrap_loop)
+                wrap_loop[-1].body[:] = inv_loop
+                inv_loop = inv_code = [wrap_loop[0]]
             else:
                 inv_code = [None]
             # Insert the new nodes at the right level in the loop nest
