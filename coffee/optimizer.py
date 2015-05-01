@@ -133,30 +133,38 @@ class LoopOptimizer(object):
                          for k, v in d.items())
         for l in self.hoisted.all_loops:
             l_occs = count(l, read_only=True)
-            to_replace, to_delete = {}, []
-            for (sym, rank), sym_occs in l_occs.items():
+            info = visit(l, search=Block)
+            innermost_block = info['search'][Block][-1]
+            to_replace, to_remove = {}, []
+            for (symbol, rank), sym_occs in l_occs.items():
                 # If the symbol appears once, then it is a potential candidate
                 # for removal. It is actually removed if it does't appear in
                 # the expression from which was extracted. Symbols appearing
                 # more than once are removed if they host an expression made
                 # of just one symbol
-                if sym not in self.hoisted or sym in stmt_occs:
+                if symbol not in self.hoisted or symbol in stmt_occs:
                     continue
-                loop = self.hoisted[sym].loop
-                if loop is not l:
+                if self.hoisted[symbol].loop is not l:
                     continue
-                expr = self.hoisted[sym].expr
+                decl = self.hoisted[symbol].decl
+                place = self.hoisted[symbol].place
+                expr = self.hoisted[symbol].expr
                 if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
                     continue
-                if not self.hoisted[sym].loop:
-                    continue
-                to_replace[str(Symbol(sym, rank))] = expr
-                to_delete.append(sym)
-            for stmt in l.body:
+                # Delete any replaced hoisted symbol, declaration, and evaluation
+                symbol_refs = info['symbol_refs'][symbol]
+                syms_mode = info['symbols_mode']
+                # Note: only one write is possible
+                write = [(s, p) for s, p in symbol_refs if syms_mode[s][0] == WRITE][0]
+                to_replace[write[0]] = expr
+                to_remove.append(write[1])
+                place.children.remove(decl)
+                self.hoisted.pop(symbol)
+                self.decls.pop(symbol)
+            for stmt in innermost_block.children:
                 ast_replace(stmt.children[1], to_replace, copy=True)
-            for sym in to_delete:
-                self.hoisted.delete_hoisted(sym)
-                self.decls.pop(sym)
+            for stmt in to_remove:
+                innermost_block.children.remove(stmt)
 
     def eliminate_zeros(self):
         """Avoid accessing blocks of contiguous (i.e. unit-stride) zero-valued
