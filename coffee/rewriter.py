@@ -681,7 +681,7 @@ class ExpressionExpander(object):
                 to_replace.update(hoisted)
                 to_remove.add(grp)
         ast_replace(self.stmt, to_replace, copy=True)
-        ast_remove(self.stmt, to_remove)
+        ast_remove(self.stmt, to_remove, mode='symbol')
 
 
 class ExpressionFactorizer(object):
