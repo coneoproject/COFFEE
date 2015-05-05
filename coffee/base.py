@@ -63,21 +63,6 @@ ternary = lambda e, s1, s2: wrap("%s ? %s : %s" % (e, s1, s2))
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
 
 
-# Meta classes for semantic decoration of AST nodes ##
-
-
-class Perfect(object):
-    """Dummy mixin class used to decorate classes which can form part
-    of a perfect loop nest."""
-    pass
-
-
-class LinAlg(object):
-    """Dummy mixin class used to decorate classes which represent linear
-    algebra operations."""
-    pass
-
-
 # Base classes of the AST ###
 
 
@@ -137,6 +122,21 @@ class Root(Node):
     def gencode(self):
         header = '// This code is generated visiting a COFFEE AST\n\n'
         return header + Node.gencode(self)
+
+
+# Meta classes for semantic decoration of AST nodes ##
+
+
+class Perfect(Node):
+    """Dummy mixin class used to decorate classes which can form part
+    of a perfect loop nest."""
+    pass
+
+
+class LinAlg(Node):
+    """Dummy mixin class used to decorate classes which represent linear
+    algebra operations."""
+    pass
 
 
 # Expressions ###
