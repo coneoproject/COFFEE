@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from collections import defaultdict
+from collections import defaultdict, Counter
 from copy import deepcopy as dcopy
 import operator
 import itertools
@@ -146,15 +146,19 @@ class ExpressionRewriter(object):
                      * mode == 'full': expansion is performed aggressively without \
                                        any specific restrictions.
         """
-        info = visit(self.stmt.children[1])
-        symbols_dep = info['symbols_dep']
+        info = visit(self.stmt.children[1], search=Symbol)
+        symbols = info['search'][Symbol]
 
         # Select the expansion strategy
         if mode == 'standard':
-            occurrences = [s.rank for s in symbols_dep.keys()]
-            occurrences = dict((i, occurrences.count(i)) for i in occurrences if i)
-            dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
-            should_expand = lambda n: n.rank == dimension
+            # Get the ranks...
+            occurrences = [s.rank for s in symbols if s.rank]
+            # ...filter out irrelevant dimensions...
+            occurrences = [tuple(r for r in rank if r in self.expr_info.domain)
+                           for rank in occurrences]
+            # ...and finally establish the expansion dimension
+            dimension = Counter(occurrences).most_common(1)[0][0]
+            should_expand = lambda n: set(dimension).issubset(set(n.rank))
         elif mode == 'full':
             should_expand = lambda n: \
                 n.symbol in self.decls and self.decls[n.symbol].is_static_const
@@ -188,15 +192,19 @@ class ExpressionRewriter(object):
                                             grouped together, within the obvious \
                                             limits imposed by the expression itself.
         """
-        info = visit(self.stmt.children[1])
-        symbols_dep = info['symbols_dep']
+        info = visit(self.stmt.children[1], search=Symbol)
+        symbols = info['search'][Symbol]
 
-        # Select the factorization strategy
+        # Select the expansion strategy
         if mode == 'standard':
-            occurrences = [s.rank for s in symbols_dep.keys()]
-            occurrences = dict((i, occurrences.count(i)) for i in occurrences if i)
-            dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
-            should_factorize = lambda n: n.rank == dimension
+            # Get the ranks...
+            occurrences = [s.rank for s in symbols if s.rank]
+            # ...filter out irrelevant dimensions...
+            occurrences = [tuple(r for r in rank if r in self.expr_info.domain)
+                           for rank in occurrences]
+            # ...and finally establish the expansion dimension
+            dimension = Counter(occurrences).most_common(1)[0][0]
+            should_factorize = lambda n: set(dimension).issubset(set(n.rank))
         elif mode == 'immutable':
             should_factorize = lambda n: \
                 n.symbol in self.decls and self.decls[n.symbol].is_static_const
