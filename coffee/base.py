@@ -601,8 +601,6 @@ class Decl(Statement, Perfect):
 
     @scope.setter
     def scope(self, val):
-        if val not in Scope._scopes:
-            raise RuntimeError("Only %s are valid scopes" % Scope._scopes)
         self._scope = val
 
     @property
@@ -999,11 +997,12 @@ def c_flat_for(code, parent):
 
 class Access(object):
 
-    def __init__(self, mode):
-        self._mode = mode
+    _modes = ["READ", "WRITE", "RW", "INC", "DEC", "IMUL", "IDIV"]
 
-    def __eq__(self, other):
-        return self._mode == other._mode
+    def __init__(self, mode):
+        if mode not in Access._modes:
+            raise TypeError
+        self._mode = mode
 
 
 READ = Access("READ")
@@ -1013,7 +1012,6 @@ INC = Access("INC")
 DEC = Access("DEC")
 IMUL = Access("IMUL")
 IDIV = Access("IDIV")
-Access._modes = [READ, WRITE, RW, INC, DEC, IMUL, IDIV]
 
 
 # Scope of a declaration ##
@@ -1024,15 +1022,15 @@ class Scope(object):
     when it appears in the list of declarations of a /FunDecl/ object). Otherwise,
     a ``LOCAL`` scope indicates the /Decl/ is within the body of a kernel."""
 
-    def __init__(self, scope):
-        self._scope = scope
+    _scopes = ["LOCAL", "EXTERNAL"]
 
-    def __eq__(self, other):
-        return self._scope == other._scope
+    def __init__(self, scope):
+        if scope not in Scope._scopes:
+            raise TypeError
+        self._scope = scope
 
     def __str__(self):
         return self._scope
 
 LOCAL = Scope("LOCAL")
 EXTERNAL = Scope("EXTERNAL")
-Scope._scopes = [LOCAL, EXTERNAL]
