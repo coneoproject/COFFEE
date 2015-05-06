@@ -112,7 +112,7 @@ class LoopOptimizer(object):
                     ew.factorize()
                     ew.licm()
             if mode == 3:
-                ew.licm(outer_only=True)
+                ew.licm(out_domain=True)
                 if expr_info.is_tensor:
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')

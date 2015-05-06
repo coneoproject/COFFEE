@@ -33,7 +33,6 @@
 
 from collections import defaultdict, Counter
 from copy import deepcopy as dcopy
-import operator
 import itertools
 
 from base import *
@@ -98,12 +97,12 @@ class ExpressionRewriter(object):
         :param kwargs:
             * nrank_tmps: True if ``n``-dimensional arrays are allowed for hoisting
                 expressions crossing ``n`` loops in the nest.
-            * outer_only: True if only outer-loop invariant terms should be hoisted
+            * out_domain: True if only outer-loop invariant terms should be hoisted
         """
         nrank_tmps = kwargs.get('nrank_tmps')
-        outer_only = kwargs.get('outer_only')
+        out_domain = kwargs.get('out_domain')
 
-        self.expr_hoister.licm(nrank_tmps, outer_only)
+        self.expr_hoister.licm(nrank_tmps, out_domain)
 
     def expand(self, mode='standard'):
         """Expand expressions over other expressions based on different heuristics.
@@ -154,7 +153,7 @@ class ExpressionRewriter(object):
             # Get the ranks...
             occurrences = [s.rank for s in symbols if s.rank]
             # ...filter out irrelevant dimensions...
-            occurrences = [tuple(r for r in rank if r in self.expr_info.domain)
+            occurrences = [tuple(r for r in rank if r in self.expr_info.domain_dims)
                            for rank in occurrences]
             # ...and finally establish the expansion dimension
             dimension = Counter(occurrences).most_common(1)[0][0]
@@ -200,7 +199,7 @@ class ExpressionRewriter(object):
             # Get the ranks...
             occurrences = [s.rank for s in symbols if s.rank]
             # ...filter out irrelevant dimensions...
-            occurrences = [tuple(r for r in rank if r in self.expr_info.domain)
+            occurrences = [tuple(r for r in rank if r in self.expr_info.domain_dims)
                            for rank in occurrences]
             # ...and finally establish the expansion dimension
             dimension = Counter(occurrences).most_common(1)[0][0]
@@ -303,9 +302,9 @@ class ExpressionHoister(object):
             should_extract = True
             if isinstance(node, Symbol):
                 should_extract = False
-            elif self.outer_only and dep:
-                if self.expr_info.dims and dep != (self.expr_info.dims[0],):
-                    should_extract = False
+            elif self.out_domain and \
+                    not set(dep).issubset(set(self.expr_info.out_domain_dims)):
+                should_extract = False
             if should_extract:
                 dep_subexprs[dep].append(node)
             self.extracted = self.extracted or should_extract
@@ -388,7 +387,7 @@ class ExpressionHoister(object):
         always is a legal transformation."""
         return all([is_perfect_loop(l) for l in loops[1:]])
 
-    def licm(self, nrank_tmps, outer_only):
+    def licm(self, nrank_tmps, out_domain):
         """Perform generalized loop-invariant code motion."""
         if not self._check_loops(self.expr_info.loops):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
@@ -399,11 +398,12 @@ class ExpressionHoister(object):
         self.symbols = dict((s, [l.dim for l in dep]) for s, dep in self.symbols.items())
         self.extracted = False
         self.nrank_tmps = nrank_tmps
-        self.outer_only = outer_only
+        self.out_domain = out_domain
 
         # Extract read-only sub-expressions that do not depend on at least
         # one loop in the loop nest
         expr_dims_loops = self.expr_info.loops_from_dims
+        expr_outermost_loop = self.expr_info.outermost_loop
         inv_dep = {}
         while True:
             dep_subexprs = defaultdict(list)
@@ -429,12 +429,12 @@ class ExpressionHoister(object):
                     # As scalar (/wrap_loop=None/), outside of the loop nest;
                     place = self.header
                     wrap_loop = ()
-                    next_loop = self.expr_info.out_loop
-                elif len(dep) == 1 and is_perfect_loop(self.expr_info.out_loop):
+                    next_loop = expr_outermost_loop
+                elif len(dep) == 1 and is_perfect_loop(expr_outermost_loop):
                     # As vector, outside of the loop nest;
                     place = self.header
                     wrap_loop = (expr_dims_loops[dep[0]],)
-                    next_loop = self.expr_info.out_loop
+                    next_loop = expr_outermost_loop
                 elif len(dep) == 1 and len(expr_dims_loops) > 1:
                     # As scalar, within the loop imposing the dependency
                     place = expr_dims_loops[dep[0]].children[0]
@@ -666,7 +666,7 @@ class ExpressionExpander(object):
         # Preload and set data structures for expansion
         self.expansions = []
         self.should_expand = should_expand
-        self.info = visit(self.expr_info.out_loop)
+        self.info = visit(self.expr_info.outermost_loop)
 
         # Expand according to the /should_expand/ heuristic
         self._expand(self.stmt.children[1], self.stmt)

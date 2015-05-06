@@ -330,7 +330,7 @@ class ExpressionFissioner(LoopScheduler):
             split = (stmt_left, MetaExpr(expr_info.type,
                                          expr_parent,
                                          expr_info.loops_info,
-                                         expr_info.domain))
+                                         expr_info.domain_dims))
 
             # Append the right-split (remainder) expression
             if copy_loops:
@@ -354,7 +354,7 @@ class ExpressionFissioner(LoopScheduler):
             splittable = (stmt_right, MetaExpr(expr_info.type,
                                                new_domain_innerloop_block,
                                                new_loops_info,
-                                               expr_info.domain))
+                                               expr_info.domain_dims))
             return (split, splittable)
         return ((stmt, expr_info), ())
 
