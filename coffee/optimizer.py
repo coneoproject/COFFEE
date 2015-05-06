@@ -388,8 +388,8 @@ class CPULoopOptimizer(LoopOptimizer):
         inner_loop = inner_loops(self.loop)[0]
 
         tmp = dcopy(inner_loop)
-        itspace_copy(inner_loop, self.loop)
-        itspace_copy(self.loop, tmp)
+        itspace_copy(self.loop, inner_loop)
+        itspace_copy(tmp, self.loop)
 
         to_transpose = set()
         if transpose:

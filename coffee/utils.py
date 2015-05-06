@@ -574,13 +574,21 @@ def itspace_from_for(loops, mode=0):
         return tuple((l.dim, (l.start, l.end - 1)) for l in loops)
 
 
-def itspace_copy(loop_a, loop_b):
-    """Copy the iteration space of ``loop_b`` into ``loop_a``, while preserving
-    the body."""
-    loop_a.init = dcopy(loop_b.init)
-    loop_a.cond = dcopy(loop_b.cond)
-    loop_a.incr = dcopy(loop_b.incr)
-    loop_a.pragma = dcopy(loop_b.pragma)
+def itspace_copy(loop_a, loop_b=None):
+    """Copy the iteration space of ``loop_a`` into ``loop_b``, while preserving
+    the body. If ``loop_b = None``, a new For node is created and returned."""
+    init = dcopy(loop_a.init)
+    cond = dcopy(loop_a.cond)
+    incr = dcopy(loop_a.incr)
+    pragma = dcopy(loop_a.pragma)
+    if not loop_b:
+        loop_b = For(init, cond, incr, loop_a.body, pragma)
+        return loop_b
+    loop_b.init = init
+    loop_b.cond = cond
+    loop_b.incr = incr
+    loop_b.pragma = pragma
+    return loop_b
 
 
 #############################
