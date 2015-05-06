@@ -418,7 +418,7 @@ class ExpressionHoister(object):
                 # 0) Determine the loop nest level where invariant expressions
                 # should be hoisted. The goal is to hoist them as far as possible
                 # in the loop nest, while minimising temporary storage.
-                # We distinguish five hoisting cases:
+                # We distinguish six hoisting cases:
                 if len(dep) == 0:
                     # As scalar (/wrap_loop=None/), outside of the loop nest;
                     place = self.header
@@ -439,6 +439,13 @@ class ExpressionHoister(object):
                     place = expr_dims_loops[dep[0]].children[0]
                     wrap_loop = ()
                     next_loop = place.children[-1]
+                elif set(dep).issuperset(set(self.expr_info.domain_dims)) and \
+                        not any([self.expr_graph.is_written(e) for e in subexprs]):
+                    # As n-dimensional vector, where /n == len(dep)/, outside of
+                    # the loop nest
+                    place = self.header
+                    wrap_loop = tuple(expr_dims_loops.values())
+                    next_loop = expr_outermost_loop
                 else:
                     # As vector, within the outermost loop imposing the dependency
                     dep_block = expr_dims_loops[dep[0]].children[0]
@@ -493,9 +500,10 @@ class ExpressionHoister(object):
             loop_dim, place, next_loop, wrap_loop = inv_info
             # Create the hoisted code
             if wrap_loop:
-                wrap_loop = dcopy(wrap_loop)
-                wrap_loop[-1].body[:] = inv_loop
-                inv_loop = inv_code = [wrap_loop[0]]
+                outer_wrap_loop = ast_make_for(inv_loop, wrap_loop[-1])
+                for l in reversed(wrap_loop[:-1]):
+                    outer_wrap_loop = ast_make_for([outer_wrap_loop], l)
+                inv_loop = inv_code = [outer_wrap_loop]
             else:
                 inv_code = [None]
             # Insert the new nodes at the right level in the loop nest
