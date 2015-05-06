@@ -37,6 +37,7 @@ from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
+from coffee.visitors import MaxLoopDepth
 
 
 class LoopOptimizer(object):
@@ -366,7 +367,7 @@ class CPULoopOptimizer(LoopOptimizer):
         algebra libraries. Currently, MKL, ATLAS, and EIGEN are supported."""
 
         # First, check that the loop nest has depth 3, otherwise it's useless
-        if visit(self.loop, self.header)['max_depth'] != 3:
+        if MaxLoopDepth().visit(self.loop) != 3:
             return
 
         linear_algebra = LinearAlgebra(self.loop, self.header, self.kernel_decls)
