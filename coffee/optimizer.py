@@ -105,17 +105,20 @@ class LoopOptimizer(object):
             # 1) Rewrite the expressions
             if mode == 1:
                 ew.licm()
-            if mode == 2:
+
+            elif mode == 2:
                 ew.licm()
                 if expr_info.is_tensor:
                     ew.expand()
                     ew.factorize()
                     ew.licm()
-            if mode == 3:
+
+            elif mode == 3:
                 ew.licm(out_domain=True)
                 if expr_info.is_tensor:
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
+                    ew.licm(out_domain=True)
                     ew.reassociate()
                     ew.licm(nrank_tmps=True)
 
