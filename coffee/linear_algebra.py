@@ -47,14 +47,13 @@ class LinearAlgebra(object):
     def __init__(self, outer_loop, header, kernel_decls):
         """Initialize a LinearAlgebra object.
 
-        :arg outer_loop:   AST root loop node from which the search for potential
-                           linear algebra operations starts
-        :arg header:       parent of ``outer_loop``
+        :arg outer_loop: the AST loop within which linear algebra operations
+                         are sought
+        :arg header: parent of ``outer_loop``
         :arg kernel_decls: list of declarations used in the AST"""
-
-        self.kernel_decls = kernel_decls
-        self.header = header
         self.outer_loop = outer_loop
+        self.header = header
+        self.kernel_decls = kernel_decls
 
     def transform(self, library):
         """Transform perfect loop nests representing matrix-matrix multiplies into
@@ -105,11 +104,10 @@ class LinearAlgebra(object):
             - Sum -> ()
             - Prod(Sum, s1) -> ()"""
             if isinstance(node, Par):
-                return check_prod(node.children[0])
+                return check_prod(node.child)
             elif isinstance(node, Prod):
-                left, right = (node.children[0], node.children[1])
-                if isinstance(left, Expr) and isinstance(right, Expr):
-                    return (left, right)
+                if isinstance(node.left, Expr) and isinstance(node.right, Expr):
+                    return (node.left, node.right)
                 return ()
             return ()
 
@@ -151,11 +149,9 @@ class LinearAlgebra(object):
                 new_outer = dcopy(self.outer_loop)
                 new_outer.body = [middle_loop]
                 self.header.children.insert(ofs, new_outer)
-                loop_itvars = (self.outer_loop.itvar, middle_loop.itvar,
-                               inner_loop[0].itvar)
-                loop_sizes = (self.outer_loop.size, middle_loop.size,
-                              inner_loop[0].size)
-                loop_info = OrderedDict(zip(loop_itvars, loop_sizes))
+                loop_dims = (self.outer_loop.dim, middle_loop.dim, inner_loop[0].dim)
+                loop_sizes = (self.outer_loop.size, middle_loop.size, inner_loop[0].size)
+                loop_info = OrderedDict(zip(loop_dims, loop_sizes))
                 to_transform[new_outer] = (body[0].children[0], rhs, loop_info)
                 found_mmm = True
         # Clean up

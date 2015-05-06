@@ -281,7 +281,7 @@ int main()
                     return loop_sizes[node.rank[0]] if node.rank[0] != '0' else 1
                 return 0
             elif isinstance(node, For):
-                loop_sizes[node.itvar] = node.size
+                loop_sizes[node.dim] = node.size
             for n in node.children:
                 size = find_coeff_size(n, coeff, loop_sizes)
                 if size:
@@ -468,6 +468,6 @@ See %s for more info about the error""" % logfile)
 
         # Clean code from spurious pragmas
         code_template = '\n'.join(l for l in code_template.split("\n")
-                                  if not l.strip().startswith('#pragma pyop2'))
+                                  if not l.strip().startswith('#pragma coffee'))
 
         return self._run(code_template)

@@ -34,12 +34,11 @@
 from collections import defaultdict
 from copy import deepcopy as dcopy
 import operator
+import itertools
 
 from base import *
+from utils import *
 from loop_scheduler import SSALoopMerger
-from utils import visit, is_perfect_loop, count_occurrences, ast_c_sum
-from utils import ast_replace, loops_as_dict, od_find_next, flatten
-import plan
 
 
 class ExpressionRewriter(object):
@@ -50,36 +49,51 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt_info, decls, header, hoisted, expr_graph):
+    def __init__(self, stmt, expr_info, decls, header, hoisted, expr_graph):
         """Initialize the ExpressionRewriter.
 
-        :param stmt_info: an AST node statement containing an expression and meta
-                         information (MetaExpr) related to the expression itself.
-                         including the iteration space it depends on.
-        :param decls: list of AST declarations of the various symbols in ``syms``.
+        :param stmt: AST statement containing the expression to be rewritten
+        :param expr_info: ``MetaExpr`` object describing the expression in ``stmt``
+        :param decls: declarations for the various symbols in ``stmt``.
         :param header: the parent Block of the loop in which ``stmt`` was found.
         :param hoisted: dictionary that tracks hoisted expressions
         :param expr_graph: expression graph that tracks symbol dependencies
         """
-        self.stmt, self.expr_info = stmt_info
+        self.stmt = stmt
+        self.expr_info = expr_info
         self.decls = decls
         self.header = header
         self.hoisted = hoisted
         self.expr_graph = expr_graph
 
-        # Expression Manipulators used by the Expression Rewriter
+        # Expression manipulators used by the Expression Rewriter
         self.expr_hoister = ExpressionHoister(self.stmt,
                                               self.expr_info,
                                               self.header,
                                               self.decls,
                                               self.hoisted,
                                               self.expr_graph)
-
-        # Properties of the transformed expression
-        self._expanded = False
+        self.expr_expander = ExpressionExpander(self.stmt,
+                                                self.expr_info,
+                                                self.hoisted,
+                                                self.expr_graph)
+        self.expr_factorizer = ExpressionFactorizer(self.stmt,
+                                                    self.expr_info)
 
     def licm(self, merge_and_simplify=False, compact_tmps=False):
         """Perform generalized loop-invariant code motion.
+
+        Loop-invariant expressions found in the nest are moved "after" the
+        outermost independent loop and "after" the fastest varying dimension
+        loop. Here, "after" means that if the loop nest has two loops ``i``
+        and ``j``, and ``j`` is in the body of ``i``, then ``i`` comes after
+        ``j`` (i.e. the loop nest has to be read from right to left).
+
+        For example, if a sub-expression ``E`` depends on ``[i, j]`` and the
+        loop nest has three loops ``[i, j, k]``, then ``E`` is hoisted out from
+        the body of ``k`` to the body of ``i``). All hoisted expressions are
+        then wrapped and evaluated in a new loop in order to promote compiler
+        autovectorization.
 
         :param merge_and_simpliy: True if should try to merge the loops in which
                                   invariant expressions are evaluated, because they
@@ -105,11 +119,11 @@ class ExpressionRewriter(object):
         # Remove temporaries created yet accessed only once
         if compact_tmps:
             stmt_occs = dict((k, v)
-                             for d in [count_occurrences(stmt, key=1, read_only=True)
+                             for d in [count(stmt, mode='symbol_id', read_only=True)
                                        for stmt in stmt_hoisted]
                              for k, v in d.items())
             for l in self.hoisted.all_loops:
-                l_occs = count_occurrences(l, key=0, read_only=True)
+                l_occs = count(l, read_only=True)
                 to_replace, to_delete = {}, []
                 for sym_rank, sym_occs in l_occs.items():
                     # If the symbol appears once, then it is a potential candidate
@@ -131,131 +145,130 @@ class ExpressionRewriter(object):
 
                     to_replace[str(Symbol(sym, rank))] = expr
                     to_delete.append(sym)
-
                 for stmt in l.body:
-                    symbol, expr = stmt.children
-                    sym = symbol.symbol
+                    _, expr = stmt.children
                     ast_replace(expr, to_replace, copy=True)
                 for sym in to_delete:
                     self.hoisted.delete_hoisted(sym)
+                    self.decls.pop(sym)
 
-    def expand(self):
-        """Expand expressions such that: ::
+    def expand(self, mode='standard'):
+        """Expand expressions over other expressions based on different heuristics.
+        In the simplest example one can have: ::
+
+            (X[i] + Y[j])*F + ...
+
+        which could be transformed into: ::
+
+            (X[i]*F + Y[j]*F) + ...
+
+        When creating the expanded object, if the expanding term had already been
+        hoisted, then the expansion itself is also lifted. For example, if: ::
 
             Y[j] = f(...)
             (X[i]*Y[j])*F + ...
 
-        becomes: ::
+        and we assume it has been decided (see below) the expansion should occur
+        along the loop dimension ``j``, the transformation generates: ::
 
             Y[j] = f(...)*F
             (X[i]*Y[j]) + ...
 
-        This may be useful for several purposes:
+        One may want to expand expressions for several reasons, which include
 
-        * Relieve register pressure; when, for example, ``(X[i]*Y[j])`` is
+        * Exposing factorization opportunities;
+        * Exposing high-level (linear algebra) operations (e.g., matrix multiplies)
+        * Relieving register pressure; when, for example, ``(X[i]*Y[j])`` is
           computed in a loop L' different than the loop L'' in which ``Y[j]``
-          is evaluated, and ``cost(L') > cost(L'')``
-        * It is also a step towards exposing well-known linear algebra
-          operations, like matrix-matrix multiplies."""
+          is evaluated, and ``cost(L') > cost(L'')``;
 
-        # Select the iteration variable along which the expansion should be performed.
-        # The heuristics here is that the expansion occurs along the iteration
-        # variable which appears in more unique arrays. This will allow factorization
-        # to be more effective.
-        itvar_occs = dict.fromkeys(self.expr_info.unit_stride_itvars, 0)
-        for _, itvar in count_occurrences(self.stmt.children[1]).keys():
-            if itvar and itvar[0] in itvar_occs:
-                itvar_occs[itvar[0]] += 1
-        itvar_exp = max(itvar_occs.iteritems(), key=operator.itemgetter(1))[0]
+        :param mode: multiple expansion strategies are possible, each exposing
+                     different, "hidden" opportunities for later code motion.
 
-        # Perform expansion
-        ee = ExpressionExpander(self.stmt, self.expr_info, self.hoisted,
-                                self.expr_graph, itvar_occs, itvar_exp)
-        ee.expand()
+                     * mode == 'standard': this heuristics consists of expanding \
+                                           along the loop dimension appearing \
+                                           the most in different (i.e., unique) \
+                                           arrays. This has the goal of making \
+                                           factorization more effective.
+                     * mode == 'full': expansion is performed aggressively without \
+                                       any specific restrictions.
+        """
+        info = visit(self.stmt.children[1])
+        symbols_dep = info['symbols_dep']
+
+        # Select the expansion strategy
+        if mode == 'standard':
+            occurrences = [s.rank for s in symbols_dep.keys()]
+            occurrences = dict((i, occurrences.count(i)) for i in occurrences if i)
+            dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
+            should_expand = lambda n: n.rank == dimension
+        elif mode == 'full':
+            should_expand = lambda n: self.decls[n.symbol].is_static_const
+        else:
+            warning('Unknown expansion strategy. Skipping.')
+            return
+
+        # Perform the expansion
+        self.expr_expander.expand(should_expand)
 
         # Update known declarations
-        self.decls.update(ee.expanded_decls)
-        self._expanded = True
+        self.decls.update(self.expr_expander.expanded_decls)
 
-    def distribute(self):
-        """Factorize terms in the expression.
-        E.g. ::
+    def factorize(self, mode='standard'):
+        """Factorize terms in the expression. For example: ::
 
             A[i]*B[j] + A[i]*C[j]
 
         becomes ::
 
-            A[i]*(B[j] + C[j])."""
+            A[i]*(B[j] + C[j]).
 
-        def find_prod(node, occs, to_distr):
-            if isinstance(node, Par):
-                find_prod(node.children[0], occs, to_distr)
-            elif isinstance(node, Sum):
-                find_prod(node.children[0], occs, to_distr)
-                find_prod(node.children[1], occs, to_distr)
-            elif isinstance(node, Prod):
-                left, right = (node.children[0], node.children[1])
-                l_str, r_str = (str(left), str(right))
-                if occs[l_str] > 1 and occs[r_str] > 1:
-                    if occs[l_str] > occs[r_str]:
-                        dist = l_str
-                        target = (left, right)
-                        occs[r_str] -= 1
-                    else:
-                        dist = r_str
-                        target = (right, left)
-                        occs[l_str] -= 1
-                elif occs[l_str] > 1 and occs[r_str] == 1:
-                    dist = l_str
-                    target = (left, right)
-                elif occs[r_str] > 1 and occs[l_str] == 1:
-                    dist = r_str
-                    target = (right, left)
-                elif occs[l_str] == 1 and occs[r_str] == 1:
-                    dist = l_str
-                    target = (left, right)
-                else:
-                    raise RuntimeError("Distribute error: symbol not found")
-                to_distr[dist].append(target)
+        :param mode: multiple factorization strategies are possible, each exposing
+                     different, "hidden" opportunities for code motion.
 
-        # Expansion ensures the expression to be in a form like:
-        # tensor[i][j] += A[i]*B[j] + C[i]*D[j] + A[i]*E[j] + ...
-        if not self._expanded:
-            raise RuntimeError("Distribute error: expansion required first.")
+                     * mode == 'standard': this simple heuristics consists of \
+                                           grouping on symbols that appear the \
+                                           most in the expression.
+                     * mode == 'immutable': if many static constant objects are \
+                                            expected, with this strategy they are \
+                                            grouped together, within the obvious \
+                                            limits imposed by the expression itself.
+        """
+        info = visit(self.stmt.children[1])
+        symbols_dep = info['symbols_dep']
 
-        to_distr = defaultdict(list)
-        occurrences = count_occurrences(self.stmt.children[1], key=2)
-        find_prod(self.stmt.children[1], occurrences, to_distr)
+        # Select the factorization strategy
+        if mode == 'standard':
+            occurrences = [s.rank for s in symbols_dep.keys()]
+            occurrences = dict((i, occurrences.count(i)) for i in occurrences if i)
+            dimension = max(occurrences.iteritems(), key=operator.itemgetter(1))[0]
+            should_factorize = lambda n: n.rank == dimension
+        elif mode == 'immutable':
+            should_factorize = lambda n: self.decls[n.symbol].is_static_const
+        if mode not in ['standard', 'immutable']:
+            warning('Unknown factorization strategy. Skipping.')
+            return
 
-        # Create the new expression
-        new_prods = []
-        for d in to_distr.values():
-            dist, target = zip(*d)
-            target = Par(ast_c_sum(target)) if len(target) > 1 else ast_c_sum(target)
-            new_prods.append(Par(Prod(dist[0], target)))
-        self.stmt.children[1] = Par(ast_c_sum(new_prods))
+        # Perform the factorization
+        self.expr_factorizer.factorize(should_factorize)
+
+    @staticmethod
+    def reset():
+        ExpressionHoister._expr_handled[:] = []
+        ExpressionExpander._expr_handled[:] = []
 
 
 class ExpressionHoister(object):
-    """Perform loop-invariant code motion (licm).
-
-    Invariant expressions found in the loop nest are moved "after" the
-    outermost independent loop and "after" the fastest varying dimension
-    loop. Here, "after" means that if the loop nest has two loops ``i``
-    and ``j``, and ``j`` is in the body of ``i``, then ``i`` comes after
-    ``j`` (i.e. the loop nest has to be read from right to left).
-
-    For example, if a sub-expression ``E`` depends on ``[i, j]`` and the
-    loop nest has three loops ``[i, j, k]``, then ``E`` is hoisted out from
-    the body of ``k`` to the body of ``i``). All hoisted expressions are
-    then wrapped within a suitable loop in order to exploit compiler
-    autovectorization. Note that this applies to constant sub-expressions
-    as well, in which case hoisting after the outermost loop takes place."""
 
     # Track all expressions to which LICM has been applied
     _expr_handled = []
     # Temporary variables template
     _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
+
+    # Constants used by the extract method to charaterize expressions:
+    INVARIANT = 0  # expression is loop invariant
+    SEARCH = 1  # expression is potentially within a larger invariant
+    HOISTED = 2  # expression should not be hoisted any further
 
     def __init__(self, stmt, expr_info, header, decls, hoisted, expr_graph):
         """Initialize the ExpressionHoister."""
@@ -274,16 +287,6 @@ class ExpressionHoister(object):
             self.expr_id = self._expr_handled.index(stmt)
         self.counter = 0
 
-        # Constants used by the extract method to charaterize sub-expressions
-        self.INV = 0  # Invariant term, hoistable if part of an invariant expression
-        self.KSE = 1  # Invariant expression, potentially part of larger invariant
-        self.HOI = 2  # Variant expression, hoisted, can't hoist anymore
-
-        # Variables used for communication between the extract and licm methods
-        self.extracted = False  # True if managed to hoist at least one sub-expr
-        self.symbols = {}
-        self.real_deps = []
-
     def _extract_exprs(self, node, expr_dep, length=0):
         """Extract invariant sub-expressions from the original expression.
         Hoistable sub-expressions are stored in expr_dep."""
@@ -295,14 +298,15 @@ class ExpressionHoister(object):
             self.extracted = self.extracted or _extract
 
         if isinstance(node, Symbol):
-            return (self.symbols[node], self.INV, 1)
+            return (self.symbols[node], self.INVARIANT, 1)
         if isinstance(node, FunCall):
             arg_deps = [self._extract_exprs(n, expr_dep, length) for n in node.children]
             dep = tuple(set(flatten([dep for dep, _, _ in arg_deps])))
-            info = self.INV if all([i == self.INV for _, i, _ in arg_deps]) else self.HOI
+            info = self.INVARIANT if all([i == self.INVARIANT for _, i, _ in arg_deps]) \
+                else self.HOISTED
             return (dep, info, length)
         if isinstance(node, Par):
-            return (self._extract_exprs(node.children[0], expr_dep, length))
+            return (self._extract_exprs(node.child, expr_dep, length))
 
         # Traverse the expression tree
         left, right = node.children
@@ -311,88 +315,98 @@ class ExpressionHoister(object):
         node_len = len_l + len_r
 
         # Filter out false dependencies
-        dep_l = tuple(d for d in dep_l if d in self.real_deps)
-        dep_r = tuple(d for d in dep_r if d in self.real_deps)
+        dep_l = tuple(d for d in dep_l if d in self.expr_deps)
+        dep_r = tuple(d for d in dep_r if d in self.expr_deps)
 
-        if info_l == self.KSE and info_r == self.KSE:
+        if info_l == self.SEARCH and info_r == self.SEARCH:
             if dep_l != dep_r:
                 # E.g. (A[i]*alpha + D[i])*(B[j]*beta + C[j])
                 hoist(left, dep_l, expr_dep)
                 hoist(right, dep_r, expr_dep)
-                return ((), self.HOI, node_len)
+                return ((), self.HOISTED, node_len)
             else:
                 # E.g. (A[i]*alpha)+(B[i]*beta)
-                return (dep_l, self.KSE, node_len)
-        elif info_l == self.KSE and info_r == self.INV:
+                return (dep_l, self.SEARCH, node_len)
+        elif info_l == self.SEARCH and info_r == self.INVARIANT:
             # E.g. (A[i] + B[i])*C[j]
             hoist(left, dep_l, expr_dep)
             hoist(right, dep_r, expr_dep, not self.counter or len_r > 1)
-            return ((), self.HOI, node_len)
-        elif info_l == self.INV and info_r == self.KSE:
+            return ((), self.HOISTED, node_len)
+        elif info_l == self.INVARIANT and info_r == self.SEARCH:
             # E.g. A[i]*(B[j] + C[j])
             hoist(right, dep_r, expr_dep)
             hoist(left, dep_l, expr_dep, not self.counter or len_l > 1)
-            return ((), self.HOI, node_len)
-        elif info_l == self.INV and info_r == self.INV:
+            return ((), self.HOISTED, node_len)
+        elif info_l == self.INVARIANT and info_r == self.INVARIANT:
             if not dep_l and not dep_r:
                 # E.g. alpha*beta
-                return ((), self.INV, node_len)
+                return ((), self.INVARIANT, node_len)
             elif dep_l and dep_r and dep_l != dep_r:
                 if set(dep_l).issubset(set(dep_r)):
                     # E.g. A[i]*B[i,j]
-                    return (dep_r, self.KSE, node_len)
+                    return (dep_r, self.SEARCH, node_len)
                 elif set(dep_r).issubset(set(dep_l)):
                     # E.g. A[i,j]*B[i]
-                    return (dep_l, self.KSE, node_len)
+                    return (dep_l, self.SEARCH, node_len)
                 else:
                     # dep_l != dep_r:
                     # E.g. A[i]*B[j]
                     hoist(left, dep_l, expr_dep, not self.counter or len_l > 1)
                     hoist(right, dep_r, expr_dep, not self.counter or len_r > 1)
-                    return ((), self.HOI, node_len)
+                    return ((), self.HOISTED, node_len)
             elif dep_l and dep_r and dep_l == dep_r:
                 # E.g. A[i] + B[i]
-                return (dep_l, self.INV, node_len)
+                return (dep_l, self.INVARIANT, node_len)
             elif dep_l and not dep_r:
                 # E.g. A[i]*alpha
                 hoist(right, dep_r, expr_dep, len_r > 1)
-                return (dep_l, self.KSE, node_len)
+                return (dep_l, self.SEARCH, node_len)
             elif dep_r and not dep_l:
                 # E.g. alpha*A[i]
                 hoist(left, dep_l, expr_dep, len_l > 1)
-                return (dep_r, self.KSE, node_len)
+                return (dep_r, self.SEARCH, node_len)
             else:
                 raise RuntimeError("Error while hoisting invariant terms")
-        elif info_l == self.HOI:
-            if info_r == self.INV:
+        elif info_l == self.HOISTED:
+            if info_r == self.INVARIANT:
                 hoist(right, dep_r, expr_dep, not self.counter)
-            elif info_r == self.KSE:
+            elif info_r == self.SEARCH:
                 hoist(right, dep_r, expr_dep, len_r > 2)
-            return ((), self.HOI, node_len)
-        elif info_r == self.HOI:
-            if info_l == self.INV:
+            return ((), self.HOISTED, node_len)
+        elif info_r == self.HOISTED:
+            if info_l == self.INVARIANT:
                 hoist(left, dep_l, expr_dep, not self.counter)
-            elif info_l == self.KSE:
+            elif info_l == self.SEARCH:
                 hoist(left, dep_l, expr_dep, len_l > 2)
-            return ((), self.HOI, node_len)
+            return ((), self.HOISTED, node_len)
         else:
             raise RuntimeError("Fatal error while finding hoistable terms")
 
-    def licm(self):
-        """Perform loop-invariant code motion for the expression passed in at
-        object construction time."""
-        expr_type = self.expr_info.type
+    def _check_loops(self, loops):
+        """Ensures hoisting is legal. As long as all inner loops are perfect,
+        hoisting at the bottom of the possibly non-perfect outermost loop
+        always is a legal transformation."""
+        return all([is_perfect_loop(l) for l in loops[1:]])
 
+    def licm(self):
+        """Perform generalized loop-invariant code motion."""
+        # Aliases
+        expr_type = self.expr_info.type
         expr_loops = self.expr_info.loops
-        dict_expr_loops = loops_as_dict(expr_loops)
-        real_deps = dict_expr_loops.keys()
+        expr_outermost_loop = expr_loops[0]
+        is_expr_outermost_perfect = is_perfect_loop(expr_outermost_loop)
+
+        if not self._check_loops(expr_loops):
+            warning("Loop nest unsuitable for generalized licm. Skipping.")
+            return
 
         # (Re)set global parameters for the /extract/ function
         self.symbols = visit(self.header, None)['symbols_dep']
-        self.symbols = dict((s, [l.itvar for l in dep]) for s, dep in self.symbols.items())
-
-        self.real_deps = real_deps
+        self.symbols = dict((s, [l.dim for l in dep]) for s, dep in self.symbols.items())
         self.extracted = False
+
+        expr_dims_loops = For.fromloops(expr_loops)
+        self.expr_deps = expr_dims_loops.keys()
 
         # Extract read-only sub-expressions that do not depend on at least
         # one loop in the loop nest
@@ -407,124 +421,117 @@ class ExpressionHoister(object):
             self.extracted = False
             self.counter += 1
 
-            for all_deps, expr in expr_dep.items():
+            for all_deps, exprs in expr_dep.items():
                 # -1) Filter dependencies that do not pertain to the expression
-                dep = tuple(d for d in all_deps if d in real_deps)
+                dep = tuple(d for d in all_deps if d in self.expr_deps)
 
-                # 0) The invariant statements go in the closest outer loop to
-                # dep[-1] which they depend on, and are wrapped by a loop wl
-                # iterating along the same iteration space as dep[-1].
-                # If there's no such an outer loop, they fall in the header,
-                # provided they are within a perfect loop nest (otherwise,
-                # dependencies may be broken)
-                outermost_loop = expr_loops[0]
-                is_outermost_perfect = is_perfect_loop(outermost_loop)
+                # 0) Determine the loop nest level where invariant expressions
+                # should be hoisted. The goal is to hoist them as far as possible
+                # in the loop nest, while minimising temporary storage.
+                # We distinguish five hoisting cases:
                 if len(dep) == 0:
-                    place, wl = self.header, None
-                    next_loop = outermost_loop
-                elif len(dep) == 1 and is_outermost_perfect:
-                    place, wl = self.header, dict_expr_loops[dep[0]]
-                    next_loop = outermost_loop
-                elif len(dep) == 1 and not is_outermost_perfect:
-                    place, wl = dict_expr_loops[dep[0]].children[0], None
-                    next_loop = od_find_next(dict_expr_loops, dep[0])
+                    # As scalar (/wrap_loop=None/), outside of the loop nest;
+                    place, wrap_loop = self.header, None
+                    next_loop = expr_outermost_loop
+                elif len(dep) == 1 and is_expr_outermost_perfect:
+                    # As vector, outside of the loop nest;
+                    place, wrap_loop = self.header, expr_dims_loops[dep[0]]
+                    next_loop = expr_outermost_loop
+                elif len(dep) == 1 and len(expr_dims_loops) > 1:
+                    # As scalar, within the loop imposing the dependency
+                    place, wrap_loop = expr_dims_loops[dep[0]].children[0], None
+                    next_loop = od_find_next(expr_dims_loops, dep[0])
+                elif len(dep) == 1:
+                    # As scalar, at the bottom of the loop imposing the dependency
+                    place, wrap_loop = expr_dims_loops[dep[0]].children[0], None
+                    next_loop = place.children[-1]
                 else:
-                    dep_block = dict_expr_loops[dep[-2]].children[0]
-                    place, wl = dep_block, dict_expr_loops[dep[-1]]
-                    next_loop = od_find_next(dict_expr_loops, dep[-2])
+                    # As vector, within the outermost loop imposing the dependency
+                    dep_block = expr_dims_loops[dep[-2]].children[0]
+                    place, wrap_loop = dep_block, expr_dims_loops[dep[-1]]
+                    next_loop = od_find_next(expr_dims_loops, dep[-2])
 
                 # 1) Remove identical sub-expressions
-                expr = dict([(str(e), e) for e in expr]).values()
+                exprs = dict([(str(e), e) for e in exprs]).values()
 
                 # 2) Create the new invariant sub-expressions and temporaries
-                sym_rank, for_dep = (tuple([wl.size]), tuple([wl.itvar])) \
-                    if wl else ((), ())
-                syms = [Symbol(self._hoisted_sym % {
+                sym_rank, loop_dep = (), ()
+                if wrap_loop:
+                    sym_rank, loop_dep = tuple([wrap_loop.size]), tuple([wrap_loop.dim])
+                hoisted_syms = [Symbol(self._hoisted_sym % {
                     'loop_dep': '_'.join(dep).upper() if dep else 'CONST',
                     'expr_id': self.expr_id,
                     'round': self.counter,
                     'i': i
-                }, sym_rank) for i in range(len(expr))]
-                var_decl = [Decl(expr_type, _s) for _s in syms]
-                for_sym = [Symbol(_s.sym.symbol, for_dep) for _s in var_decl]
+                }, sym_rank) for i in range(len(exprs))]
+                hoisted_decls = [Decl(expr_type, s) for s in hoisted_syms]
+                inv_loop_syms = [Symbol(d.sym.symbol, loop_dep) for d in hoisted_decls]
 
                 # 3) Create the new for loop containing invariant terms
-                _expr = [Par(dcopy(e)) if not isinstance(e, Par)
-                         else dcopy(e) for e in expr]
-                inv_for = [Assign(_s, e) for _s, e in zip(dcopy(for_sym), _expr)]
+                _exprs = [Par(dcopy(e)) if not isinstance(e, Par)
+                          else dcopy(e) for e in exprs]
+                inv_loop = [Assign(s, e) for s, e in zip(dcopy(inv_loop_syms), _exprs)]
 
-                # 4) Update the lists of decls
-                self.decls.update(dict(zip([d.sym.symbol for d in var_decl],
-                                           [(v, plan.LOCAL_VAR) for v in var_decl])))
+                # 4) Update the dictionary of known declarations
+                for d in hoisted_decls:
+                    d.scope = LOCAL
+                    self.decls[d.sym.symbol] = d
 
                 # 5) Replace invariant sub-trees with the proper tmp variable
-                n_replaced = dict(zip([str(s) for s in for_sym], [0]*len(for_sym)))
-                ast_replace(self.stmt.children[1], dict(zip([str(i) for i in expr],
-                                                        for_sym)), n_replaced)
+                to_replace = dict(zip(exprs, inv_loop_syms))
+                n_replaced = ast_replace(self.stmt.children[1], to_replace)
 
                 # 6) Track hoisted symbols and symbols dependencies
-                sym_info = [(i, j, inv_for) for i, j in zip(_expr, var_decl)]
-                self.hoisted.update(zip([s.symbol for s in for_sym], sym_info))
-                for s, e in zip(for_sym, expr):
+                sym_info = [(i, j, inv_loop) for i, j in zip(_exprs, hoisted_decls)]
+                self.hoisted.update(zip([s.symbol for s in inv_loop_syms], sym_info))
+                for s, e in zip(inv_loop_syms, exprs):
                     self.expr_graph.add_dependency(s, e, n_replaced[str(s)] > 1)
                     self.symbols[s] = dep
 
                 # 7a) Update expressions hoisted along a known dimension (same dep)
-                inv_info = (for_dep, place, next_loop, wl)
+                inv_info = (loop_dep, place, next_loop, wrap_loop)
                 if inv_info in inv_dep:
-                    _var_decl, _inv_for = inv_dep[inv_info]
-                    _var_decl.extend(var_decl)
-                    _inv_for.extend(inv_for)
+                    _hoisted_decls, _inv_loop = inv_dep[inv_info]
+                    _hoisted_decls.extend(hoisted_decls)
+                    _inv_loop.extend(inv_loop)
                     continue
 
                 # 7b) Keep track of hoisted stuff
-                inv_dep[inv_info] = (var_decl, inv_for)
+                inv_dep[inv_info] = (hoisted_decls, inv_loop)
 
         for inv_info, dep_info in sorted(inv_dep.items()):
-            var_decl, inv_for = dep_info
-            _, place, next_loop, wl = inv_info
+            hoisted_decls, inv_loop = dep_info
+            _, place, next_loop, wrap_loop = inv_info
             # Create the hoisted code
-            if wl:
-                new_for = [dcopy(wl)]
-                new_for[0].children[0] = Block(inv_for, open_scope=True)
-                inv_for = inv_code = new_for
+            if wrap_loop:
+                new_loop = [dcopy(wrap_loop)]
+                new_loop[0].children[0] = Block(inv_loop, open_scope=True)
+                inv_loop = inv_code = new_loop
             else:
                 inv_code = [None]
             # Insert the new nodes at the right level in the loop nest
             ofs = place.children.index(next_loop)
-            place.children[ofs:ofs] = var_decl + inv_for + [FlatBlock("\n")]
+            place.children[ofs:ofs] = hoisted_decls + inv_loop + [FlatBlock("\n")]
             # Update hoisted symbols metadata
-            for i in var_decl:
-                self.hoisted.update_stmt(i.sym.symbol, **{'loop': inv_code[0],
-                                                          'place': place})
+            for i in hoisted_decls:
+                self.hoisted.update_stmt(i.sym.symbol, loop=inv_code[0], place=place)
 
 
 class ExpressionExpander(object):
-    """Expand expressions such that: ::
 
-        Y[j] = f(...)
-        (X[i]*Y[j])*F + ...
-
-    becomes: ::
-
-        Y[j] = f(...)*F
-        (X[i]*Y[j]) + ..."""
-
-    CONST = -1
-    ITVAR = -2
+    GRP = 0
+    EXP = 1
 
     # Track all expanded expressions
     _expr_handled = []
     # Temporary variables template
-    _expanded_sym = "CONST_EXP_%(expr_id)d_%(i)d"
+    _expanded_sym = "%(loop_dep)s_EXP_%(expr_id)d_%(i)d"
 
-    def __init__(self, stmt, expr_info, hoisted, expr_graph, itvar_occs, itvar_exp):
+    def __init__(self, stmt, expr_info, hoisted, expr_graph):
         self.stmt = stmt
         self.expr_info = expr_info
         self.hoisted = hoisted
         self.expr_graph = expr_graph
-        self.itvar_occs = itvar_occs
-        self.itvar_exp = itvar_exp
 
         # Set counters to create meaningful and unique (temporary) variable names
         try:
@@ -534,123 +541,264 @@ class ExpressionExpander(object):
             self.expr_id = self._expr_handled.index(stmt)
 
         self.expanded_decls = {}
-        self.found_consts = {}
-        self.expanded_syms = []
+        self.cache = {}
 
-    def _make_expansion(self, sym, const, op):
-        """Perform the actual expansion. If there are no dependencies, then
-        the already hoisted expression is expanded. Otherwise, if the symbol to
-        be expanded occurs multiple times in the expression, or it depends on
-        other hoisted symbols that will also be expanded, create a new symbol."""
-        old_expr = self.hoisted[sym.symbol].expr
-        var_decl = self.hoisted[sym.symbol].decl
-        loop = self.hoisted[sym.symbol].loop
-        place = self.hoisted[sym.symbol].place
+    def _hoist(self, expansion, exp, grp):
+        """Expand an hoisted expression. If there are no data dependencies,
+        the hoisted expression is expanded and no new symbols are introduced.
+        Otherwise, (e.g., the symbol to be expanded appears multiple times, or
+        it depends on other hoisted symbols), create a new symbol."""
+        # First, check if any of the symbols in /exp/ have been hoisted
+        try:
+            exp = [s for s in visit(exp)['symbols_dep'].keys()
+                   if s.symbol in self.hoisted and self.should_expand(s)][0]
+        except:
+            # No hoisted symbols in the expanded expression, so return
+            return {}
 
-        # The expanding expression is first assigned to a temporary value in order
-        # to minimize code size and, possibly, work around compiler's inefficiencies
-        # when doing loop-invariant code motion
-        const_str = str(const)
-        if const_str in self.found_consts:
-            const = dcopy(self.found_consts[const_str])
-        elif not isinstance(const, Symbol):
-            const_sym = Symbol(self._expanded_sym % {'expr_id': self.expr_id,
-                                                     'i': len(self.found_consts)})
-            new_const_decl = Decl(self.expr_info.type, dcopy(const_sym), const)
-            # Keep track of the expansion
-            self.expanded_decls[new_const_decl.sym.symbol] = (new_const_decl,
-                                                              plan.LOCAL_VAR)
-            self.expanded_syms.append(new_const_decl.sym)
-            self.found_consts[const_str] = const_sym
-            self.expr_graph.add_dependency(const_sym, const, False)
+        # Aliases
+        hoisted_expr = self.hoisted[exp.symbol].expr
+        hoisted_decl = self.hoisted[exp.symbol].decl
+        hoisted_loop = self.hoisted[exp.symbol].loop
+        hoisted_place = self.hoisted[exp.symbol].place
+        op = expansion.__class__
+
+        # Is the grouped symbol hoistable, or does it break some data dependency?
+        grp_symbols = visit(grp)['symbol_refs'].keys()
+        for l in reversed(self.expr_info.loops):
+            for g in grp_symbols:
+                g_refs = self.info['symbol_refs'][g]
+                g_deps = set(flatten([self.info['symbols_dep'][r[0]] for r in g_refs]))
+                if any([l.dim in g.dim for g in g_deps]):
+                    return {}
+            if l in hoisted_place.children:
+                break
+
+        # The expression used for expansion is assigned to a temporary value in order
+        # to minimize code size
+        if str(grp) in self.cache:
+            grp = dcopy(self.cache[str(grp)])
+        elif not isinstance(grp, Symbol):
+            grp_sym = Symbol(self._expanded_sym % {'loop_dep': 'CONST',
+                                                   'expr_id': self.expr_id,
+                                                   'i': len(self.cache)})
+            grp_decl = Decl(self.expr_info.type, dcopy(grp_sym), grp)
+            grp_decl.scope = LOCAL
+            # Track the new temporary
+            self.expanded_decls[grp_decl.sym.symbol] = grp_decl
+            self.cache[str(grp)] = grp_sym
+            self.expr_graph.add_dependency(grp_sym, grp, False)
             # Update the AST
-            place.children.insert(place.children.index(loop), new_const_decl)
-            const = const_sym
+            insert_at_elem(hoisted_place.children, hoisted_loop, grp_decl)
+            grp = grp_sym
 
         # No dependencies, just perform the expansion
-        if not self.expr_graph.has_dep(sym):
-            old_expr.children[0] = op(Par(old_expr.children[0]), dcopy(const))
-            self.expr_graph.add_dependency(sym, const, False)
-            return
+        if not self.expr_graph.has_dep(exp):
+            hoisted_expr.children[0] = op(Par(hoisted_expr.children[0]), dcopy(grp))
+            self.expr_graph.add_dependency(exp, grp, False)
+            return {exp: exp}
 
-        # Create a new symbol, expression, and declaration
-        new_expr = Par(op(dcopy(sym), const))
-        sym = dcopy(sym)
-        sym.symbol += "_EXP%d" % len(self.expanded_syms)
-        new_node = Assign(sym, new_expr)
-        new_var_decl = dcopy(var_decl)
-        new_var_decl.sym.symbol = sym.symbol
-        # Append new expression and declaration
-        loop.body.append(new_node)
-        place.children.insert(place.children.index(var_decl), new_var_decl)
-        self.expanded_decls[new_var_decl.sym.symbol] = (new_var_decl, plan.LOCAL_VAR)
-        self.expanded_syms.append(new_var_decl.sym)
+        # Create new symbol, expression, and declaration
+        expr = Par(op(dcopy(exp), grp))
+        hoisted_exp = dcopy(exp)
+        hoisted_exp.symbol = self._expanded_sym % {'loop_dep': exp.symbol,
+                                                   'expr_id': self.expr_id,
+                                                   'i': len(self.expanded_decls)}
+        decl = dcopy(hoisted_decl)
+        decl.sym.symbol = hoisted_exp.symbol
+        # Update the AST
+        hoisted_loop.body.append(Assign(hoisted_exp, expr))
+        insert_at_elem(hoisted_place.children, hoisted_decl, decl)
         # Update tracked information
-        self.hoisted[sym.symbol] = (new_expr, new_var_decl, loop, place)
-        self.expr_graph.add_dependency(sym, new_expr, 0)
-        return sym
+        self.expanded_decls[decl.sym.symbol] = decl
+        self.hoisted[hoisted_exp.symbol] = (expr, decl, hoisted_loop, hoisted_place)
+        self.expr_graph.add_dependency(hoisted_exp, expr, 0)
+        return {exp: hoisted_exp}
 
     def _expand(self, node, parent):
         if isinstance(node, Symbol):
-            if not node.rank:
-                return ([node], self.CONST)
-            elif node.rank[-1] not in self.itvar_occs.keys():
-                return ([node], self.CONST)
-            else:
-                return ([node], self.ITVAR)
+            return ([node], self.EXP) if self.should_expand(node) else ([node], self.GRP)
+
         elif isinstance(node, Par):
-            return self._expand(node.children[0], node)
-        elif isinstance(node, FunCall):
-            # Functions are considered potentially expandable
-            return ([node], self.CONST)
-        elif isinstance(node, (Prod, Div)):
-            l_node, l_type = self._expand(node.children[0], node)
-            r_node, r_type = self._expand(node.children[1], node)
-            if l_type == self.ITVAR and r_type == self.ITVAR:
-                # Found an expandable product
-                to_exp = l_node if l_node[0].rank[-1] == self.itvar_exp else r_node
-                return (to_exp, self.ITVAR)
-            elif l_type == self.CONST and r_type == self.CONST:
-                # Product of constants; they are both used for expansion (if any)
-                return ([node], self.CONST)
-            else:
-                # Do the expansion
-                const = l_node[0] if l_type == self.CONST else r_node[0]
-                expandable, exp_node = (l_node, node.children[0]) \
-                    if l_type == self.ITVAR else (r_node, node.children[1])
-                to_replace = {}
-                for sym in expandable:
-                    # Perform the expansion
-                    if sym.symbol not in self.hoisted:
-                        raise RuntimeError("Expansion error: no symbol: %s" % sym.symbol)
-                    replacing = self._make_expansion(sym, const, node.__class__)
-                    if replacing:
-                        to_replace[str(sym)] = replacing
-                ast_replace(node, to_replace, copy=True)
-                # Update the parent node, since an expression has been expanded
-                if parent.children[0] == node:
-                    parent.children[0] = exp_node
-                elif parent.children[1] == node:
-                    parent.children[1] = exp_node
-                else:
-                    raise RuntimeError("Expansion error: wrong parent-child association")
-                # Replace expanded symbols with the newly used symbols
-                expandable = list(set(e if str(e) not in to_replace
-                                      else to_replace[str(e)] for e in expandable))
-                return (expandable, self.ITVAR)
+            return self._expand(node.child, node)
+
+        elif isinstance(node, (Div, FunCall)):
+            return ([node], self.GRP)
+
+        elif isinstance(node, Prod):
+            l_exps, l_type = self._expand(node.left, node)
+            r_exps, r_type = self._expand(node.right, node)
+            if l_type == self.GRP and r_type == self.GRP:
+                return ([node], self.GRP)
+            # At least one child is expandable (marked as EXP), whereas the
+            # other could either be expandable as well or groupable (marked
+            # as GRP): so we can perform the expansion
+            groupable, expandable, expanding_child = r_exps, l_exps, node.left
+            if l_type == self.GRP:
+                groupable, expandable, expanding_child = l_exps, r_exps, node.right
+            to_replace = defaultdict(list)
+            for exp, grp in itertools.product(expandable, groupable):
+                expansion = node.__class__(exp, dcopy(grp))
+                if exp == expanding_child:
+                    # Implies /expandable/ contains just one node, /e/
+                    expanding_child = expansion
+                    break
+                to_replace[exp].append(expansion)
+                self.expansions.append(expansion)
+            to_replace = {k: ast_make_expr(Sum, v) for k, v in to_replace.items()}
+            ast_replace(node, to_replace, mode='symbol')
+            # Update the parent node, since an expression has just been expanded
+            parent.children[parent.children.index(node)] = expanding_child
+            return (to_replace.values() or [expanding_child], self.EXP)
+
         elif isinstance(node, (Sum, Sub)):
-            l_node, l_type = self._expand(node.children[0], node)
-            r_node, r_type = self._expand(node.children[1], node)
-            if l_type == self.ITVAR and r_type == self.ITVAR:
-                return (l_node + r_node, self.ITVAR)
-            elif l_type == self.CONST and r_type == self.CONST:
-                return ([node], self.CONST)
+            l_exps, l_type = self._expand(node.left, node)
+            r_exps, r_type = self._expand(node.right, node)
+            if l_type == self.EXP and r_type == self.EXP and isinstance(node, Sum):
+                return (l_exps + r_exps, self.EXP)
+            elif l_type == self.EXP and r_type == self.EXP and isinstance(node, Sub):
+                return (l_exps + [Neg(r) for r in r_exps], self.EXP)
             else:
-                return (None, self.CONST)
+                return ([node], self.GRP)
+
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
 
-    def expand(self):
+    def expand(self, should_expand):
         """Perform the expansion of the expression rooted in ``self.stmt``.
-        Terms are expanded along the iteration variable ``self.itvar_exp``."""
+        Symbols for which the lambda function ``should_expand`` returns
+        True are expansion candidates."""
+        # Preload and set data structures for expansion
+        self.expansions = []
+        self.should_expand = should_expand
+        self.info = visit(self.expr_info.out_loop)
+
+        # Expand according to the /should_expand/ heuristic
         self._expand(self.stmt.children[1], self.stmt)
+
+        # Now see if some of the expanded terms are groupable at the level
+        # of hoisted expressions
+        to_replace, to_remove = {}, set()
+        for expansion in self.expansions:
+            exp, grp = expansion.left, expansion.right
+            hoisted = self._hoist(expansion, exp, grp)
+            if hoisted:
+                to_replace.update(hoisted)
+                to_remove.add(grp)
+        ast_replace(self.stmt, to_replace, copy=True)
+        ast_remove(self.stmt, to_remove)
+
+
+class ExpressionFactorizer(object):
+
+    class Term():
+
+        def __init__(self, operands, factors=None, op=None):
+            # Example: in the Term /a*(b+c)/, /a/ is an 'operand', /b/ and /c/
+            # are 'factors', and /+/ is the 'op'
+            self.operands = operands
+            self.factors = factors or set()
+            self.op = op
+
+        @property
+        def operands_ast(self):
+            return ast_make_expr(Prod, tuple(self.operands))
+
+        @property
+        def factors_ast(self):
+            return ast_make_expr(self.op, tuple(self.factors))
+
+        @property
+        def generate_ast(self):
+            if len(self.factors) == 0:
+                return self.operands_ast
+            elif len(self.operands) == 0:
+                return self.factors_ast
+            else:
+                return Prod(self.operands_ast, self.factors_ast)
+
+        @staticmethod
+        def process(symbols, should_factorize, op=None):
+            operands = set(s for s in symbols if should_factorize(s))
+            factors = set(s for s in symbols if not should_factorize(s))
+            return ExpressionFactorizer.Term(operands, factors, op)
+
+    def __init__(self, stmt, expr_info):
+        self.stmt = stmt
+        self.expr_info = expr_info
+
+    def _simplify_sum(self, terms):
+        unique_terms = {}
+        for t in terms:
+            unique_terms.setdefault(str(t.generate_ast), list()).append(t)
+
+        for t_repr, t_list in unique_terms.items():
+            occurrences = len(t_list)
+            unique_terms[t_repr] = t_list[0]
+            if occurrences > 1:
+                unique_terms[t_repr].operands.add(Symbol(occurrences))
+
+        terms[:] = unique_terms.values()
+
+    def _analyze_node(self, node):
+
+        def __analyze_node(self, node, root, children):
+            for n in node.children:
+                if n.__class__ == root or isinstance(n, Par):
+                    __analyze_node(self, n, root, children)
+                else:
+                    children.append((n, node))
+
+        children = []
+        __analyze_node(self, node, node.__class__, children)
+        # Nodes are sorted because factorization uses string representation as
+        # key to identify common operands
+        children = zip(*sorted([(str(i[0]), i) for i in children]))[1]
+        return children
+
+    def _factorize(self, node, parent):
+        if isinstance(node, Symbol):
+            return self.Term.process([node], self.should_factorize)
+
+        elif isinstance(node, Par):
+            return self._factorize(node.child, node)
+
+        elif isinstance(node, (FunCall, Div)):
+            return self.Term(set([node]))
+
+        elif isinstance(node, Prod):
+            children = self._analyze_node(node)
+            symbols = [n for n, _ in children if isinstance(n, Symbol)]
+            other_nodes = [(n, p) for n, p in children if n not in symbols]
+            term = self.Term.process(symbols, self.should_factorize, Prod)
+            for n, p in other_nodes:
+                term.operands |= self._factorize(n, p).operands
+            return term
+
+        # The fundamental case is when /node/ is a Sum (or Sub, equivalently).
+        # Here, we try to factorize the terms composing the operation
+        elif isinstance(node, (Sum, Sub)):
+            children = self._analyze_node(node)
+            # First try to factorize within /node/'s children
+            terms = [self._factorize(n, p) for n, p in children]
+            # Then check if it's possible to aggregate operations
+            # Example: replace (a*b)+(a*b) with 2*(a*b)
+            self._simplify_sum(terms)
+            # Finally try to factorize some of the operands composing the operation
+            factorized = {}
+            for t in terms:
+                operand = set([t.operands_ast]) if t.operands else set()
+                factor = set([t.factors_ast]) if t.factors else set()
+                factorized_term = self.Term(operand, factor, node.__class__)
+                _t = factorized.setdefault(str(t.operands_ast), factorized_term)
+                _t.factors |= factor
+            factorized = ast_make_expr(Sum, [t.generate_ast for t in factorized.values()])
+            parent.children[parent.children.index(node)] = factorized
+            return self.Term(set([factorized]))
+
+        else:
+            raise RuntimeError("Factorization error: unknown node: %s" % str(node))
+
+    def factorize(self, should_factorize):
+        self.should_factorize = should_factorize
+        self._factorize(self.stmt.children[1], self.stmt)

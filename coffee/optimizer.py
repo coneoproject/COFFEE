@@ -33,28 +33,28 @@
 
 from base import *
 from utils import *
-from expression import MetaExpr
 from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
-import plan
 
 
 class LoopOptimizer(object):
 
     """Loop optimizer class."""
 
-    def __init__(self, loop, header, kernel_decls):
+    def __init__(self, loop, header, decls, exprs):
         """Initialize the LoopOptimizer.
 
         :param loop: root AST node of a loop nest
         :param header: parent AST node of ``loop``
-        :param kernel_decls: list of Decl objects accessible in ``loop``
+        :param decls: list of Decl objects accessible in ``loop``
+        :param exprs: list of expressions to be optimized
         """
         self.loop = loop
         self.header = header
-        self.kernel_decls = kernel_decls
+        self.decls = decls
+        self.exprs = exprs
 
         # Track nonzero regions accessed in the loop nest
         self.nonzero_info = {}
@@ -62,17 +62,6 @@ class LoopOptimizer(object):
         self.expr_graph = ExpressionGraph()
         # Track hoisted expressions
         self.hoisted = StmtTracker()
-
-        # Inspect the loop nest and collect info
-        info = visit(self.loop, self.header)
-        self.decls, self.exprs = (OrderedDict(), OrderedDict())
-        for decl_str, decl in info['decls'].items():
-            self.decls[decl_str] = (decl, plan.LOCAL_VAR)
-        all_decls = dict([(decl_str, decl_scope[0]) for decl_str, decl_scope
-                          in self.kernel_decls.items() + self.decls.items()])
-        for stmt, expr_info in info['exprs'].items():
-            expr_type = check_type(stmt, all_decls)
-            self.exprs[stmt] = MetaExpr(expr_type, *expr_info)
 
     def rewrite(self, level):
         """Rewrite a compute-intensive expression found in the loop nest so as to
@@ -82,32 +71,26 @@ class LoopOptimizer(object):
         1. Generalized loop-invariant code motion
         2. Factorization of common loop-dependent terms
         3. Expansion of constants over loop-dependent terms
-        4. Zero-valued columns avoidance
-        5. Precomputation of integration-dependent terms
 
-        :param level: The optimization level (0, 1, 2, 3, 4). The higher, the more
+        :param level: The optimization level (0, 1, 2). The higher, the more
                       invasive is the re-writing of the expression, trying to
                       eliminate unnecessary floating point operations.
 
-                      * level == 1: performs "basic" generalized loop-invariant \
-                                    code motion
-                      * level == 2: level 1 + expansion of terms, factorization of \
-                                    basis functions appearing multiple times in the \
-                                    same expression, and finally another run of \
-                                    loop-invariant code motion to move invariant \
-                                    sub-expressions exposed by factorization
-                      * level == 3: level 2 + avoid computing zero-columns
-                      * level == 4: level 3 + precomputation of read-only expressions \
-                                    out of the loop nest
+                      * level == 1: performs generalized loop-invariant code motion only
+                      * level == 2: level 1; terms expansion (to expose factorization \
+                                    opportunities); terms factorization (to expose \
+                                    code motion opportunities); and a final pass of \
+                                    generalized loop-invariant code motion.
         """
-        for stmt_info in self.exprs.items():
-            ew = ExpressionRewriter(stmt_info, self.decls, self.header,
+        ExpressionRewriter.reset()
+        for stmt, expr_info in self.exprs.items():
+            ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             if level > 0:
                 ew.licm()
-            if level > 1:
+            if level > 1 and expr_info.is_tensor:
                 ew.expand()
-                ew.distribute()
+                ew.factorize()
                 ew.licm(merge_and_simplify=True, compact_tmps=True)
 
     def eliminate_zeros(self):
@@ -117,8 +100,9 @@ class LoopOptimizer(object):
         # Search for zero-valued columns and restructure the iteration spaces;
         # the ZeroLoopScheduler analyzes statements "one by one", and changes
         # the iteration spaces of the enclosing loops accordingly.
-        zls = ZeroLoopScheduler(self.exprs, self.expr_graph,
-                                (self.kernel_decls, self.hoisted))
+        if not any([d.nonzero for d in self.decls.values()]):
+            return
+        zls = ZeroLoopScheduler(self.exprs, self.expr_graph, self.decls, self.hoisted)
         zls.reschedule()
         self.nonzero_info = zls.nonzero_info
 
@@ -166,8 +150,8 @@ class LoopOptimizer(object):
             elif isinstance(node, (Assign, Incr)):
                 # Precompute the LHS of the assignment
                 symbol = node.children[0]
-                precomputed[symbol.symbol] = (self.loop.itvar,)
-                new_rank = (self.loop.itvar,) + symbol.rank
+                precomputed[symbol.symbol] = (self.loop.dim,)
+                new_rank = (self.loop.dim,) + symbol.rank
                 symbol.rank = new_rank
                 # Vector-expand the RHS
                 precompute_stmt(node.children[1], precomputed, new_outer_block)
@@ -197,9 +181,6 @@ class LoopOptimizer(object):
         # is triggered
         if is_perfect_loop(self.loop):
             return
-        # TODO: To be removed when supporting RHS optimization
-        if not self.exprs:
-            return
 
         # Precomputation
         do_not_precompute = set()
@@ -210,7 +191,7 @@ class LoopOptimizer(object):
                     do_not_precompute.add(l.loop)
         to_remove, precomputed_block, precomputed_syms = ([], [], {})
         for i in self.loop.body:
-            if i in flatten(self.expr_unit_stride_loops):
+            if i in flatten(self.expr_domain_loops):
                 break
             elif i not in do_not_precompute:
                 precompute_stmt(i, precomputed_syms, precomputed_block)
@@ -224,21 +205,19 @@ class LoopOptimizer(object):
         searching_stmt = []
         for i in precomputed_block:
             if searching_stmt and not isinstance(i, (Assign, Incr)):
-                new_outer_block.append(ast_c_for(searching_stmt, self.loop))
+                new_outer_block.append(ast_make_for(searching_stmt, self.loop))
                 searching_stmt = []
             if isinstance(i, For):
-                new_outer_block.append(ast_c_for([i], self.loop))
+                new_outer_block.append(ast_make_for([i], self.loop))
             elif isinstance(i, (Assign, Incr)):
                 searching_stmt.append(i)
             else:
                 new_outer_block.append(i)
         if searching_stmt:
-            new_outer_block.append(ast_c_for(searching_stmt, self.loop))
+            new_outer_block.append(ast_make_for(searching_stmt, self.loop))
 
         # Update the AST adding the newly precomputed blocks
-        root = self.header.children
-        ofs = root.index(self.loop)
-        self.header.children = root[:ofs] + new_outer_block + root[ofs:]
+        insert_at_elem(self.header.children, self.loop, new_outer_block)
 
         # Update the AST by scalar-expanding the pre-computed accessed variables
         ast_update_rank(self.loop, precomputed_syms)
@@ -246,14 +225,14 @@ class LoopOptimizer(object):
     @property
     def expr_loops(self):
         """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
-        loops that expressions depend on."""
+        loops enclosing expressions."""
         return [expr_info.loops for expr_info in self.exprs.values()]
 
     @property
-    def expr_unit_stride_loops(self):
+    def expr_domain_loops(self):
         """Return ``[(loop1, loop2, ...), ...]``, where a tuple contains all
-        loops along which an expression performs unit-stride memory accesses."""
-        return [expr_info.unit_stride_loops for expr_info in self.exprs.values()]
+        loops representing the domain of the expressions' output tensor."""
+        return [expr_info.domain_loops for expr_info in self.exprs.values()]
 
 
 class CPULoopOptimizer(LoopOptimizer):
@@ -282,7 +261,7 @@ class CPULoopOptimizer(LoopOptimizer):
         for itspace, uf in loop_uf.items():
             new_exprs = {}
             for stmt, expr_info in self.exprs.items():
-                loop = [l for l in expr_info.perfect_loops if l.itvar == itspace]
+                loop = [l for l in expr_info.perfect_loops if l.dim == itspace]
                 if not loop:
                     # Unroll only loops in a perfect loop nest
                     continue
@@ -333,8 +312,8 @@ class CPULoopOptimizer(LoopOptimizer):
         inner_loop = inner_loops(self.loop)[0]
 
         tmp = dcopy(inner_loop)
-        set_itspace(inner_loop, self.loop)
-        set_itspace(self.loop, tmp)
+        itspace_copy(inner_loop, self.loop)
+        itspace_copy(self.loop, tmp)
 
         to_transpose = set()
         if transpose:
@@ -375,14 +354,11 @@ class CPULoopOptimizer(LoopOptimizer):
                 A[i][j] += B[i]*X[j]
         """
 
-        if not self.exprs:
-            return
-
         new_exprs = {}
         elf = ExpressionFissioner(cut)
-        for splittable in self.exprs.items():
+        for stmt, expr_info in self.exprs.items():
             # Split the expression
-            new_exprs.update(elf.fission(splittable, True))
+            new_exprs.update(elf.fission(stmt, expr_info, True))
         self.exprs = new_exprs
 
     def blas(self, library):
@@ -404,22 +380,21 @@ class GPULoopOptimizer(LoopOptimizer):
     def extract(self):
         """Remove the fully-parallel loops of the loop nest. No data dependency
         analysis is performed; rather, these are the loops that are marked with
-        ``pragma pyop2 itspace``."""
+        ``pragma coffee itspace``."""
 
         info = visit(self.loop, self.header)
-        fors_list = info['fors']
         symbols = info['symbols_dep']
 
         itspace_vrs = set()
-        for fors in fors_list:
-            for node, parent in reversed(fors):
-                if '#pragma pyop2 itspace' not in node.pragma:
+        for nest in info['fors']:
+            for loop, parent in reversed(nest):
+                if '#pragma coffee itspace' not in loop.pragma:
                     continue
                 parent = parent.children
-                for n in node.body:
-                    parent.insert(parent.index(node), n)
-                parent.remove(node)
-                itspace_vrs.add(node.itvar)
+                for n in loop.body:
+                    parent.insert(parent.index(loop), n)
+                parent.remove(loop)
+                itspace_vrs.add(loop.dim)
 
         accessed_vrs = [s for s in symbols if any_in(s.rank, itspace_vrs)]
 

@@ -42,7 +42,7 @@ except ImportError:
 import resource
 import operator
 from warnings import warn as warning
-from copy import deepcopy as dcopy
+from copy import deepcopy as dcopy, copy as wcopy
 from collections import defaultdict
 
 from base import *
@@ -59,9 +59,7 @@ def increase_stack(loop_opts):
     size = 0
     for loop_opt in loop_opts:
         decls = loop_opt.decls.values()
-        if decls:
-            size += sum([reduce(operator.mul, d.sym.rank) for d in zip(*decls)[0]
-                         if d.sym.rank])
+        size += sum([reduce(operator.mul, d.sym.rank) for d in decls if d.sym.rank])
 
     if size*double_size > stack_size:
         # Increase the stack size if the kernel's stack size seems to outreach
@@ -93,9 +91,9 @@ def unroll_factors(loops):
     # Then, determine possible unroll factors for all loops
     for l in loops:
         if l in _inner_loops:
-            loops_unroll[l.itvar] = [1]
+            loops_unroll[l.dim] = [1]
         else:
-            loops_unroll[l.itvar] = [i+1 for i in range(l.size) if l.size % (i+1) == 0]
+            loops_unroll[l.dim] = [i+1 for i in range(l.size) if l.size % (i+1) == 0]
 
     return loops_unroll
 
@@ -169,27 +167,88 @@ def postprocess(node):
 #####################################
 
 
-def ast_replace(node, syms_dict, n_replaced={}, copy=False):
-    """Given a dictionary ``syms_dict`` s.t. ``{'syms': to_replace}``, replace the
-    various ``syms`` rooted in ``node`` with ``to_replace``. If ``copy`` is True,
-    a deep copy of the replacing symbol is created."""
+def ast_replace(node, to_replace, copy=False, mode='all'):
+    """Given a dictionary ``to_replace`` s.t. ``{sym: new_sym}``, replace the
+    various ``syms`` rooted in ``node`` with ``new_sym``.
 
-    to_replace = {}
-    for i, n in enumerate(node.children):
-        replacing = syms_dict.get(str(n)) or syms_dict.get(str(Par(n)))
-        if replacing:
-            to_replace[i] = replacing if not copy else dcopy(replacing)
-            if n_replaced:
+    :param copy: if True, a deep copy of the replacing symbol is created.
+    :param mode: either ``all``, in which case ``to_replace``'s keys are turned
+                 into strings, and all of the occurrences are removed from the
+                 AST; or ``symbol``, in which case only (all of) the references
+                 to the symbols given in ``to_replace`` are replaced.
+    """
+
+    if mode == 'all':
+        to_replace = dict(zip([str(s) for s in to_replace.keys()], to_replace.values()))
+        __ast_replace = lambda n: to_replace.get(str(n)) or to_replace.get(str(Par(n)))
+    elif mode == 'symbol':
+        __ast_replace = lambda n: to_replace.get(n)
+    else:
+        raise ValueError
+
+    def _ast_replace(node, to_replace, n_replaced):
+        replaced = {}
+        for i, n in enumerate(node.children):
+            replacing = __ast_replace(n)
+            if replacing:
+                replaced[i] = replacing if not copy else dcopy(replacing)
                 n_replaced[str(replacing)] += 1
-        elif not isinstance(n, Symbol):
-            # Useless to traverse the tree if the child is a symbol
-            ast_replace(n, syms_dict, n_replaced, copy)
-    for i, r in to_replace.items():
-        node.children[i] = r
+            else:
+                _ast_replace(n, to_replace, n_replaced)
+        for i, r in replaced.items():
+            node.children[i] = r
+
+    n_replaced = defaultdict(int)
+    _ast_replace(node, to_replace, n_replaced)
+    return n_replaced
+
+
+def ast_remove(node, to_remove, mode='all'):
+    """Remove the AST Node ``to_remove`` from the tree rooted in ``node``.
+
+    :param mode: either ``all``, in which case ``to_remove`` is turned into a
+                 string (if not a string already) and all of its occurrences are
+                 removed from the AST; or ``symbol``, in which case only (all of)
+                 the references to the provided ``to_remove`` symbol are cut away.
+    """
+
+    def _is_removable(n, tr):
+        n, tr = (str(n), str(tr)) if mode == 'all' else (n, tr)
+        return True if n == tr else False
+
+    def _ast_remove(node, parent, index, tr):
+        if _is_removable(node, tr):
+            return -1
+        if not node.children:
+            return index
+        _may_remove = [_ast_remove(n, node, i, tr) for i, n in enumerate(node.children)]
+        if all([i > -1 for i in _may_remove]):
+            # No removals occurred, so just return
+            return index
+        if all([i == -1 for i in _may_remove]):
+            # Removed all of the children, so I'm also going to remove myself
+            return -1
+        alive = [i for i in _may_remove if i > -1]
+        if len(alive) > 1:
+            # Some children were removed, but not all of them, so no surgery needed
+            return index
+        # One child left, need to reattach it as child of my parent
+        alive = alive[0]
+        parent.children[index] = node.children[alive]
+        return index
+
+    if mode not in ['all', 'symbol']:
+        raise ValueError
+
+    try:
+        for tr in to_remove:
+            _ast_remove(node, None, -1, tr)
+    except TypeError:
+        _ast_remove(node, None, -1, to_remove)
 
 
 def ast_update_ofs(node, ofs):
-    """Given a dictionary ``ofs`` s.t. ``{'itvar': ofs}``, update the various
+    """Given a dictionary ``ofs`` s.t. ``{'dim': ofs}``, update the various
     iteration variables in the symbols rooted in ``node``."""
     if isinstance(node, Symbol):
         new_ofs = []
@@ -233,7 +292,7 @@ def ast_update_id(symbol, name, id):
 ###############################################
 
 
-def ast_c_for(stmts, loop, copy=False):
+def ast_make_for(stmts, loop, copy=False):
     """Create a for loop having the same iteration space as  ``loop`` enclosing
     the statements in  ``stmts``. If ``copy == True``, then new instances of
     ``stmts`` are created"""
@@ -245,16 +304,20 @@ def ast_c_for(stmts, loop, copy=False):
     return new_loop
 
 
-def ast_c_sum(symbols):
-    """Create a ``Sum`` object starting from a symbols list ``symbols``. If
-    the length of ``symbols`` is 1, return ``Symbol(symbols[0])``."""
-    if len(symbols) == 1:
-        return symbols[0]
-    else:
-        return Sum(symbols[0], ast_c_sum(symbols[1:]))
+def ast_make_expr(op, nodes):
+    """Create an ``Expr`` Node of type ``op``, with children given in ``nodes``."""
+
+    def _ast_make_expr(nodes):
+        return nodes[0] if len(nodes) == 1 else op(nodes[0], _ast_make_expr(nodes[1:]))
+
+    try:
+        expr = _ast_make_expr(nodes)
+        return expr if len(nodes) == 1 else Par(expr)
+    except IndexError:
+        return None
 
 
-def ast_c_make_alias(node1, node2):
+def ast_make_alias(node1, node2):
     """Return an object in which the LHS is represented by ``node1`` and the RHS
     by ``node2``, and ``node1`` is an alias for ``node2``; that is, ``node1``
     will point to the same memory region of ``node2``.
@@ -285,7 +348,7 @@ def ast_c_make_alias(node1, node2):
     return node1
 
 
-def ast_c_make_copy(arr1, arr2, itspace, op):
+def ast_make_copy(arr1, arr2, itspace, op):
     """Create an AST performing a copy from ``arr2`` to ``arr1``.
     Return also an ``ArrayInit`` object indicating how ``arr1`` should be
     initialized prior to the copy."""
@@ -312,7 +375,7 @@ def ast_c_make_copy(arr1, arr2, itspace, op):
 ###########################################################
 
 
-def visit(node, parent=None, search=None):
+def visit(node, parent=None, search=None, stop_on_search=False):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
@@ -327,6 +390,8 @@ def visit(node, parent=None, search=None):
     :param node: AST root node of the visit
     :param parent: parent node of ``node``
     :param search: type(s) of AST nodes to be searched and tracked in the visit
+    :param stop_on_search: True if the tree visit should stop going in depth once
+                           found a node being searched, False otherwise.
     """
 
     info = {
@@ -343,25 +408,20 @@ def visit(node, parent=None, search=None):
     _inner_loops = inner_loops(node)
 
     def check_opts(node, parent, fors):
-        """Check if node is associated with some pragmas. If that is the case,
-        it saves info about the node to speed the transformation process up."""
+        """Track high-level information."""
         for pragma in node.pragma:
             opts = pragma.split(" ", 2)
             if len(opts) < 3:
                 return
-            if opts[1] == "pyop2":
-                if opts[2] == "integration":
-                    return
-                delim = opts[2].find('(')
-                opt_name = opts[2][:delim].replace(" ", "")
-                opt_par = opts[2][delim:].replace(" ", "")
-                if opt_name == "assembly":
-                    # Found high-level optimisation
-                    return (parent, fors, (opt_par[1], opt_par[3]))
+            if opts[1] == 'coffee' and opts[2] == 'expression':
+                # Found high-level optimisation
+                return (parent, fors, node.children[0].rank)
 
-    def inspect(node, parent, mode=None):
+    def inspect(node, parent, **kwargs):
         if search and isinstance(node, search):
             info['search'][type(node)].append(node)
+            if stop_on_search:
+                return
 
         if isinstance(node, EmptyStatement):
             pass
@@ -372,7 +432,7 @@ def visit(node, parent=None, search=None):
             for n in node.children:
                 inspect(n, node)
             for n in node.args:
-                inspect(n, node)
+                inspect(n, node, scope=EXTERNAL)
         elif isinstance(node, For):
             info['cur_nest'].append((node, parent))
             inspect(node.children[0], node)
@@ -383,21 +443,18 @@ def visit(node, parent=None, search=None):
                 info['fors'].append(info['cur_nest'])
             info['cur_nest'] = info['cur_nest'][:-1]
         elif isinstance(node, Par):
-            inspect(node.children[0], node)
+            inspect(node.child, node)
         elif isinstance(node, Decl):
+            node.scope = kwargs.get('scope', LOCAL)
             info['decls'][node.sym.symbol] = node
             inspect(node.sym, node)
         elif isinstance(node, Symbol):
             cur_nest = info['cur_nest']
-            # First, assume it's READ-only...
-            access_mode = (READ, parent.__class__)
-            dep = [l for l, _ in cur_nest if l.itvar in node.rank]
-            if mode and mode in [WRITE]:
-                # ...adjust if actually a WRITE...
-                info['symbols_written'][node.symbol] = cur_nest
-                access_mode = (WRITE, parent.__class__)
+            access_mode = (kwargs.get('mode', READ), parent.__class__)
+            dep = [l for l, _ in cur_nest if l.dim in node.rank]
+            if access_mode[0] == WRITE:
+                info['symbols_written'][node.symbol] = wcopy(cur_nest)
             if node.symbol in info['symbols_written']:
-                # ...Finally update loop dependencies if not read-only
                 dep = tuple(l for l, _ in info['symbols_written'][node.symbol])
             info['symbols_dep'][node] = dep
             info['symbols_mode'][node] = access_mode
@@ -412,7 +469,7 @@ def visit(node, parent=None, search=None):
             expr = check_opts(node, parent, info['cur_nest'])
             if expr:
                 info['exprs'][node] = expr
-            inspect(node.children[0], node, WRITE)
+            inspect(node.children[0], node, mode=WRITE)
             for child in node.children[1:]:
                 inspect(child, node)
         else:
@@ -433,7 +490,7 @@ def inner_loops(node):
     def find_iloops(node, loops):
         if isinstance(node, Perfect):
             return False
-        elif isinstance(node, (Block, Root)):
+        elif isinstance(node, (Block, Root, FunDecl)):
             return any([find_iloops(s, loops) for s in node.children])
         elif isinstance(node, For):
             found = find_iloops(node.children[0], loops)
@@ -469,7 +526,7 @@ def is_perfect_loop(loop):
     return check_perfectness(loop)
 
 
-def count_occurrences(node, key=0, read_only=False):
+def count(node, mode='symbol', read_only=False):
     """For each variable ``node``, count how many times it appears as involved
     in some expressions. For example, for the expression: ::
 
@@ -480,24 +537,36 @@ def count_occurrences(node, key=0, read_only=False):
         ``{a: 2, b: 1, c: 1}``
 
     :param node: Root of the visited AST
-    :param key: This can be any value in [0, 1, 2]. The keys used in the returned
-                dictionary can be:
-                * ``key == 0``: a tuple (symbol name, symbol rank)
-                * ``key == 1``: the symbol name
-                * ``key == 2``: a string representation of the symbol
+    :param mode: Accepted values are ['symbol', 'symbol_id', 'symbol_str']. This
+                 parameter drives the counting and impacts the format of the
+                 returned dictionary. In particular, the keys in such dictionary
+                 will be:
+
+                * mode == 'symbol': a tuple (symbol name, symbol rank)
+                * mode == 'symbol_id': the symbol name only (a string). This \
+                                       implies that all symbol occurrences \
+                                       accumulate on the same counter, regardless \
+                                       of iteration spaces. For example, if \
+                                       under ``node`` appear both ``A[0]`` and \
+                                       ``A[i][j]``, ``A`` will be counted twice
+                * mode == 'symbol_str': a string representation of the symbol
+
     :param read_only: True if only variables on the right-hand side of a statement
                       should be counted; False if any appearance should be counted.
     """
+    modes = ['symbol', 'symbol_id', 'symbol_str']
+    if mode == 'symbol':
+        key = lambda n: (n.symbol, n.rank)
+    elif mode == 'symbol_id':
+        key = lambda n: n.symbol
+    elif mode == 'symbol_str':
+        key = lambda n: str(n)
+    else:
+        raise RuntimeError("`Count` function got a wrong mode (valid: %s)" % modes)
 
     def count(node, counter):
         if isinstance(node, Symbol):
-            if key == 0:
-                node = (node.symbol, node.rank)
-            elif key == 1:
-                node = node.symbol
-            elif key == 2:
-                node = str(node)
-            counter[node] += 1
+            counter[key(node)] += 1
         elif isinstance(node, FlatBlock):
             return
         else:
@@ -507,8 +576,6 @@ def count_occurrences(node, key=0, read_only=False):
             for c in to_traverse:
                 count(c, counter)
 
-    if key not in [0, 1, 2]:
-        raise RuntimeError("Count_occurrences got a wrong key (valid: 0, 1, 2)")
     counter = defaultdict(int)
     count(node, counter)
     return counter
@@ -545,11 +612,11 @@ def check_type(stmt, decls):
 def itspace_size_ofs(itspace):
     """Given an ``itspace`` in the form ::
 
-        (('itvar', (bound_a, bound_b), ...)),
+        (('dim', (bound_a, bound_b), ...)),
 
     return ::
 
-        ((('itvar', bound_b - bound_a), ...), (('itvar', bound_a), ...))"""
+        ((('dim', bound_b - bound_a), ...), (('dim', bound_a), ...))"""
     itspace_info = []
     for var, bounds in itspace:
         itspace_info.append(((var, bounds[1] - bounds[0] + 1), (var, bounds[0])))
@@ -589,8 +656,8 @@ def itspace_to_for(itspaces, loop_parent):
     loop_body = inner_block
     for i, itspace in enumerate(itspaces):
         start, stop = itspace
-        loops.insert(0, For(Decl("int", start, c_sym(0)), Less(start, stop),
-                            Incr(start, c_sym(1)), loop_body))
+        loops.insert(0, For(Decl("int", start, Symbol(0)), Less(start, stop),
+                            Incr(start, Symbol(1)), loop_body))
         loop_body = Block([loops[i-1]], open_scope=True)
         loops_parents.append(loop_body)
     # Note that #loops_parents = #loops+1, but by zipping we just cut away the
@@ -611,12 +678,21 @@ def itspace_from_for(loops, mode=0):
 
     If ``mode > 0``, return: ::
 
-        ((for1_itvar, (start1, topiter1)), (for2_itvar, (start2, topiter2):, ...)
+        ((for1_dim, (start1, topiter1)), (for2_dim, (start2, topiter2):, ...)
     """
     if mode == 0:
         return tuple((l.start, l.end, l.increment) for l in loops)
     else:
-        return tuple((l.itvar, (l.start, l.end - 1)) for l in loops)
+        return tuple((l.dim, (l.start, l.end - 1)) for l in loops)
+
+
+def itspace_copy(loop_a, loop_b):
+    """Copy the iteration space of ``loop_b`` into ``loop_a``, while preserving
+    the body."""
+    loop_a.init = dcopy(loop_b.init)
+    loop_a.cond = dcopy(loop_b.cond)
+    loop_a.incr = dcopy(loop_b.incr)
+    loop_a.pragma = dcopy(loop_b.pragma)
 
 
 #############################
@@ -627,19 +703,11 @@ def itspace_from_for(loops, mode=0):
 any_in = lambda a, b: any(i in b for i in a)
 flatten = lambda list: [i for l in list for i in l]
 bind = lambda a, b: [(a, v) for v in b]
-
 od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
 
 
-def set_itspace(loop_a, loop_b):
-    """Copy the iteration space of ``loop_b`` into ``loop_a``, while preserving
-    the body."""
-    loop_a.init = dcopy(loop_b.init)
-    loop_a.cond = dcopy(loop_b.cond)
-    loop_a.incr = dcopy(loop_b.incr)
-    loop_a.pragma = dcopy(loop_b.pragma)
-
-
-def loops_as_dict(loops):
-    loops_itvars = [l.itvar for l in loops]
-    return OrderedDict(zip(loops_itvars, loops))
+def insert_at_elem(_list, elem, new_elem, ofs=0):
+    ofs = _list.index(elem) + ofs
+    new_elem = [new_elem] if not isinstance(new_elem, list) else new_elem
+    for e in reversed(new_elem):
+        _list.insert(ofs, e)

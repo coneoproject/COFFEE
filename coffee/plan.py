@@ -33,26 +33,22 @@
 
 """COFFEE's optimization plan constructor."""
 
+# The following global variables capture the internal state of COFFEE
+compiler = {}
+isa = {}
+blas = {}
+initialized = False
+
 from base import *
 from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
-from vectorizer import LoopVectorizer
+from vectorizer import LoopVectorizer, VectStrategy
 from autotuner import Autotuner
+from expression import MetaExpr
 
 from copy import deepcopy as dcopy
 import itertools
 import operator
-
-# Possibile optimizations
-AUTOVECT = 1        # Auto-vectorization
-V_OP_PADONLY = 2    # Outer-product vectorization + extra operations
-V_OP_PEEL = 3       # Outer-product vectorization + peeling
-V_OP_UAJ = 4        # Outer-product vectorization + unroll-and-jam
-V_OP_UAJ_EXTRA = 5  # Outer-product vectorization + unroll-and-jam + extra iters
-
-# Track the scope of a variable in the kernel
-LOCAL_VAR = 0  # Variable declared and used within the kernel
-PARAM_VAR = 1  # Variable is a kernel parameter (ie declared in the signature)
 
 
 class ASTKernel(object):
@@ -68,47 +64,13 @@ class ASTKernel(object):
         self.ast = ast
         # Used in case of autotuning
         self.include_dirs = include_dirs
-
-        # Track applied optimizations
+        # True if successful conversion to blas operations
         self.blas = False
-        self.ap = False
-
-        # Properties of the kernel operation:
-        # True if the kernel contains sparse arrays
-        self._is_block_sparse = False
-
-    def _visit_ast(self, node, parent=None, fors=None, decls=None):
-        """Return lists of:
-
-        * Declarations within the kernel
-        * Loop nests
-        * Dense Linear Algebra Blocks
-
-        that will be exploited at plan creation time."""
-
-        if isinstance(node, Decl):
-            decls[node.sym.symbol] = (node, LOCAL_VAR)
-            self._is_block_sparse = self._is_block_sparse or node.get_nonzero_columns()
-            return (decls, fors)
-        elif isinstance(node, For):
-            fors.append((node, parent))
-            return (decls, fors)
-        elif isinstance(node, FunDecl):
-            self.fundecl = node
-            for d in node.args:
-                decls[d.sym.symbol] = (d, PARAM_VAR)
-        elif isinstance(node, (FlatBlock, PreprocessNode, Symbol)):
-            return (decls, fors)
-
-        for c in node.children:
-            self._visit_ast(c, node, fors, decls)
-
-        return (decls, fors)
 
     def plan_gpu(self):
         """Transform the kernel suitably for GPU execution.
 
-        Loops decorated with a ``pragma pyop2 itspace`` are hoisted out of
+        Loops decorated with a ``pragma coffee itspace`` are hoisted out of
         the kernel. The list of arguments in the function signature is
         enriched by adding iteration variables of hoisted loops. Size of
         kernel's non-constant tensors modified in hoisted loops are modified
@@ -118,7 +80,7 @@ class ASTKernel(object):
 
             void foo (int A[3]) {
               int B[3] = {...};
-              #pragma pyop2 itspace
+              #pragma coffee itspace
               for (int i = 0; i < 3; i++)
                 A[i] = B[i];
             }
@@ -130,39 +92,50 @@ class ASTKernel(object):
             }
         """
 
-        decls, fors = self._visit_ast(self.ast, fors=[], decls={})
-        loop_opts = [GPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
-        for loop_opt in loop_opts:
-            itspace_vrs, accessed_vrs = loop_opt.extract()
+        # The optimization passes are performed individually (i.e., "locally") for
+        # each function (or "kernel") found in the provided AST
+        kernels = visit(self.ast, search=FunDecl, stop_on_search=True)['search'][FunDecl]
+        for kernel in kernels:
+            info = visit(kernel)
+            decls = info['decls']
+            # Structure up expressions and related metadata
+            nests = defaultdict(OrderedDict)
+            for stmt, expr_info in info['exprs'].items():
+                parent, nest, domain = expr_info
+                if not nest:
+                    continue
+                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, domain)
+                nests[nest[0]].update({stmt: metaexpr})
 
-            for v in accessed_vrs:
-                # Change declaration of non-constant iteration space-dependent
-                # parameters by shrinking the size of the iteration space
-                # dimension to 1
-                decl = set(
-                    [d for d in self.fundecl.args if d.sym.symbol == v.symbol])
-                dsym = decl.pop().sym if len(decl) > 0 else None
-                if dsym and dsym.rank:
-                    dsym.rank = tuple([1 if i in itspace_vrs else j
-                                       for i, j in zip(v.rank, dsym.rank)])
+            loop_opts = [GPULoopOptimizer(l, header, decls) for l, header in nests]
+            for loop_opt in loop_opts:
+                itspace_vrs, accessed_vrs = loop_opt.extract()
 
-                # Remove indices of all iteration space-dependent and
-                # kernel-dependent variables that are accessed in an itspace
-                v.rank = tuple([0 if i in itspace_vrs and dsym else i
-                                for i in v.rank])
+                for v in accessed_vrs:
+                    # Change declaration of non-constant iteration space-dependent
+                    # parameters by shrinking the size of the iteration space
+                    # dimension to 1
+                    decl = set(
+                        [d for d in kernel.args if d.sym.symbol == v.symbol])
+                    dsym = decl.pop().sym if len(decl) > 0 else None
+                    if dsym and dsym.rank:
+                        dsym.rank = tuple([1 if i in itspace_vrs else j
+                                           for i, j in zip(v.rank, dsym.rank)])
 
-            # Add iteration space arguments
-            self.fundecl.args.extend([Decl("int", c_sym("%s" % i))
-                                     for i in itspace_vrs])
+                    # Remove indices of all iteration space-dependent and
+                    # kernel-dependent variables that are accessed in an itspace
+                    v.rank = tuple([0 if i in itspace_vrs and dsym else i
+                                    for i in v.rank])
 
-        # Clean up the kernel removing variable qualifiers like 'static'
-        for decl in decls.values():
-            d, place = decl
-            d.qual = [q for q in d.qual if q not in ['static', 'const']]
+                # Add iteration space arguments
+                kernel.args.extend([Decl("int", Symbol("%s" % i)) for i in itspace_vrs])
 
-        if hasattr(self, 'fundecl'):
-            self.fundecl.pred = [q for q in self.fundecl.pred
-                                 if q not in ['static', 'inline']]
+            # Clean up the kernel removing variable qualifiers like 'static'
+            for decl in decls.values():
+                d, place = decl
+                d.qual = [q for q in d.qual if q not in ['static', 'const']]
+
+            kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
 
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
@@ -182,7 +155,7 @@ class ASTKernel(object):
         autotune_min = [('rewrite', {'rewrite': 1, 'align_pad': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (V_OP_UAJ, 1)})]
+                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 1)})]
         autotune_all = [('base', {}),
                         ('base', {'rewrite': 1, 'align_pad': True}),
                         ('rewrite', {'rewrite': 2, 'align_pad': True}),
@@ -195,11 +168,11 @@ class ASTKernel(object):
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 4}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (V_OP_UAJ, 1)}),
+                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 1)}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (V_OP_UAJ, 2)}),
+                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2)}),
                         ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (V_OP_UAJ, 3)})]
+                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 3)})]
 
         def _generate_cpu_code(self, kernel, **kwargs):
             """Generate kernel code according to the various optimization options."""
@@ -207,47 +180,53 @@ class ASTKernel(object):
             rewrite = kwargs.get('rewrite')
             vectorize = kwargs.get('vectorize')
             v_type, v_param = vectorize if vectorize else (None, None)
-            ap = kwargs.get('align_pad')
+            align_pad = kwargs.get('align_pad')
             split = kwargs.get('split')
-            blas = kwargs.get('blas')
+            toblas = kwargs.get('blas')
             unroll = kwargs.get('unroll')
             permute = kwargs.get('permute')
             precompute = kwargs.get('precompute')
             dead_ops_elimination = kwargs.get('dead_ops_elimination')
 
             # Combining certain optimizations is meaningless/forbidden.
-            if unroll and blas:
+            if unroll and toblas:
                 raise RuntimeError("Cannot unroll and then convert to BLAS")
-            if permute and blas:
+            if permute and toblas:
                 raise RuntimeError("Cannot permute and then convert to BLAS")
             if permute and not precompute:
                 raise RuntimeError("Cannot permute without precomputation")
             if rewrite == 3 and split:
                 raise RuntimeError("Split forbidden when avoiding zero-columns")
-            if rewrite == 3 and blas:
+            if rewrite == 3 and toblas:
                 raise RuntimeError("BLAS forbidden when avoiding zero-columns")
-            if rewrite == 3 and v_type and v_type != AUTOVECT:
+            if rewrite == 3 and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Zeros removal only supports auto-vectorization")
-            if unroll and v_type and v_type != AUTOVECT:
+            if unroll and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Outer-product vectorization needs no unroll")
-            if permute and v_type and v_type != AUTOVECT:
+            if permute and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Outer-product vectorization needs no permute")
 
-            decls, fors = self._visit_ast(kernel, fors=[], decls={})
-            loop_opts = [CPULoopOptimizer(l, pre_l, decls) for l, pre_l in fors]
-            for loop_opt in loop_opts:
-                # Only optimize compute-intensive expressions
-                if not loop_opt.exprs:
+            info = visit(kernel)
+            decls = info['decls']
+            # Structure up expressions and related metadata
+            nests = defaultdict(OrderedDict)
+            for stmt, expr_info in info['exprs'].items():
+                parent, nest, domain = expr_info
+                if not nest:
                     continue
+                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, domain)
+                nests[nest[0]].update({stmt: metaexpr})
 
+            loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
+                         for (loop, header), exprs in nests.items()]
+            for loop_opt in loop_opts:
                 # 0) Expression Rewriting
                 if rewrite:
                     loop_opt.rewrite(rewrite)
 
                 # 1) Dead-operations elimination
                 if dead_ops_elimination:
-                    if self._is_block_sparse:
-                        loop_opt.eliminate_zeros()
+                    loop_opt.eliminate_zeros()
 
                 # 2) Splitting
                 if split:
@@ -266,40 +245,36 @@ class ASTKernel(object):
                     loop_opt.unroll(dict(unroll))
 
                 # 4) Vectorization
-                if initialized:
-                    decls = dict(decls.items() + loop_opt.decls.items())
-                    vect = LoopVectorizer(loop_opt, intrinsics, compiler)
-                    if ap:
+                if initialized and loop_opt.expr_domain_loops[0]:
+                    vect = LoopVectorizer(loop_opt)
+                    if align_pad:
                         # Data alignment
-                        vect.alignment(decls)
+                        vect.alignment()
                         # Padding
-                        if not blas:
-                            vect.padding(decls)
-                            self.ap = True
-                    if v_type and v_type != AUTOVECT:
-                        if intrinsics['inst_set'] == 'SSE':
+                        if not toblas:
+                            vect.padding()
+                    if v_type and v_type != VectStrategy.AUTO:
+                        if isa['inst_set'] == 'SSE':
                             raise RuntimeError("SSE vectorization not supported")
                         # Specialize vectorization for the memory access pattern
                         # of the expression
                         vect.specialize(v_type, v_param)
 
                 # 5) Conversion into blas calls
-                if blas:
-                    self.blas = loop_opt.blas(blas)
+                if toblas:
+                    self.blas = loop_opt.blas(toblas)
 
             # Ensure kernel is always marked static inline
-            if hasattr(self, 'fundecl'):
-                # Remove either or both of static and inline (so that we get the order right)
-                self.fundecl.pred = [q for q in self.fundecl.pred
-                                     if q not in ['static', 'inline']]
-                self.fundecl.pred.insert(0, 'inline')
-                self.fundecl.pred.insert(0, 'static')
+            # Remove either or both of static and inline (so that we get the order right)
+            kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
+            kernel.pred.insert(0, 'inline')
+            kernel.pred.insert(0, 'static')
 
             return loop_opts
 
-        kernels = visit(self.ast, None, search=FunDecl)['search'][FunDecl]
+        kernels = visit(self.ast, search=FunDecl, stop_on_search=True)['search'][FunDecl]
         if opts.get('autotune'):
-            if not (compiler and intrinsics):
+            if not (compiler and isa):
                 raise RuntimeError("Must initialize COFFEE prior to autotuning")
             if len(kernels) > 1:
                 raise RuntimeError("Cannot autotune if multiple functions are present")
@@ -309,8 +284,8 @@ class ASTKernel(object):
             if opts['autotune'] == 'minimal':
                 resolution = 1
                 autotune_configs = autotune_min
-            elif blas_interface:
-                library = ('blas', blas_interface['name'])
+            elif blas:
+                library = ('blas', blas['name'])
                 autotune_configs.append(('blas', dict(blas_config.items() + [library])))
             variants = []
             autotune_configs_uf = []
@@ -361,8 +336,7 @@ class ASTKernel(object):
 
             if tunable:
                 # Determine the fastest kernel implementation
-                autotuner = Autotuner(variants, self.include_dirs, compiler,
-                                      intrinsics, blas_interface)
+                autotuner = Autotuner(variants, self.include_dirs, compiler, isa, blas)
                 fastest = autotuner.tune(resolution)
                 all_params = autotune_configs + autotune_configs_uf
                 name, params = all_params[fastest]
@@ -376,14 +350,14 @@ class ASTKernel(object):
         elif opts.get('blas'):
             # Conversion into blas requires a specific set of transformations
             # in order to identify and extract matrix multiplies.
-            if not blas_interface:
+            if not blas:
                 raise RuntimeError("Must set PYOP2_BLAS to convert into BLAS calls")
-            params = dict(blas_config.items() + [('blas', blas_interface['name'])])
+            params = dict(blas_config.items() + [('blas', blas['name'])])
         elif opts.get('Ofast'):
             params = {
                 'rewrite': 2,
                 'align_pad': True,
-                'vectorize': (V_OP_UAJ, 2),
+                'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2),
                 'precompute': 1
             }
         elif opts.get('O3'):
@@ -424,26 +398,20 @@ class ASTKernel(object):
         """Generate a string representation of the AST."""
         return self.ast.gencode()
 
-# These global variables capture the internal state of COFFEE
-intrinsics = {}
-compiler = {}
-blas_interface = {}
-initialized = False
 
-
-def init_coffee(isa, comp, blas):
+def init_coffee(_isa, _compiler, _blas):
     """Initialize COFFEE."""
 
-    global intrinsics, compiler, blas_interface, initialized
-    intrinsics = _init_isa(isa)
-    compiler = _init_compiler(comp)
-    blas_interface = _init_blas(blas)
-    if intrinsics and compiler:
+    global isa, compiler, blas, initialized
+    isa = _init_isa(_isa)
+    compiler = _init_compiler(_compiler)
+    blas = _init_blas(_blas)
+    if isa and compiler:
         initialized = True
 
 
 def _init_isa(isa):
-    """Set the intrinsics instruction set. """
+    """Set the instruction set architecture (isa)."""
 
     if isa == 'sse':
         return {

@@ -34,7 +34,12 @@
 """This file contains the hierarchy of classes that implement a kernel's
 Abstract Syntax Tree (AST)."""
 
-
+try:
+    from collections import OrderedDict
+# OrderedDict was added in Python 2.7. Earlier versions can use ordereddict
+# from PyPI
+except ImportError:
+    from ordereddict import OrderedDict
 from copy import deepcopy as dcopy
 
 # Utilities for simple exprs and commands
@@ -145,8 +150,19 @@ class BinExpr(Expr):
         by the classic ``deepcopy`` method, is ignored."""
         return self.__class__(dcopy(self.children[0]), dcopy(self.children[1]))
 
-    def gencode(self, not_scope=True):
-        return (" "+self.op+" ").join([n.gencode(not_scope) for n in self.children])
+    def gencode(self, not_scope=True, parent=None):
+        subtree = (" "+self.op+" ").join([n.gencode(not_scope, self) for n in self.children])
+        if parent and not isinstance(parent, (Par, self.__class__)):
+            return wrap(subtree)
+        return subtree
+
+    @property
+    def left(self):
+        return self.children[0]
+
+    @property
+    def right(self):
+        return self.children[1]
 
 
 class UnaryExpr(Expr):
@@ -163,12 +179,16 @@ class UnaryExpr(Expr):
         by the classic ``deepcopy`` method, is ignored."""
         return self.__class__(dcopy(self.children[0]))
 
+    @property
+    def child(self):
+        return self.children[0]
+
 
 class Neg(UnaryExpr):
 
     "Unary negation of an expression"
-    def gencode(self, not_scope=False):
-        return "-%s" % wrap(self.children[0].gencode()) + semicolon(not_scope)
+    def gencode(self, not_scope=False, parent=None):
+        return "-%s" % wrap(self.child.gencode(not_scope, self)) + semicolon(not_scope)
 
 
 class ArrayInit(Expr):
@@ -184,7 +204,7 @@ class ArrayInit(Expr):
     def __init__(self, values):
         self.values = values
 
-    def gencode(self):
+    def gencode(self, not_scope=True, parent=None):
         return self.values
 
 
@@ -204,7 +224,7 @@ class ColSparseArrayInit(ArrayInit):
         self.nonzero_bounds = nonzero_bounds
         self.numpy_values = numpy_values
 
-    def gencode(self):
+    def gencode(self, not_scope=True, parent=None):
         return self.values
 
 
@@ -212,8 +232,8 @@ class Par(UnaryExpr):
 
     """Parenthesis object."""
 
-    def gencode(self, not_scope=True):
-        return wrap(self.children[0].gencode(not_scope))
+    def gencode(self, not_scope=True, parent=None):
+        return wrap(self.children[0].gencode(not_scope, self))
 
 
 class Sum(BinExpr):
@@ -303,8 +323,8 @@ class Not(UnaryExpr):
     def __init__(self, expr):
         super(Not, self).__init__(expr)
 
-    def gencode(self, not_scope=True):
-        return "!%s" % self.children[0].gencode(not_scope)
+    def gencode(self, not_scope=True, parent=None):
+        return "!%s" % self.child.gencode(not_scope, self)
 
 
 class FunCall(Expr, Perfect):
@@ -315,7 +335,7 @@ class FunCall(Expr, Perfect):
         super(Expr, self).__init__(args)
         self.funcall = as_symbol(function_name)
 
-    def gencode(self, not_scope=False):
+    def gencode(self, not_scope=False, parent=None):
         return self.funcall.gencode() + \
             wrap(", ".join([n.gencode(True) for n in self.children])) + \
             semicolon(not_scope)
@@ -327,8 +347,8 @@ class Ternary(Expr):
     def __init__(self, expr, true_stmt, false_stmt):
         super(Ternary, self).__init__([expr, true_stmt, false_stmt])
 
-    def gencode(self, not_scope=True):
-        return ternary(*[c.gencode(True) for c in self.children]) + \
+    def gencode(self, not_scope=True, parent=None):
+        return ternary(*[c.gencode(True, self) for c in self.children]) + \
             semicolon(not_scope)
 
 
@@ -350,7 +370,7 @@ class Symbol(Expr):
         self.rank = rank
         self.offset = offset
 
-    def gencode(self, not_scope=True):
+    def gencode(self, not_scope=True, parent=None):
         points = ""
         if not self.offset:
             for p in self.rank:
@@ -384,7 +404,7 @@ class AVXSub(Sub):
 
     def gencode(self, not_scope=True):
         op1, op2 = self.children
-        return "_mm256_add_pd (%s, %s)" % (op1.gencode(), op2.gencode())
+        return "_mm256_sub_pd (%s, %s)" % (op1.gencode(), op2.gencode())
 
 
 class AVXProd(Prod):
@@ -560,18 +580,31 @@ class Decl(Statement, Perfect):
 
     @property
     def is_const(self):
-        """Return True if the declaration is a constant."""
+        """Return True if the declared symbol is constant"""
         return 'const' in self.qual
 
-    def gencode(self, not_scope=False):
-        if isinstance(self.init, EmptyStatement):
-            return decl(spacer(self.qual), self.typ, self.sym.gencode(),
-                        spacer(self.attr)) + semicolon(not_scope)
-        else:
-            return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                             spacer(self.attr), self.init.gencode()) + semicolon(not_scope)
+    @property
+    def is_static(self):
+        """Return True if the declared symbol is static"""
+        return 'static' in self.qual
 
-    def get_nonzero_columns(self):
+    @property
+    def is_static_const(self):
+        """Return True if the declared symbol is static and constant"""
+        return self.is_static and self.is_const
+
+    @property
+    def scope(self):
+        if not hasattr(self, '_scope'):
+            raise RuntimeError("Declaration scope available only after a tree visit")
+        return self._scope
+
+    @scope.setter
+    def scope(self, val):
+        self._scope = val
+
+    @property
+    def nonzero(self):
         """If the declared array:
 
         * is a bi-dimensional array,
@@ -584,6 +617,14 @@ class Decl(Statement, Perfect):
             return self.init.nonzero_bounds
         else:
             return ()
+
+    def gencode(self, not_scope=False):
+        if isinstance(self.init, EmptyStatement):
+            return decl(spacer(self.qual), self.typ, self.sym.gencode(),
+                        spacer(self.attr)) + semicolon(not_scope)
+        else:
+            return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
+                             spacer(self.attr), self.init.gencode()) + semicolon(not_scope)
 
 
 class Block(Statement):
@@ -626,7 +667,7 @@ class For(Statement):
         self.incr = incr
 
     @property
-    def itvar(self):
+    def dim(self):
         if isinstance(self.init, Decl):
             return self.init.sym.symbol
         elif isinstance(self.init, Assign):
@@ -655,6 +696,11 @@ class For(Statement):
     @body.setter
     def body(self, new_body):
         self.children[0].children = new_body
+
+    @staticmethod
+    def fromloops(loops):
+        loops_dims = [l.dim for l in loops]
+        return OrderedDict(zip(loops_dims, loops))
 
     def gencode(self, not_scope=False):
         return "\n".join(self.pragma) + "\n" + for_loop(self.init.gencode(True),
@@ -924,10 +970,10 @@ def c_sym(const):
     return Symbol(const, ())
 
 
-def c_for(var, to, code, pragma="#pragma pyop2 itspace", init=None):
-    i = c_sym(var)
-    init = init or c_sym(0)
-    end = c_sym(to)
+def c_for(var, to, code, pragma="#pragma coffee itspace", init=None):
+    i = Symbol(var)
+    init = init or Symbol(0)
+    end = Symbol(to)
     if type(code) == str:
         code = FlatBlock(code)
     elif type(code) == list:
@@ -935,7 +981,7 @@ def c_for(var, to, code, pragma="#pragma pyop2 itspace", init=None):
     elif type(code) is not Block:
         code = Block([code], open_scope=True)
     return Block(
-        [For(Decl("int", i, init), Less(i, end), Incr(i, c_sym(1)),
+        [For(Decl("int", i, init), Less(i, end), Incr(i, Symbol(1)),
              code, pragma)], open_scope=True)
 
 
@@ -954,10 +1000,9 @@ class Access(object):
     _modes = ["READ", "WRITE", "RW", "INC", "DEC", "IMUL", "IDIV"]
 
     def __init__(self, mode):
+        if mode not in Access._modes:
+            raise TypeError
         self._mode = mode
-
-    def __eq__(self, other):
-        return self._mode == other._mode
 
 
 READ = Access("READ")
@@ -967,3 +1012,25 @@ INC = Access("INC")
 DEC = Access("DEC")
 IMUL = Access("IMUL")
 IDIV = Access("IDIV")
+
+
+# Scope of a declaration ##
+
+class Scope(object):
+
+    """An ``EXTERNAL`` scope means the /Decl/ is an argument of a kernel (i.e.,
+    when it appears in the list of declarations of a /FunDecl/ object). Otherwise,
+    a ``LOCAL`` scope indicates the /Decl/ is within the body of a kernel."""
+
+    _scopes = ["LOCAL", "EXTERNAL"]
+
+    def __init__(self, scope):
+        if scope not in Scope._scopes:
+            raise TypeError
+        self._scope = scope
+
+    def __str__(self):
+        return self._scope
+
+LOCAL = Scope("LOCAL")
+EXTERNAL = Scope("EXTERNAL")

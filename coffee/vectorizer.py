@@ -31,47 +31,65 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""COFFEE's SIMD vectorizer"""
-
 from math import ceil
 from copy import deepcopy as dcopy
 from collections import defaultdict
 
 from base import *
 from utils import *
-import plan as ap
+import plan
+
+
+class VectStrategy():
+
+    """Supported vectorization modes."""
+
+    """Generate scalar code suitable to compiler auto-vectorization"""
+    AUTO = 1
+
+    """Specialized (intrinsics-based) vectorization using padding"""
+    SPEC_PADD = 2
+
+    """Specialized (intrinsics-based) vectorization using peel loop"""
+    SPEC_PEEL = 3
+
+    """Specialized (intrinsics-based) vectorization composed with unroll-and-jam
+    of outer loops, padding (to enforce data alignment), and peeling of padded
+    iterations"""
+    SPEC_UAJ_PADD = 4
+
+    """Specialized (intrinsics-based) vectorization composed with unroll-and-jam
+    of outer loops and padding (to enforce data alignment)"""
+    SPEC_UAJ_PADD_FULL = 5
 
 
 class LoopVectorizer(object):
 
-    """ Expression vectorizer class."""
-
-    def __init__(self, loop_opt, intrinsics, compiler):
+    def __init__(self, loop_opt):
         self.loop_opt = loop_opt
-        self.intr = intrinsics
-        self.comp = compiler
 
-    def alignment(self, decl_scope):
+    def alignment(self):
         """Align all data structures accessed in the loop nest to the size in
         bytes of the vector length."""
-        for decl, scope in decl_scope.values():
-            if decl.sym.rank and scope != ap.PARAM_VAR:
-                decl.attr.append(self.comp["align"](self.intr["alignment"]))
+        for decl in self.loop_opt.decls.values():
+            if decl.sym.rank and decl.scope != EXTERNAL:
+                decl.attr.append(plan.compiler["align"](plan.isa["alignment"]))
 
-    def padding(self, decl_scope):
+    def padding(self):
         """Pad all data structures accessed in the loop nest to the nearest
         multiple of the vector length. Adjust trip counts and bounds of all
         innermost loops where padded arrays are written to. Since padding
         enforces data alignment of multi-dimensional arrays, add suitable
         pragmas to inner loops to inform the backend compiler about this
         property."""
-        info = visit(self.loop_opt.header, None, search=LinAlg)
+        # Aliases
+        decls = self.loop_opt.decls
+        header = self.loop_opt.header
+        info = visit(header, search=LinAlg)
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']
         to_invert = info['search'][Invert][0] if info['search'][Invert] else None
-        used_syms = [s.symbol for s in symbols_mode.keys()]
-        decl_scope = {s: ds for s, ds in decl_scope.items() if s in used_syms}
 
         # 0) Under some circumstances, do not apply padding
         # A- Loop increments must be equal to 1, because at the moment the
@@ -109,11 +127,11 @@ class LoopVectorizer(object):
         #       A[i][j] = _A[i][j]
         #
         # Also, extra care is taken in presence of offsets (e.g. A[i+3][j+3] ...)
-        for decl, scope in decl_scope.values():
+        for decl in decls.values():
             if not decl.sym.rank:
                 continue
             p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
-            if scope == ap.LOCAL_VAR:
+            if decl.scope == LOCAL:
                 if p_rank == decl.sym.rank:
                     continue
                 decl.sym.rank = p_rank
@@ -134,7 +152,7 @@ class LoopVectorizer(object):
                 # ... the presence of offsets
                 ofs = s.offset[-1][1] if s.offset else 0
                 # ... the iteration space
-                s_itspace = [l for l in symbols_dep[s] if l.itvar in s.rank]
+                s_itspace = [l for l in symbols_dep[s] if l.dim in s.rank]
                 s_itspace = tuple((s, e) for s, e, _ in itspace_from_for(s_itspace))
                 s_p_itspace = s_itspace[p_dim]
                 # ... combining the last two, the actual dataspace
@@ -147,7 +165,8 @@ class LoopVectorizer(object):
             #    vectorization, so we create it and insert it at the top of the AST
             buffer = Decl(decl.typ, Symbol('_%s' % decl.sym.symbol, buf_rank),
                           ArrayInit('%s0.0%s' % ('{'*len(buf_rank), '}'*len(buf_rank))))
-            self.loop_opt.header.children.insert(0, buffer)
+            buffer.scope = LOCAL
+            header.children.insert(0, buffer)
             # C- Replace all FunDecl argument occurrences in the body with the buffer
             itspace_binding = defaultdict(list)
             for (s_itspace, offset), syms in dataspace_syms.items():
@@ -166,8 +185,8 @@ class LoopVectorizer(object):
             for s_p_itspace, binding in itspace_binding.items():
                 s_refs, b_refs = zip(*binding)
                 if first[0] == READ:
-                    copy, init = ast_c_make_copy(b_refs, s_refs, s_p_itspace, Assign)
-                    self.loop_opt.header.children.insert(0, copy.children[0])
+                    copy, init = ast_make_copy(b_refs, s_refs, s_p_itspace, Assign)
+                    header.children.insert(0, copy.children[0])
                 if last[0] == WRITE:
                     # If extra information (i.e., a pragma) is present telling that
                     # the argument does not need to be incremented because it does
@@ -179,48 +198,49 @@ class LoopVectorizer(object):
                     if ext_acc_mode and ext_acc_mode[0] == WRITE and \
                             len(itspace_binding) == 1:
                         op = Assign
-                    copy, init = ast_c_make_copy(s_refs, b_refs, s_p_itspace, op)
+                    copy, init = ast_make_copy(s_refs, b_refs, s_p_itspace, op)
                     if to_invert:
-                        to_invert = self.loop_opt.header.children.index(to_invert)
-                        self.loop_opt.header.children.insert(to_invert, copy.children[0])
+                        insert_at_elem(header.children, to_invert, copy.children[0])
                     else:
-                        self.loop_opt.header.children.append(copy.children[0])
+                        header.children.append(copy.children[0])
             # Update the global data structure
-            decl_scope[buffer.sym.symbol] = (buffer, ap.LOCAL_VAR)
+            decls[buffer.sym.symbol] = buffer
 
-        # 2) Adjust the bounds (i.e. /start/ and /end/ points) of innermost loops
-        # such that memory accesses get aligned to the vector length. Safe iff:
-        iloops = inner_loops(self.loop_opt.header)
+        # 2) Try adjusting the bounds (i.e. /start/ and /end/ points) of innermost
+        # loops such that memory accesses get aligned to the vector length
+        iloops = inner_loops(header)
         adjusted_loops = []
         for l in iloops:
             adjust = True
-            # Condition A- all lvalues must have as fastest varying dimension the
-            # one dictated by the innermost loop
             for stmt in l.body:
                 sym = stmt.children[0]
-                if not (sym.rank and sym.rank[-1] == l.itvar):
+                # Cond A- all lvalues must have as fastest varying dimension the
+                # one dictated by the innermost loop
+                if not (sym.rank and sym.rank[-1] == l.dim):
                     adjust = False
                     break
-            # Condition B- the extra iterations induced by bounds adjustment must
-            # not alter the result. This is the case if they fall either in a padded
+                # Cond B- all lvalues must be paddable; that is, they cannot be
+                # kernel parameters
+                if sym.symbol in decls and decls[sym.symbol].scope == EXTERNAL:
+                    adjust = False
+                    break
+            # Cond C- the extra iterations induced by bounds adjustment must not
+            # alter the result. This is the case if they fall either in a padded
             # region or in a zero-valued region
-            nonzero_info_l = self.loop_opt.nonzero_info.get(l, [])
-            # If nonzero_info_l is None, the whole iteration space is traversed;
-            # this means that there is no trace of offsets in the statements
-            # enclosed by /l/, so bound adjustment is definitely safe.
             alignable_stmts = []
             read_regions = defaultdict(list)
+            nonzero_info_l = self.loop_opt.nonzero_info.get(l, [])
             for stmt, ofs in nonzero_info_l:
                 expr = dcopy(stmt.children[1])
-                ast_update_ofs(expr, dict([(l.itvar, 0)]))
-                l_ofs = dict(ofs)[l.itvar]
+                ast_update_ofs(expr, dict([(l.dim, 0)]))
+                l_ofs = dict(ofs)[l.dim]
                 # The statement can be aligned only if the new start and end
                 # points cover the whole iteration space. Also, the padded
                 # region cannot be exceeded.
                 start_point = vect_rounddown(l_ofs)
                 end_point = start_point + vect_roundup(l.end)  # == tot iters
                 if end_point >= l_ofs + l.end:
-                    alignable_stmts.append((stmt, dict([(l.itvar, start_point)])))
+                    alignable_stmts.append((stmt, dict([(l.dim, start_point)])))
                 read_regions[str(expr)].append((start_point, end_point))
             for rr in read_regions.values():
                 if len(itspace_merge(rr)) < len(rr):
@@ -239,16 +259,16 @@ class LoopVectorizer(object):
                 if len(alignable_stmts) == len(nonzero_info_l):
                     adjusted_loops.append(l)
                 # Successful bound adjustment allows forcing simdization
-                if self.comp.get('force_simdization'):
-                    l.pragma.add(self.comp['force_simdization'])
+                if plan.compiler.get('force_simdization'):
+                    l.pragma.add(plan.compiler['force_simdization'])
 
         # 3) Adding pragma alignment is safe iff:
         # A- the start point of the loop is a multiple of the vector length
         # B- the size of the loop is a multiple of the vector length (note that
         #    at this point, we have already checked the loop increment is 1)
         for l in adjusted_loops:
-            if not (l.start % self.intr["dp_reg"] and l.size % self.intr["dp_reg"]):
-                l.pragma.add(self.comp["decl_aligned_for"])
+            if not (l.start % plan.isa["dp_reg"] and l.size % plan.isa["dp_reg"]):
+                l.pragma.add(plan.compiler["decl_aligned_for"])
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar
@@ -261,105 +281,91 @@ class LoopVectorizer(object):
 
         * AVX
 
-        The parameter ``opts`` can be used to drive the transformation process:
-
-        * ``opts = V_OP_PADONLY`` : no peeling, just use padding
-        * ``opts = V_OP_PEEL`` : peeling for autovectorisation
-        * ``opts = V_OP_UAJ`` : set unroll_and_jam as specified by ``factor``
-        * ``opts = V_OP_UAJ_EXTRA`` : as above, but extra iters avoid remainder
-          loop factor is an additional parameter to specify things like
-          unroll-and-jam factor. Note that factor is just a suggestion to the
-          compiler, which can freely decide to use a higher or lower value.
+        The parameter ``opts`` can be used to drive the transformation process by
+        specifying one of the vectorization strategies in :class:`VectStrategy`.
         """
         layout = None
         for stmt, expr_info in self.loop_opt.exprs.items():
+            if expr_info.dimension != 2:
+                continue
             parent = expr_info.parent
-            unit_stride_loops, unit_stride_loops_parents = \
-                zip(*expr_info.unit_stride_loops_info)
+            domain_loops = expr_info.domain_loops
+            domain_loops_parents = expr_info.domain_loops_parents
 
             # Check if outer-product vectorization is actually doable
-            vect_len = self.intr["dp_reg"]
-            rows = unit_stride_loops[0].size
+            vect_len = plan.isa["dp_reg"]
+            rows = domain_loops[0].size
             if rows < vect_len:
                 continue
-            if len(unit_stride_loops) != 2:
-                # There must be exactly two unit-strided dimensions
-                continue
 
-            op = OuterProduct(stmt, unit_stride_loops, self.intr, self.loop_opt)
+            op = OuterProduct(stmt, domain_loops, 'STORE')
 
             # Vectorisation
-            unroll_factor = factor if opts in [ap.V_OP_UAJ, ap.V_OP_UAJ_EXTRA] else 1
+            vs = VectStrategy
+            unroll_factor = factor if opts in [vs.SPEC_UAJ_PADD, vs.SPEC_UAJ_PADD_FULL] else 1
             rows_per_it = vect_len*unroll_factor
-            if opts == ap.V_OP_UAJ:
+            if opts == vs.SPEC_UAJ_PADD:
                 if rows_per_it <= rows:
                     body, layout = op.generate(rows_per_it)
                 else:
                     # Unroll factor too big
                     body, layout = op.generate(vect_len)
-            elif opts == ap.V_OP_UAJ_EXTRA:
+            elif opts == SPEC_UAJ_PADD_FULL:
                 if rows <= rows_per_it or vect_roundup(rows) % rows_per_it > 0:
                     # Cannot unroll too much
                     body, layout = op.generate(vect_len)
                 else:
                     body, layout = op.generate(rows_per_it)
-            elif opts in [ap.V_OP_PADONLY, ap.V_OP_PEEL]:
+            elif opts in [vs.SPEC_PADD, vs.SPEC_PEEL]:
                 body, layout = op.generate(vect_len)
             else:
                 raise RuntimeError("Don't know how to vectorize option %s" % opts)
 
             # Construct the remainder loop
-            if opts != ap.V_OP_UAJ_EXTRA and rows > rows_per_it and rows % rows_per_it > 0:
-                # peel out
-                loop_peel = dcopy(unit_stride_loops)
-                # Adjust main, layout and remainder loops bound and trip
-                bound = unit_stride_loops[0].cond.children[1].symbol
+            if opts != vs.SPEC_UAJ_PADD_FULL and rows > rows_per_it and rows % rows_per_it > 0:
+                # Adjust bounds and increments of the main, layout and remainder loops
+                domain_outerloop = domain_loops[0]
+                peel_loop = dcopy(domain_loops)
+                bound = domain_outerloop.cond.children[1].symbol
                 bound -= bound % rows_per_it
-                unit_stride_loops[0].cond.children[1] = c_sym(bound)
-                layout.cond.children[1] = c_sym(bound)
-                loop_peel[0].init.init = c_sym(bound)
-                loop_peel[0].incr.children[1] = c_sym(1)
-                loop_peel[1].incr.children[1] = c_sym(1)
+                domain_outerloop.cond.children[1] = Symbol(bound)
+                layout.cond.children[1] = Symbol(bound)
+                peel_loop[0].init.init = Symbol(bound)
+                peel_loop[0].incr.children[1] = Symbol(1)
+                peel_loop[1].incr.children[1] = Symbol(1)
                 # Append peeling loop after the main loop
-                unit_stride_outerparent = unit_stride_loops_parents[0]
-                ofs = unit_stride_outerparent.children.index(unit_stride_loops[0])
-                unit_stride_outerparent.children.insert(ofs+1, loop_peel[0])
+                domain_outerparent = domain_loops_parents[0].children
+                insert_at_elem(domain_outerparent, domain_outerloop, peel_loop[0], 1)
 
-            # Insert the vectorized code at the right point in the loop nest
-            blk = parent.children
-            ofs = blk.index(stmt)
-            parent.children = blk[:ofs] + body + blk[ofs + 1:]
+            # Replace scalar with vector code
+            ofs = parent.children.index(stmt)
+            parent.children[ofs:ofs] = body
+            parent.children.remove(stmt)
 
-        # Append the layout code after the whole loop nest
+        # Insert the layout code right after the loop nest enclosing the expression
         if layout:
-            parent = self.loop_opt.header.children.append(layout)
+            insert_at_elem(self.loop_opt.header.children, expr_info.loops[0], layout, 1)
 
 
 class OuterProduct():
 
-    """Generate outer product vectorisation of a statement. """
+    """Generate an intrinsics-based outer product vectorisation of a statement."""
 
-    OP_STORE_IN_MEM = 0
-    OP_REGISTER_INC = 1
-
-    def __init__(self, stmt, loops, intr, nest):
+    def __init__(self, stmt, loops, mode):
         self.stmt = stmt
-        self.intr = intr
-        # Outer product loops
         self.loops = loops
-        # The whole loop nest in which outer product loops live
-        self.nest = nest
+        self.mode = mode
 
     class Alloc(object):
 
         """Handle allocation of register variables. """
 
-        def __init__(self, intr, tensor_size):
-            nres = max(intr["dp_reg"], tensor_size)
-            self.ntot = intr["avail_reg"]
-            self.res = [intr["reg"](v) for v in range(nres)]
-            self.var = [intr["reg"](v) for v in range(nres, self.ntot)]
-            self.i = intr
+        def __init__(self, tensor_size):
+            nres = max(plan.isa["dp_reg"], tensor_size)
+            self.ntot = plan.isa["avail_reg"]
+            self.res = [plan.isa["reg"](v) for v in range(nres)]
+            self.var = [plan.isa["reg"](v) for v in range(nres, self.ntot)]
+            self.i = plan.isa
 
         def get_reg(self):
             if len(self.var) == 0:
@@ -380,12 +386,12 @@ class OuterProduct():
 
         # Find inner variables
         regs = [reg for node, reg in vrs.items()
-                if node.rank and node.rank[-1] == self.loops[1].itvar]
+                if node.rank and node.rank[-1] == self.loops[1].dim]
 
         if step in [0, 2]:
-            return [Assign(r, self.intr["l_perm"](r, "5")) for r in regs]
+            return [Assign(r, plan.isa["l_perm"](r, "5")) for r in regs]
         elif step == 1:
-            return [Assign(r, self.intr["g_perm"](r, r, "1")) for r in regs]
+            return [Assign(r, plan.isa["g_perm"](r, r, "1")) for r in regs]
         elif step == 3:
             return []
 
@@ -393,42 +399,38 @@ class OuterProduct():
         """Return a list of vector variable declarations representing
         loads, sets, broadcasts.
 
-        :arg vrs:   Dictionary that associates scalar variables to vector.
-                    variables, for which it will be generated a corresponding
-                    intrinsics load/set/broadcast.
-        :arg decls: List of scalar variables for which an intrinsics load/
-                    set/broadcast has already been generated. Used to avoid
-                    regenerating the same line. Can be updated.
+        :arg vrs: dictionary that associates scalar variables to vector.
+                  variables, for which it will be generated a corresponding
+                  intrinsics load/set/broadcast.
+        :arg decls: list of scalar variables for which an intrinsics load/
+                    set/broadcast has already been generated, possibly updated
+                    by this method.
         """
         stmt = []
         for node, reg in vrs.items():
-            if node.rank and node.rank[-1] in [i.itvar for i in self.loops]:
-                exp = self.intr["symbol_load"](node.symbol, node.rank, node.offset)
+            if node.rank and node.rank[-1] in [l.dim for l in self.loops]:
+                exp = plan.isa["symbol_load"](node.symbol, node.rank, node.offset)
             else:
-                exp = self.intr["symbol_set"](node.symbol, node.rank, node.offset)
+                exp = plan.isa["symbol_set"](node.symbol, node.rank, node.offset)
             if not decls.get(node.gencode()):
                 decls[node.gencode()] = reg
-                stmt.append(Decl(self.intr["decl_var"], reg, exp))
+                stmt.append(Decl(plan.isa["decl_var"], reg, exp))
         return stmt
 
     def _vect_expr(self, node, ofs, regs, decls, vrs):
         """Turn a scalar expression into its intrinsics equivalent.
-        Also return dicts of allocated vector variables.
 
-        :arg node:  AST Expression which is inspected to generate an equivalent
-                    intrinsics-based representation.
-        :arg ofs:   Contains the offset of the entry in the left hand side that
-                    is being computed.
-        :arg regs:  Register allocator.
-        :arg decls: List of scalar variables for which an intrinsics load/
-                    set/broadcast has already been generated. Used to determine
-                    which vector variable contains a certain scalar, if any.
-        :arg vrs:   Dictionary that associates scalar variables to vector
-                    variables. Updated every time a new scalar variable is
-                    encountered.
+        :arg node: AST expression to be vectorized.
+        :arg ofs: contains the offset of the entry in the left hand side that
+                  is being vectorized.
+        :arg regs: register allocator.
+        :arg decls: list of scalar variables for which an intrinsics load/
+                    set/broadcast has already been generated.
+        :arg vrs: dictionary that associates scalar variables to vector variables.
+                  Updated every time a new scalar variable is encountered.
         """
         if isinstance(node, Symbol):
-            if node.rank and self.loops[0].itvar == node.rank[-1]:
+            if node.rank and self.loops[0].dim == node.rank[-1]:
                 # The symbol depends on the outer loop dimension, so add offset
                 n_ofs = tuple([(1, 0) for i in range(len(node.rank)-1)]) + ((1, ofs),)
                 node = Symbol(node.symbol, dcopy(node.rank), n_ofs)
@@ -436,61 +438,53 @@ class OuterProduct():
             if node_ide not in decls:
                 reg = [k for k in vrs.keys() if k.gencode() == node_ide]
                 if not reg:
-                    vrs[node] = c_sym(regs.get_reg())
+                    vrs[node] = Symbol(regs.get_reg())
                     return vrs[node]
                 else:
                     return vrs[reg[0]]
             else:
                 return decls[node_ide]
         elif isinstance(node, Par):
-            return self._vect_expr(node.children[0], ofs, regs, decls, vrs)
+            return self._vect_expr(node.child, ofs, regs, decls, vrs)
         else:
-            left = self._vect_expr(node.children[0], ofs, regs, decls, vrs)
-            right = self._vect_expr(node.children[1], ofs, regs, decls, vrs)
+            left = self._vect_expr(node.left, ofs, regs, decls, vrs)
+            right = self._vect_expr(node.right, ofs, regs, decls, vrs)
             if isinstance(node, Sum):
-                return self.intr["add"](left, right)
+                return plan.isa["add"](left, right)
             elif isinstance(node, Sub):
-                return self.intr["sub"](left, right)
+                return plan.isa["sub"](left, right)
             elif isinstance(node, Prod):
-                return self.intr["mul"](left, right)
+                return plan.isa["mul"](left, right)
             elif isinstance(node, Div):
-                return self.intr["div"](left, right)
+                return plan.isa["div"](left, right)
 
-    def _incr_tensor(self, tensor, ofs, regs, out_reg, mode):
+    def _incr_tensor(self, tensor, ofs, regs, out_reg):
         """Add the right hand side contained in out_reg to tensor.
 
-        :arg tensor:  The left hand side of the expression being vectorized.
-        :arg ofs:     Contains the offset of the entry in the left hand side that
-                      is being computed.
-        :arg regs:    Register allocator.
-        :arg out_reg: Register variable containing the left hand side.
-        :arg mode:    It can be either `OP_STORE_IN_MEM`, for which stores in
-                      memory are performed, or `OP_REGISTER_INC`, by means of
-                      which left hand side's values are accumulated in a register.
-                      Usually, `OP_REGISTER_INC` is not recommended unless the
-                      loop sizes are extremely small.
+        :arg tensor: the left hand side of the expression being vectorized.
+        :arg ofs: contains the offset of the entry in the left hand side that
+                  is being computed.
+        :arg regs: register allocator.
+        :arg out_reg: register variable containing the left hand side.
         """
-        if mode == self.OP_STORE_IN_MEM:
+        if self.mode == 'STORE':
             # Store in memory
             sym = tensor.symbol
             rank = tensor.rank
             ofs = ((1, 0), (1, ofs), (1, 0))
-            load = self.intr["symbol_load"](sym, rank, ofs)
-            return self.intr["store"](Symbol(sym, rank, ofs),
-                                      self.intr["add"](load, out_reg))
-        elif mode == self.OP_REGISTER_INC:
+            load = plan.isa["symbol_load"](sym, rank, ofs)
+            return plan.isa["store"](Symbol(sym, rank, ofs),
+                                     plan.isa["add"](load, out_reg))
+        elif self.mode == 'MOVE':
             # Accumulate on a vector register
             reg = Symbol(regs.get_tensor()[ofs], ())
-            return Assign(reg, self.intr["add"](reg, out_reg))
+            return Assign(reg, plan.isa["add"](reg, out_reg))
 
-    def _restore_layout(self, regs, tensor, mode):
+    def _restore_layout(self, regs, tensor):
         """Restore the storage layout of the tensor.
 
-        :arg regs:    Register allocator.
-        :arg tensor:  The left hand side of the expression being vectorized.
-        :arg mode:    It can be either `OP_STORE_IN_MEM`, for which load/stores in
-                      memory are performed, or `OP_REGISTER_INC`, by means of
-                      which left hand side's values are read from registers.
+        :arg regs: register allocator.
+        :arg tensor: the left hand side of the expression being vectorized.
         """
         code = []
         t_regs = [Symbol(r, ()) for r in regs.get_tensor()]
@@ -503,17 +497,17 @@ class OuterProduct():
             tensor_syms.append(Symbol(tensor.symbol, tensor.rank, ofs))
 
         # Load LHS values from memory
-        if mode == self.OP_STORE_IN_MEM:
+        if self.mode == 'STORE':
             for i, j in zip(tensor_syms, t_regs):
-                load_sym = self.intr["symbol_load"](i.symbol, i.rank)
-                code.append(Decl(self.intr["decl_var"], j, load_sym))
+                load_sym = plan.isa["symbol_load"](i.symbol, i.rank)
+                code.append(Decl(plan.isa["decl_var"], j, load_sym))
 
-        # In-register restoration of the tensor
-        perm = self.intr["g_perm"]
-        uphi = self.intr["unpck_hi"]
-        uplo = self.intr["unpck_lo"]
-        typ = self.intr["decl_var"]
-        vect_len = self.intr["dp_reg"]
+        # In-register restoration of the tensor layout
+        perm = plan.isa["g_perm"]
+        uphi = plan.isa["unpck_hi"]
+        uplo = plan.isa["unpck_lo"]
+        typ = plan.isa["decl_var"]
+        vect_len = plan.isa["dp_reg"]
         # Do as many times as the unroll factor
         spins = int(ceil(n_regs / float(vect_len)))
         for i in range(spins):
@@ -532,41 +526,44 @@ class OuterProduct():
             # Store LHS values in memory
             for j in range(min(vect_len, n_regs - i * vect_len)):
                 ofs = i * vect_len + j
-                code.append(self.intr["store"](tensor_syms[ofs], t_regs[ofs]))
+                code.append(plan.isa["store"](tensor_syms[ofs], t_regs[ofs]))
 
         return code
 
     def generate(self, rows):
-        """Generate the outer-product intrinsics-based vectorisation code. """
-        cols = self.intr["dp_reg"]
+        """Generate the outer-product intrinsics-based vectorisation code.
 
-        # Determine order of loops w.r.t. the local tensor entries.
-        # If j-k are the inner loops and A[j][k], then increments of
-        # A are performed within the k loop, otherwise we would lose too many
-        # vector registers for keeping tmp values. On the other hand, if i is
-        # the innermost loop (i.e. loop nest is j-k-i), stores in memory are
-        # done outside of ip, i.e. immediately before the outer product's
-        # inner loop terminates.
-        if self.loops[1] in inner_loops(self.loops[0]):
-            mode = self.OP_STORE_IN_MEM
-            tensor_size = cols
-        else:
-            mode = self.OP_REGISTER_INC
-            tensor_size = rows
+        By default, the tensor computed by the outer product vectorization is
+        kept in memory, so the layout is restored by means of explicit load and
+        store instructions. The resulting code will therefore look like: ::
 
-        tensor = self.stmt.children[0]
-        expr = self.stmt.children[1]
+        for ...
+          for j
+            for k
+              for ...
+                A[j][k] = ...intrinsics-based outer product along ``j-k``...
+        for j
+          for k
+            A[j][k] = ...intrinsics-based code for layout restoration...
+
+        The other possibility would be to keep the computed values in temporaries
+        after a suitable permutation of the loops in the nest; this variant can be
+        activated by passing ``mode='MOVE'``, but it is not recommended unless
+        loops are very small *and* a suitable permutation of the nest has been
+        chosen to minimize register spilling.
+        """
+        cols = plan.isa["dp_reg"]
+        tensor, expr = self.stmt.children
+        tensor_size = cols
 
         # Get source-level variables
-        regs = self.Alloc(self.intr, tensor_size)
+        regs = self.Alloc(tensor_size)
 
         # Adjust loops' increment
-        self.loops[0].incr.children[1] = c_sym(rows)
-        self.loops[1].incr.children[1] = c_sym(cols)
+        self.loops[0].incr.children[1] = Symbol(rows)
+        self.loops[1].incr.children[1] = Symbol(cols)
 
-        stmt = []
-        decls = {}
-        vrs = {}
+        stmts, decls, vrs = [], {}, {}
         rows_per_col = rows / cols
         rows_to_peel = rows % cols
         peeling = 0
@@ -581,43 +578,43 @@ class OuterProduct():
                 # Vectorize, declare allocated variables, increment tensor
                 ofs = j * cols
                 v_expr = self._vect_expr(expr, ofs, regs, decls, vrs)
-                stmt.extend(self._vect_mem(vrs, decls))
-                incr = self._incr_tensor(tensor, i + ofs, regs, v_expr, mode)
-                stmt.append(incr)
+                stmts.extend(self._vect_mem(vrs, decls))
+                incr = self._incr_tensor(tensor, i + ofs, regs, v_expr)
+                stmts.append(incr)
             # Register shuffles
             if rows_per_col + (rows_to_peel - peeling) > 0:
-                stmt.extend(self._swap_reg(i, vrs))
+                stmts.extend(self._swap_reg(i, vrs))
 
         # Set initialising and tensor layout code
-        layout = self._restore_layout(regs, tensor, mode)
-        if mode == self.OP_STORE_IN_MEM:
+        layout = self._restore_layout(regs, tensor)
+        if self.mode == 'STORE':
             # Tensor layout
             layout_loops = dcopy(self.loops)
-            layout_loops[0].incr.children[1] = c_sym(cols)
+            layout_loops[0].incr.children[1] = Symbol(cols)
             layout_loops[0].children = [Block([layout_loops[1]], open_scope=True)]
             layout_loops[1].children = [Block(layout, open_scope=True)]
             layout = layout_loops[0]
-        elif mode == self.OP_REGISTER_INC:
+        elif self.mode == 'MOVE':
             # Initialiser
             for r in regs.get_tensor():
-                decl = Decl(self.intr["decl_var"], Symbol(r, ()), self.intr["setzero"])
+                decl = Decl(plan.isa["decl_var"], Symbol(r, ()), plan.isa["setzero"])
                 self.loops[1].body.insert(0, decl)
             # Tensor layout
             self.loops[1].body.extend(layout)
             layout = None
 
-        return (stmt, layout)
+        return (stmts, layout)
 
 
 # Utility functions
 
 def vect_roundup(x):
     """Return x rounded up to the vector length. """
-    word_len = ap.intrinsics.get("dp_reg") or 1
+    word_len = plan.isa.get("dp_reg") or 1
     return int(ceil(x / float(word_len))) * word_len
 
 
 def vect_rounddown(x):
     """Return x rounded down to the vector length. """
-    word_len = ap.intrinsics.get("dp_reg") or 1
+    word_len = plan.isa.get("dp_reg") or 1
     return x - (x % word_len)
