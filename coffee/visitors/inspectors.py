@@ -46,8 +46,8 @@ class CheckPerfectLoop(Visitor):
         # Unhandled, return False to be safe.
         return False
 
-    def visit_Perfect(self, o, env):
-        # Perfect nodes are in a perfect loop if they're in a loop.
+    def visit_Node(self, o, env):
+        # Assume all nodes are in a perfect loop if they're in a loop.
         try:
             return env["in_loop"]
         except KeyError:
@@ -212,7 +212,7 @@ class FindLoopNests(Visitor):
 class FindCoffeeExpressions(Visitor):
 
     """
-    Search the tree for :class:`~.Perfect` statements annotated with
+    Search the tree for :class:`~.Writer` statements annotated with
     :data:`"#pragma coffee expression"`.  Return a dict mapping the
     annotated node to a tuple of (node_parent, containing_loop_nest,
     index_access).
@@ -240,7 +240,7 @@ class FindCoffeeExpressions(Visitor):
             ret.update(a)
         return ret
 
-    def visit_Perfect(self, o, env):
+    def visit_Writer(self, o, env):
         for p in o.pragma:
             opts = p.split(" ", 2)
             # Don't care if we don't have three values
@@ -258,7 +258,7 @@ class FindCoffeeExpressions(Visitor):
     def visit_For(self, o, env):
         args = self.visit_Node(o, env)
         # Nothing inside this for loop was annotated (we didn't see a
-        # Perfect node with #pragma coffee expression)
+        # Writer node with #pragma coffee expression)
         if len(args) == 0:
             return {}
         ret = OrderedDict()
@@ -368,10 +368,16 @@ class SymbolDependencies(Visitor):
             ret.update(a)
         return ret
 
-    # Don't treat funcalls like perfect, but rather nodes
     visit_FunCall = visit_Node
 
-    def visit_Perfect(self, o, env):
+    def visit_Invert(self, o, env):
+        lvalue = self.visit(o.children[0], env=env)
+        for k, v in lvalue.iteritems():
+            # lvalue name is WRITTEN
+            lvalue[k.symbol] = WRITE
+        return lvalue
+
+    def visit_Writer(self, o, env):
         ret = OrderedDict()
         lvalue = self.visit(o.children[0], env=env)
         for k, v in lvalue.iteritems():
@@ -410,7 +416,7 @@ class SymbolModes(Visitor):
     (access mode, parent class).
 
     :class:`~.Symbol`\s are accessed as READ-only unless they appear
-    as lvalues in a :class:`~.Perfect` statement.
+    as lvalues in a :class:`~.Writer` statement.
 
     By default the top-level call to visit will record a parent class
     of NoneType for Symbols without a parent.  To pass in a parent by
@@ -451,7 +457,7 @@ class SymbolModes(Visitor):
     # written.
     visit_Decl = visit_object
 
-    def visit_Perfect(self, o, env):
+    def visit_Writer(self, o, env):
         new_env = Environment(env, node_parent=o)
         write_env = Environment(new_env, access_mode=WRITE)
         ret = OrderedDict()
@@ -462,6 +468,7 @@ class SymbolModes(Visitor):
             ret.update(self.visit(op, env=new_env))
         return ret
 
+    visit_Invert = visit_Writer
 
 class SymbolDeclarations(Visitor):
 

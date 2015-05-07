@@ -121,9 +121,9 @@ class Root(Node):
 # Meta classes for semantic decoration of AST nodes ##
 
 
-class Perfect(Node):
-    """Dummy mixin class used to decorate classes which can form part
-    of a perfect loop nest."""
+class Writer(Node):
+    """Dummy mixin class used to decorate classes which represent write
+    operations (e.g., assignments, since lvalues get modified)."""
     pass
 
 
@@ -316,7 +316,7 @@ class GreaterEq(BinExpr):
     op = ">="
 
 
-class FunCall(Expr, Perfect):
+class FunCall(Expr):
 
     """Function call. """
 
@@ -457,7 +457,7 @@ class Statement(Node):
         super(Statement, self).__init__(children, pragma)
 
 
-class EmptyStatement(Statement, Perfect):
+class EmptyStatement(Statement):
 
     """Empty statement."""
 
@@ -465,7 +465,7 @@ class EmptyStatement(Statement, Perfect):
         return ""
 
 
-class FlatBlock(Statement, Perfect):
+class FlatBlock(Statement):
     """Treat a chunk of code as a single statement, i.e. a C string"""
 
     def __init__(self, code, pragma=None):
@@ -476,7 +476,7 @@ class FlatBlock(Statement, Perfect):
         return self.children[0]
 
 
-class Assign(Statement, Perfect):
+class Assign(Statement, Writer):
 
     """Assign an expression to a symbol."""
 
@@ -488,7 +488,7 @@ class Assign(Statement, Perfect):
                       self.children[1].gencode()) + semicolon(not_scope)
 
 
-class AugmentedAssign(Statement, Perfect):
+class AugmentedAssign(Statement, Writer):
 
     def __init__(self, sym, exp, pragma=None):
         super(AugmentedAssign, self).__init__([sym, exp], pragma)
@@ -518,7 +518,7 @@ class IDiv(AugmentedAssign):
     op = "/="
 
 
-class Decl(Statement, Perfect):
+class Decl(Statement):
 
     """Declaration of a symbol.
 
@@ -883,7 +883,7 @@ class AVXSetZero(Statement):
 # Linear Algebra classes
 
 
-class Invert(Statement, Perfect, LinAlg):
+class Invert(Statement, LinAlg):
     """In-place inversion of a square array."""
     def __init__(self, sym, dim, pragma=None):
         super(Invert, self).__init__([sym, dim, dim], pragma)
@@ -910,7 +910,7 @@ class Invert(Statement, Perfect, LinAlg):
 """ % (str(dim), str(lda), str(sym), str(sym))
 
 
-class Determinant(Expr, Perfect, LinAlg):
+class Determinant(Expr, LinAlg):
     """Generic determinant"""
     def __init__(self, sym, pragma=None):
         super(Determinant, self).__init__([sym, type(self).dim, type(self).lda], pragma=pragma)
@@ -949,7 +949,7 @@ class Determinant2x2(Determinant):
                    Prod(Symbol(v, (0, 1)), Symbol(v, (1, 0))))
 
 
-class Determinant3x3(Expr, Perfect, LinAlg):
+class Determinant3x3(Determinant):
 
     """Determinant of a 3x3 square array."""
     dim = 2

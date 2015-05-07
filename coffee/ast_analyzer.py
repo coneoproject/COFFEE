@@ -139,7 +139,7 @@ class ExpressionGraph(object):
         :param node: root of the AST visited to initialize the ExpressionGraph.
         """
         self.deps = nx.DiGraph()
-        search = visit(node, search=(Assign, Incr, Decr, IMul, IDiv))['search']
+        search = visit(node, search=Writer)['search']
         for type, nodes in search.items():
             nodes = [n for n in nodes if not isinstance(n.children[1], int)]
             for n in nodes:
