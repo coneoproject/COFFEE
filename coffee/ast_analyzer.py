@@ -133,8 +133,17 @@ class ExpressionGraph(object):
 
     """Track read-after-write dependencies between symbols."""
 
-    def __init__(self):
+    def __init__(self, node):
+        """Initialize the ExpressionGraph.
+
+        :param node: root of the AST visited to initialize the ExpressionGraph.
+        """
         self.deps = nx.DiGraph()
+        search = visit(node, search=(Assign, Incr, Decr, IMul, IDiv))['search']
+        for type, nodes in search.items():
+            nodes = [n for n in nodes if not isinstance(n.children[1], int)]
+            for n in nodes:
+                self.add_dependency(*n.children)
 
     def add_dependency(self, sym, expr):
         """Add dependency between ``sym`` and symbols appearing in ``expr``."""

@@ -58,7 +58,7 @@ class LoopOptimizer(object):
         # Track nonzero regions accessed in the loop nest
         self.nonzero_info = {}
         # Track data dependencies
-        self.expr_graph = ExpressionGraph()
+        self.expr_graph = ExpressionGraph(loop)
         # Track hoisted expressions
         self.hoisted = StmtTracker()
 
