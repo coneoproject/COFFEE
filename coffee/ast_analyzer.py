@@ -41,6 +41,7 @@ except ImportError:
 import networkx as nx
 
 from base import *
+from utils import visit
 
 
 class StmtInfo():
@@ -135,36 +136,38 @@ class ExpressionGraph(object):
     def __init__(self):
         self.deps = nx.DiGraph()
 
-    def add_dependency(self, sym, expr, self_loop):
-        """Extract symbols from ``expr`` and create a read-after-write dependency
-        with ``sym``. If ``sym`` already has a dependency, then ``sym`` has a
-        self dependency on itself."""
+    def add_dependency(self, sym, expr):
+        """Add dependency between ``sym`` and symbols appearing in ``expr``."""
+        expr_symbols = visit(expr, search=Symbol)['search'][Symbol]
+        for es in expr_symbols:
+            self.deps.add_edge(sym.symbol, es.symbol)
 
-        def extract_syms(sym, node, deps):
-            if isinstance(node, Symbol):
-                deps.add_edge(sym, node.symbol)
-            else:
-                for n in node.children:
-                    extract_syms(sym, n, deps)
+    def is_read(self, expr, target_sym=None):
+        """Return True if any symbols in ``expr`` is read by ``target_sym``,
+        False otherwise. If ``target_sym`` is None, Return True if any symbols
+        in ``expr`` are read by at least one symbol, False otherwise."""
+        input_syms = visit(expr, search=Symbol)['search'][Symbol]
+        for s in input_syms:
+            if s.symbol not in self.deps:
+                continue
+            elif not target_sym:
+                if zip(*self.deps.in_edges(s.symbol)):
+                    return True
+            elif nx.has_path(self.deps, target_sym.symbol, s.symbol):
+                return True
+        return False
 
-        sym = sym.symbol
-        # Add self-dependency
-        if self_loop:
-            self.deps.add_edge(sym, sym)
-        extract_syms(sym, expr, self.deps)
-
-    def has_dep(self, sym, target_sym=None):
-        """If ``target_sym`` is not provided, return True if ``sym`` has a
-        read-after-write dependency with some other symbols. This is the case if
-        ``sym`` has either a self dependency or at least one input edge, meaning
-        that other symbols depend on it.
-        Otherwise, if ``target_sym`` is not None, return True if ``sym`` has a
-        read-after-write dependency on it, i.e. if there is an edge from
-        ``target_sym`` to ``sym``."""
-
-        sym = sym.symbol
-        if not target_sym:
-            return sym in self.deps and zip(*self.deps.in_edges(sym))
-        else:
-            target_sym = target_sym.symbol
-            return sym in self.deps and self.deps.has_edge(sym, target_sym)
+    def is_written(self, expr, target_sym=None):
+        """Return True if any symbols in ``expr`` is written by ``target_sym``,
+        False otherwise. If ``target_sym`` is None, Return True if any symbols
+        in ``expr`` are written by at least one symbol, False otherwise."""
+        input_syms = visit(expr, search=Symbol)['search'][Symbol]
+        for s in input_syms:
+            if s.symbol not in self.deps:
+                continue
+            elif not target_sym:
+                if zip(*self.deps.out_edges(s.symbol)):
+                    return True
+            elif nx.has_path(self.deps, s.symbol, target_sym.symbol):
+                return True
+        return False

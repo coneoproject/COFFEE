@@ -179,7 +179,7 @@ class SSALoopMerger(LoopScheduler):
                                          parent.children[bound_left:bound_right]])
                 # Check condition 2
                 for ws, lws in itertools.product(_written_syms, ln_written_syms):
-                    if self.expr_graph.has_dep(ws, lws):
+                    if self.expr_graph.is_written(ws, lws):
                         is_mergeable = False
                         break
                 # Check condition 3

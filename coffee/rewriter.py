@@ -482,7 +482,9 @@ class ExpressionHoister(object):
                 sym_info = [(i, j, inv_loop) for i, j in zip(_subexprs, hoisted_decls)]
                 self.hoisted.update(zip([s.symbol for s in inv_loop_syms], sym_info))
                 for s, e in zip(inv_loop_syms, subexprs):
-                    self.expr_graph.add_dependency(s, e, n_replaced[str(s)] > 1)
+                    self.expr_graph.add_dependency(s, e)
+                    if n_replaced[str(s)] > 1:
+                        self.expr_graph.add_dependency(s, s)
                     self.symbols[s] = dep
 
                 # 6a) Update expressions hoisted along a known dimension (same dep)
@@ -582,15 +584,15 @@ class ExpressionExpander(object):
             # Track the new temporary
             self.expanded_decls[grp_decl.sym.symbol] = grp_decl
             self.cache[str(grp)] = grp_sym
-            self.expr_graph.add_dependency(grp_sym, grp, False)
+            self.expr_graph.add_dependency(grp_sym, grp)
             # Update the AST
             insert_at_elem(hoisted_place.children, hoisted_loop, grp_decl)
             grp = grp_sym
 
         # No dependencies, just perform the expansion
-        if not self.expr_graph.has_dep(exp):
+        if not self.expr_graph.is_read(exp):
             hoisted_expr.children[0] = op(Par(hoisted_expr.children[0]), dcopy(grp))
-            self.expr_graph.add_dependency(exp, grp, False)
+            self.expr_graph.add_dependency(exp, grp)
             return {exp: exp}
 
         # Create new symbol, expression, and declaration
@@ -607,7 +609,7 @@ class ExpressionExpander(object):
         # Update tracked information
         self.expanded_decls[decl.sym.symbol] = decl
         self.hoisted[hoisted_exp.symbol] = (expr, decl, hoisted_loop, hoisted_place)
-        self.expr_graph.add_dependency(hoisted_exp, expr, 0)
+        self.expr_graph.add_dependency(hoisted_exp, expr)
         return {exp: hoisted_exp}
 
     def _expand(self, node, parent):
