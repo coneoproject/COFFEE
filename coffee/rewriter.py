@@ -259,6 +259,56 @@ class ExpressionRewriter(object):
 
         _reassociate(self.stmt.children[1], self.stmt)
 
+    def inject(self):
+        """Unroll any loops outside of the expression iteration space inside the
+        expression itself ("injection"). For example: ::
+
+            for i
+              for r
+                a += B[r]*C[i][r]
+              for j
+                for k
+                  A[j][k] += ...f(a)... // the expression being rewritten
+
+        gets transformed into:
+
+            for i
+              for j
+                for k
+                  A[j][k] += ...f(B[0]*C[i][0] + B[1]*C[i][1] + ...)...
+        """
+        # Get all loop nests, then discard the one enclosing the expression
+        nests = [n for n in visit(self.expr_info.loops_parents[0])['fors']]
+        injectable_nests = [n for n in nests if zip(*n)[0] != self.expr_info.loops]
+
+        # Full unroll any unrollable, injectable loop
+        to_replace = {}
+        for nest in injectable_nests:
+            to_unroll = [(l, p) for l, p in nest if l not in self.expr_info.loops]
+            nest_writers = visit(to_unroll[0][0], search=Writer)['search']
+            for op, stmts in nest_writers.items():
+                if op in [Assign, IMul, IDiv]:
+                    # Unroll is unsafe, skip
+                    continue
+                # At this point, must be /op = Incr/
+                for stmt in stmts:
+                    if stmt in [l.incr for l, p in to_unroll]:
+                        # Ignore useless stmts
+                        continue
+                    for l, p in reversed(to_unroll):
+                        inject_expr = [dcopy(stmt.children[1]) for i in range(l.size)]
+                        # Update rank of symbols
+                        for i, e in enumerate(inject_expr):
+                            e_syms = visit(e, search=Symbol)['search'][Symbol]
+                            for s in e_syms:
+                                s.rank = tuple([r if r != l.dim else i for r in s.rank])
+                        stmt.children[1] = ast_make_expr(Sum, inject_expr)
+                        p.children.remove(l)
+                    to_replace[stmt.children[0]] = stmt.children[1]
+
+        # Inject the unrolled operation into the expression
+        ast_replace(self.stmt, to_replace, copy=True)
+
     @staticmethod
     def reset():
         ExpressionHoister._expr_handled[:] = []

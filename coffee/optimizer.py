@@ -112,6 +112,7 @@ class LoopOptimizer(object):
                     ew.licm()
 
             elif mode == 3:
+                ew.inject()
                 ew.licm(out_domain=True)
                 if expr_info.is_tensor:
                     ew.expand(mode='full')
