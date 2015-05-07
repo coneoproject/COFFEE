@@ -222,8 +222,6 @@ class SSALoopMerger(LoopScheduler):
             for i = 0 to N
               A[i] = B[i] + C[i]
               D[i] = A[i]
-
-        Note this last step is not done by compilers like Intel's (version 14).
         """
 
         def replace_expr(node, parent, parent_idx, dim, hoisted_expr):

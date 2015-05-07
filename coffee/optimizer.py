@@ -42,8 +42,6 @@ from coffee.visitors import MaxLoopDepth
 
 class LoopOptimizer(object):
 
-    """Loop optimizer class."""
-
     def __init__(self, loop, header, decls, exprs):
         """Initialize the LoopOptimizer.
 

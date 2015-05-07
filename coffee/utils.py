@@ -284,9 +284,7 @@ def ast_make_for(stmts, loop, copy=False):
     """Create a for loop having the same iteration space as  ``loop`` enclosing
     the statements in  ``stmts``. If ``copy == True``, then new instances of
     ``stmts`` are created"""
-    if copy:
-        stmts = dcopy(stmts)
-    wrap = Block(stmts, open_scope=True)
+    wrap = Block(dcopy(stmts) if copy else stmts, open_scope=True)
     new_loop = For(dcopy(loop.init), dcopy(loop.cond), dcopy(loop.incr),
                    wrap, dcopy(loop.pragma))
     return new_loop

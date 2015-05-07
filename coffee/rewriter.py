@@ -272,7 +272,7 @@ class ExpressionHoister(object):
     # Temporary variables template
     _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
 
-    # Constants used by the extract method to charaterize expressions:
+    # Constants used by the extract method to charaterize sub-expressions:
     INVARIANT = 0  # expression is loop invariant
     SEARCH = 1  # expression is potentially within a larger invariant
     HOISTED = 2  # expression should not be hoisted any further
@@ -294,7 +294,7 @@ class ExpressionHoister(object):
             self.expr_id = self._expr_handled.index(stmt)
         self.counter = 0
 
-    def _extract_exprs(self, node, dep_subexprs):
+    def _extract(self, node, dep_subexprs):
         """Extract invariant sub-expressions from the original expression.
         Hoistable sub-expressions are stored in ``dep_subexprs``."""
 
@@ -312,18 +312,18 @@ class ExpressionHoister(object):
         if isinstance(node, Symbol):
             return (self.symbols[node], self.INVARIANT)
         if isinstance(node, FunCall):
-            arg_deps = [self._extract_exprs(n, dep_subexprs) for n in node.children]
+            arg_deps = [self._extract(n, dep_subexprs) for n in node.children]
             dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
             info = self.INVARIANT if all([i == self.INVARIANT for _, i in arg_deps]) \
                 else self.HOISTED
             return (dep, info)
         if isinstance(node, Par):
-            return (self._extract_exprs(node.child, dep_subexprs))
+            return (self._extract(node.child, dep_subexprs))
 
         # Traverse the expression tree
         left, right = node.children
-        dep_l, info_l = self._extract_exprs(left, dep_subexprs)
-        dep_r, info_r = self._extract_exprs(right, dep_subexprs)
+        dep_l, info_l = self._extract(left, dep_subexprs)
+        dep_r, info_r = self._extract(right, dep_subexprs)
 
         # Filter out false dependencies
         dep_l = tuple(d for d in dep_l if d in self.expr_info.dims)
@@ -393,10 +393,10 @@ class ExpressionHoister(object):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
             return
 
-        # (Re)set global parameters for the /extract/ function
-        self.symbols = visit(self.header, None)['symbols_dep']
+        # (Re)set global parameters for the /_extract/ function
+        self.symbols = visit(self.header)['symbols_dep']
         self.symbols = dict((s, [l.dim for l in dep]) for s, dep in self.symbols.items())
-        self.extracted = False
+        self.extracted = True
         self.nrank_tmps = nrank_tmps
         self.out_domain = out_domain
 
@@ -405,20 +405,14 @@ class ExpressionHoister(object):
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
         inv_dep = {}
-        while True:
+        while self.extracted:
             dep_subexprs = defaultdict(list)
-            self._extract_exprs(self.stmt.children[1], dep_subexprs)
-
-            # While end condition
-            if not self.extracted:
-                break
-
             self.extracted = False
+            self._extract(self.stmt.children[1], dep_subexprs)
             self.counter += 1
 
             for dep, subexprs in dep_subexprs.items():
-                # -1) Filter dependencies that do not pertain to the expression
-                # and remove identical subexpressions
+                # -1) Remove identical subexpressions
                 subexprs = dict([(str(e), e) for e in subexprs]).values()
 
                 # 0) Determine the loop nest level where invariant expressions
@@ -487,15 +481,13 @@ class ExpressionHoister(object):
                         self.expr_graph.add_dependency(s, s)
                     self.symbols[s] = dep
 
-                # 6a) Update expressions hoisted along a known dimension (same dep)
+                # 6) Update expressions hoisted along a known dimension (same dep)
                 inv_info = (loop_dim, place, next_loop, wrap_loop)
-                if inv_info in inv_dep:
+                if inv_info not in inv_dep:
+                    inv_dep[inv_info] = (hoisted_decls, inv_loop)
+                else:
                     inv_dep[inv_info][0].extend(hoisted_decls)
                     inv_dep[inv_info][1].extend(inv_loop)
-                    continue
-
-                # 6b) Keep track of hoisted stuff
-                inv_dep[inv_info] = (hoisted_decls, inv_loop)
 
         for inv_info, (hoisted_decls, inv_loop) in sorted(inv_dep.items()):
             loop_dim, place, next_loop, wrap_loop = inv_info
@@ -516,8 +508,9 @@ class ExpressionHoister(object):
 
 class ExpressionExpander(object):
 
-    GRP = 0
-    EXP = 1
+    # Constants used by the expand method to charaterize sub-expressions:
+    GROUP = 0  # Expression /will/ not trigger expansion
+    EXPAND = 1  # Expression /could/ be expanded
 
     # Track all expanded expressions
     _expr_handled = []
@@ -547,7 +540,7 @@ class ExpressionExpander(object):
         it depends on other hoisted symbols), create a new symbol."""
         # First, check if any of the symbols in /exp/ have been hoisted
         try:
-            exp = [s for s in visit(exp)['symbols_dep'].keys()
+            exp = [s for s in visit(exp, search=Symbol)['search'][Symbol]
                    if s.symbol in self.hoisted and self.should_expand(s)][0]
         except:
             # No hoisted symbols in the expanded expression, so return
@@ -614,24 +607,25 @@ class ExpressionExpander(object):
 
     def _expand(self, node, parent):
         if isinstance(node, Symbol):
-            return ([node], self.EXP) if self.should_expand(node) else ([node], self.GRP)
+            return ([node], self.EXPAND) if self.should_expand(node) \
+                else ([node], self.GROUP)
 
         elif isinstance(node, Par):
             return self._expand(node.child, node)
 
         elif isinstance(node, (Div, FunCall)):
-            return ([node], self.GRP)
+            return ([node], self.GROUP)
 
         elif isinstance(node, Prod):
             l_exps, l_type = self._expand(node.left, node)
             r_exps, r_type = self._expand(node.right, node)
-            if l_type == self.GRP and r_type == self.GRP:
-                return ([node], self.GRP)
-            # At least one child is expandable (marked as EXP), whereas the
+            if l_type == self.GROUP and r_type == self.GROUP:
+                return ([node], self.GROUP)
+            # At least one child is expandable (marked as EXPAND), whereas the
             # other could either be expandable as well or groupable (marked
-            # as GRP): so we can perform the expansion
+            # as GROUP): so we can perform the expansion
             groupable, expandable, expanding_child = r_exps, l_exps, node.left
-            if l_type == self.GRP:
+            if l_type == self.GROUP:
                 groupable, expandable, expanding_child = l_exps, r_exps, node.right
             to_replace = defaultdict(list)
             for exp, grp in itertools.product(expandable, groupable):
@@ -646,17 +640,17 @@ class ExpressionExpander(object):
                         mode='symbol')
             # Update the parent node, since an expression has just been expanded
             parent.children[parent.children.index(node)] = expanding_child
-            return (list(flatten(to_replace.values())) or [expanding_child], self.EXP)
+            return (list(flatten(to_replace.values())) or [expanding_child], self.EXPAND)
 
         elif isinstance(node, (Sum, Sub)):
             l_exps, l_type = self._expand(node.left, node)
             r_exps, r_type = self._expand(node.right, node)
-            if l_type == self.EXP and r_type == self.EXP and isinstance(node, Sum):
-                return (l_exps + r_exps, self.EXP)
-            elif l_type == self.EXP and r_type == self.EXP and isinstance(node, Sub):
-                return (l_exps + [Neg(r) for r in r_exps], self.EXP)
+            if l_type == self.EXPAND and r_type == self.EXPAND and isinstance(node, Sum):
+                return (l_exps + r_exps, self.EXPAND)
+            elif l_type == self.EXPAND and r_type == self.EXPAND and isinstance(node, Sub):
+                return (l_exps + [Neg(r) for r in r_exps], self.EXPAND)
             else:
-                return ([node], self.GRP)
+                return ([node], self.GROUP)
 
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
