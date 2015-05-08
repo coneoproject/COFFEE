@@ -124,6 +124,60 @@ def test_check_perfect_loop():
     assert v.visit(loop4, env=env)
 
 
+@pytest.fixture
+def block_aa():
+    a = Symbol("a")
+    return Block([a, a])
+
+@pytest.fixture
+def fun_aa_in_args():
+    a = Symbol("a")
+    return FunDecl("void", "foo", [a, a], Block([Assign(Symbol("b"),
+                                                        Symbol("c"))]))
+
+@pytest.fixture
+def fun_aa_in_body(block_aa):
+    return FunDecl("void", "foo", [], block_aa)
+
+
+@pytest.fixture(params=[block_aa, fun_aa_in_args,
+                        fun_aa_in_body])
+def tree(request):
+    return request.param()
+
+@pytest.mark.parametrize("tree",
+                         [block_aa(),
+                          fun_aa_in_args(),
+                          fun_aa_in_body(block_aa())],
+                         ids=["block-repeated-aa",
+                              "fundecl-repeated-aa-args",
+                              "fundecl-repeated-aa-body"])
+def test_check_uniqueness(tree):
+    v = CheckUniqueness()
+
+    with pytest.raises(RuntimeError):
+        v.visit(tree)
+
+
+@pytest.mark.parametrize("tree",
+                         [block_aa(),
+                          fun_aa_in_args(),
+                          fun_aa_in_body(block_aa())],
+                         ids=["block-repeated-aa",
+                              "fundecl-repeated-aa-args",
+                              "fundecl-repeated-aa-body"])
+def test_uniquify(tree):
+    v = Uniquify()
+    check = CheckUniqueness()
+
+    new_tree = v.visit(tree)
+
+    with pytest.raises(RuntimeError):
+        check.visit(tree)
+
+    assert check.visit(new_tree)
+    
+
 if __name__ == "__main__":
     import os
     pytest.main(os.path.abspath(__file__))
