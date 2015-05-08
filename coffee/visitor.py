@@ -36,6 +36,30 @@ class Environment(object):
         except KeyError:
             return self.parent[key]
 
+    def __repr__(self):
+        mappings = ", ".join("%s=%r" % (k, v) for (k, v) in self.mapping.iteritems())
+        return "Environment(parent=%r, %s)" % (self.parent, mappings)
+
+    def __str__(self):
+        dicts = []
+        # Walk up stack, gathering mappings.
+        while True:
+            try:
+                dicts.append(self.mapping)
+            except AttributeError:
+                # Hit top of stack
+                dicts.append(self)
+                break
+            self = self.parent
+        # Build environment from root down to self for printing
+        vals = {}
+        while True:
+            try:
+                vals.update(dicts.pop())
+            except IndexError:
+                break
+        return "Environment: %s" % vals
+
 
 class Visitor(object):
 
