@@ -682,23 +682,19 @@ class ExpressionExpander(object):
             # At least one child is expandable (marked as EXPAND), whereas the
             # other could either be expandable as well or groupable (marked
             # as GROUP): so we can perform the expansion
-            groupable, expandable, expanding_child = r_exps, l_exps, node.left
-            if l_type == self.GROUP:
-                groupable, expandable, expanding_child = l_exps, r_exps, node.right
+            groupable = l_exps if l_type == self.GROUP else r_exps
+            expandable = r_exps if l_type == self.GROUP else l_exps
             to_replace = defaultdict(list)
             for exp, grp in itertools.product(expandable, groupable):
-                expansion = node.__class__(exp, dcopy(grp))
-                if exp == expanding_child:
-                    # Implies /expandable/ contains just one node, /e/
-                    expanding_child = expansion
-                    break
+                expansion = Prod(exp, dcopy(grp))
                 to_replace[exp].append(expansion)
                 self.expansions.append(expansion)
             ast_replace(node, {k: ast_make_expr(Sum, v) for k, v in to_replace.items()},
                         mode='symbol')
             # Update the parent node, since an expression has just been expanded
-            parent.children[parent.children.index(node)] = expanding_child
-            return (list(flatten(to_replace.values())) or [expanding_child], self.EXPAND)
+            expanded = node.right if l_type == self.GROUP else node.left
+            parent.children[parent.children.index(node)] = expanded
+            return (list(flatten(to_replace.values())) or [expanded], self.EXPAND)
 
         elif isinstance(node, (Sum, Sub)):
             l_exps, l_type = self._expand(node.left, node)
