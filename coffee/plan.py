@@ -45,6 +45,7 @@ from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
 from autotuner import Autotuner
 from expression import MetaExpr
+from coffee.visitors import FindInstances
 
 from copy import deepcopy as dcopy
 import itertools
@@ -94,7 +95,7 @@ class ASTKernel(object):
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
-        kernels = visit(self.ast, search=FunDecl, stop_on_search=True)['search'][FunDecl]
+        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
         for kernel in kernels:
             info = visit(kernel)
             decls = info['decls']
@@ -272,7 +273,7 @@ class ASTKernel(object):
 
             return loop_opts
 
-        kernels = visit(self.ast, search=FunDecl, stop_on_search=True)['search'][FunDecl]
+        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
         if opts.get('autotune'):
             if not (compiler and isa):
                 raise RuntimeError("Must initialize COFFEE prior to autotuning")

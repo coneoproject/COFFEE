@@ -46,6 +46,7 @@ from copy import deepcopy as dcopy, copy as wcopy
 from collections import defaultdict
 
 from base import *
+from coffee.visitors import inspectors
 
 
 def increase_stack(loop_opts):
@@ -83,19 +84,12 @@ def unroll_factors(loops):
                   determined.
     """
 
-    loops_unroll = OrderedDict()
+    v = inspectors.DetermineUnrollFactors()
 
-    # First, determine all inner loops
-    _inner_loops = [l for l in loops if l in inner_loops(l)]
-
-    # Then, determine possible unroll factors for all loops
-    for l in loops:
-        if l in _inner_loops:
-            loops_unroll[l.dim] = [1]
-        else:
-            loops_unroll[l.dim] = [i+1 for i in range(l.size) if l.size % (i+1) == 0]
-
-    return loops_unroll
+    unrolls = [v.visit(l) for l in loops]
+    ret = unrolls[0]
+    ret.update(d for d in unrolls[1:])
+    return ret
 
 
 def postprocess(node):
@@ -375,7 +369,7 @@ def ast_make_copy(arr1, arr2, itspace, op):
 ###########################################################
 
 
-def visit(node, parent=None, search=None, stop_on_search=False):
+def visit(node, parent=None):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
@@ -385,145 +379,41 @@ def visit(node, parent=None, search=None, stop_on_search=False):
     * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
     * Maximum depth - an integer representing the depth of the most depth loop nest
-    * Searched nodes - a dictionary {types of AST node: list of occurrences}
 
     :param node: AST root node of the visit
     :param parent: parent node of ``node``
-    :param search: type(s) of AST nodes to be searched and tracked in the visit
-    :param stop_on_search: True if the tree visit should stop going in depth once
-                           found a node being searched, False otherwise.
     """
 
-    info = {
-        'fors': [],
-        'decls': OrderedDict(),
-        'symbols_dep': OrderedDict(),
-        'symbols_mode': OrderedDict(),
-        'symbol_refs': defaultdict(list),
-        'exprs': OrderedDict(),
-        'max_depth': 0,
-        'search': defaultdict(list)
-    }
-
-    _inner_loops = inner_loops(node)
-
-    def check_opts(node, parent, fors):
-        """Track high-level information."""
-        for pragma in node.pragma:
-            opts = pragma.split(" ", 2)
-            if len(opts) < 3:
-                return
-            if opts[1] == 'coffee' and opts[2] == 'expression':
-                # Found high-level optimisation
-                return (parent, fors, node.children[0].rank)
-
-    def inspect(node, parent, **kwargs):
-        if search and isinstance(node, search):
-            info['search'][type(node)].append(node)
-            if stop_on_search:
-                return
-
-        if isinstance(node, EmptyStatement):
-            pass
-        elif isinstance(node, (Block, Root)):
-            for n in node.children:
-                inspect(n, node)
-        elif isinstance(node, FunDecl):
-            for n in node.children:
-                inspect(n, node)
-            for n in node.args:
-                inspect(n, node, scope=EXTERNAL)
-        elif isinstance(node, For):
-            info['cur_nest'].append((node, parent))
-            inspect(node.children[0], node)
-            inspect(node.init, node)
-            inspect(node.cond, node)
-            inspect(node.incr, node)
-            if node in _inner_loops:
-                info['fors'].append(info['cur_nest'])
-            info['cur_nest'] = info['cur_nest'][:-1]
-        elif isinstance(node, Par):
-            inspect(node.child, node)
-        elif isinstance(node, Decl):
-            node.scope = kwargs.get('scope', LOCAL)
-            info['decls'][node.sym.symbol] = node
-            inspect(node.sym, node)
-        elif isinstance(node, Symbol):
-            cur_nest = info['cur_nest']
-            access_mode = (kwargs.get('mode', READ), parent.__class__)
-            dep = [l for l, _ in cur_nest if l.dim in node.rank]
-            if access_mode[0] == WRITE:
-                info['symbols_written'][node.symbol] = wcopy(cur_nest)
-            if node.symbol in info['symbols_written']:
-                dep = tuple(l for l, _ in info['symbols_written'][node.symbol])
-            info['symbols_dep'][node] = dep
-            info['symbols_mode'][node] = access_mode
-            info['symbol_refs'][node.symbol].append((node, parent))
-        elif isinstance(node, Expr):
-            for child in node.children:
-                inspect(child, node)
-        elif isinstance(node, FunCall):
-            for child in node.children:
-                inspect(child, node)
-        elif isinstance(node, Perfect):
-            expr = check_opts(node, parent, info['cur_nest'])
-            if expr:
-                info['exprs'][node] = expr
-            inspect(node.children[0], node, mode=WRITE)
-            for child in node.children[1:]:
-                inspect(child, node)
-        else:
-            pass
-
-    info['cur_nest'] = []
-    info['symbols_written'] = {}
-    inspect(node, parent)
-    info['max_depth'] = max(len(l) for l in info['fors']) if info['fors'] else 0
-    info.pop('cur_nest')
-    info.pop('symbols_written')
+    info = {}
+    env = dict(node_parent=parent)
+    deps = inspectors.SymbolDependencies().visit(node)
+    # Prune access mode:
+    for k, v in deps.iteritems():
+        if type(k) is not Symbol:
+            del deps[k]
+    info['symbols_dep'] = deps
+    info['fors'] = inspectors.FindLoopNests().visit(node, env=env)
+    info['symbols_mode'] = inspectors.SymbolModes().visit(node, env=env)
+    info['symbol_refs'] = inspectors.SymbolReferences().visit(node, env=env)
+    info['decls'] = inspectors.SymbolDeclarations().visit(node)
+    info['exprs'] = inspectors.FindCoffeeExpressions().visit(node, env=env)
+    info['max_depth'] = inspectors.MaxLoopDepth().visit(node)
     return info
 
 
 def inner_loops(node):
     """Find inner loops in the subtree rooted in ``node``."""
 
-    def find_iloops(node, loops):
-        if isinstance(node, Perfect):
-            return False
-        elif isinstance(node, (Block, Root, FunDecl)):
-            return any([find_iloops(s, loops) for s in node.children])
-        elif isinstance(node, For):
-            found = find_iloops(node.children[0], loops)
-            if not found:
-                loops.append(node)
-            return True
-
-    loops = []
-    find_iloops(node, loops)
-    return loops
+    v = inspectors.FindInnerLoops()
+    return v.visit(node)
 
 
 def is_perfect_loop(loop):
     """Return True if ``loop`` is part of a perfect loop nest, False otherwise."""
 
-    def check_perfectness(node, found_block=False):
-        if isinstance(node, Perfect):
-            return True
-        elif isinstance(node, For):
-            if found_block:
-                return False
-            return check_perfectness(node.children[0])
-        elif isinstance(node, Block):
-            stmts = node.children
-            if len(stmts) == 1:
-                return check_perfectness(stmts[0])
-            # Need to check this is the last level of the loop nest, otherwise
-            # it can't be a perfect loop nest
-            return all([check_perfectness(n, True) for n in stmts])
-
-    if not isinstance(loop, For):
-        return False
-    return check_perfectness(loop)
+    env = dict(in_loop=False, multiple_statements=False)
+    v = inspectors.CheckPerfectLoop()
+    return v.visit(loop, env=env)
 
 
 def count(node, mode='symbol', read_only=False):
@@ -564,21 +454,8 @@ def count(node, mode='symbol', read_only=False):
     else:
         raise RuntimeError("`Count` function got a wrong mode (valid: %s)" % modes)
 
-    def count(node, counter):
-        if isinstance(node, Symbol):
-            counter[key(node)] += 1
-        elif isinstance(node, FlatBlock):
-            return
-        else:
-            to_traverse = node.children
-            if isinstance(node, (Assign, Incr, Decr)) and read_only:
-                to_traverse = node.children[1:]
-            for c in to_traverse:
-                count(c, counter)
-
-    counter = defaultdict(int)
-    count(node, counter)
-    return counter
+    v = inspectors.CountOccurences(key=key, only_rvalues=read_only)
+    return v.visit(node)
 
 
 def check_type(stmt, decls):
@@ -591,8 +468,10 @@ def check_type(stmt, decls):
     :param decls: a dictionary from symbol identifiers (i.e., strings representing
                   the name of a symbol) to Decl nodes
     """
-    lhs_symbol = visit(stmt.children[0], stmt)['symbol_refs'].keys()[0]
-    rhs_symbols = visit(stmt.children[1], stmt)['symbol_refs'].keys()
+    v = inspectors.SymbolReferences()
+    env = dict(node_parent=stmt)
+    lhs_symbol = v.visit(stmt.children[0], env=env).keys()[0]
+    rhs_symbols = v.visit(stmt.children[1], env=env).keys()
 
     lhs_decl = decls[lhs_symbol]
     rhs_decls = [decls[s] for s in rhs_symbols if s in decls]

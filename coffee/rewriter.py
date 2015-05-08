@@ -39,6 +39,7 @@ import itertools
 from base import *
 from utils import *
 from loop_scheduler import SSALoopMerger
+from coffee.visitors import SymbolReferences
 
 
 class ExpressionRewriter(object):
@@ -564,7 +565,7 @@ class ExpressionExpander(object):
         op = expansion.__class__
 
         # Is the grouped symbol hoistable, or does it break some data dependency?
-        grp_symbols = visit(grp)['symbol_refs'].keys()
+        grp_symbols = SymbolReferences().visit(grp).keys()
         for l in reversed(self.expr_info.loops):
             for g in grp_symbols:
                 g_refs = self.info['symbol_refs'][g]

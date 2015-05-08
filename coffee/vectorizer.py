@@ -38,6 +38,7 @@ from collections import defaultdict
 from base import *
 from utils import *
 import plan
+from coffee.visitors import FindInstances
 
 
 class VectStrategy():
@@ -85,11 +86,15 @@ class LoopVectorizer(object):
         # Aliases
         decls = self.loop_opt.decls
         header = self.loop_opt.header
-        info = visit(header, search=LinAlg)
+        info = visit(header)
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']
-        to_invert = info['search'][Invert][0] if info['search'][Invert] else None
+        to_invert = FindInstances(Invert).visit(header)[Invert]
+        if len(to_invert) > 1:
+            raise NotImplementedError("More than one Invert node not handled")
+        if to_invert:
+            to_invert = to_invert[0]
 
         # 0) Under some circumstances, do not apply padding
         # A- Loop increments must be equal to 1, because at the moment the

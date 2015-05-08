@@ -63,21 +63,6 @@ ternary = lambda e, s1, s2: wrap("%s ? %s : %s" % (e, s1, s2))
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
 
 
-# Meta classes for semantic decoration of AST nodes ##
-
-
-class Perfect(object):
-    """Dummy mixin class used to decorate classes which can form part
-    of a perfect loop nest."""
-    pass
-
-
-class LinAlg(object):
-    """Dummy mixin class used to decorate classes which represent linear
-    algebra operations."""
-    pass
-
-
 # Base classes of the AST ###
 
 
@@ -89,6 +74,19 @@ class Node(object):
         self.children = map(as_symbol, children) if children else []
         # Pragmas are used to attach semantical information to nodes
         self._pragma = self._format_pragma(pragma)
+
+    def reconstruct(self, *args, **kwargs):
+        """Return a new instance of this :class:`Node`.
+
+        :arg args: positional arguments to the constructor.
+        :arg kwargs: keyword arguments to the constructor.
+        """
+        return type(self)(*args, **kwargs)
+
+    def operands(self):
+        """Return the operands of this :class:`Node` as an iterable,
+        along with a :class:`dict` of keyword arguments (the pragma decorator)."""
+        return self.children, {'pragma': self.pragma}
 
     def gencode(self):
         return "\n".join([n.gencode() for n in self.children])
@@ -126,6 +124,21 @@ class Root(Node):
         return header + Node.gencode(self)
 
 
+# Meta classes for semantic decoration of AST nodes ##
+
+
+class Perfect(Node):
+    """Dummy mixin class used to decorate classes which can form part
+    of a perfect loop nest."""
+    pass
+
+
+class LinAlg(Node):
+    """Dummy mixin class used to decorate classes which represent linear
+    algebra operations."""
+    pass
+
+
 # Expressions ###
 
 class Expr(Node):
@@ -139,9 +152,11 @@ class BinExpr(Expr):
 
     """Generic binary expression."""
 
-    def __init__(self, expr1, expr2, op):
+    def __init__(self, expr1, expr2):
         super(BinExpr, self).__init__([expr1, expr2])
-        self.op = op
+
+    def reconstruct(self, expr1, expr2, **kwargs):
+        return type(self)(expr1, expr2, **kwargs)
 
     def __deepcopy__(self, memo):
         """Binary expressions always need to be copied as plain new objects,
@@ -151,7 +166,7 @@ class BinExpr(Expr):
         return self.__class__(dcopy(self.children[0]), dcopy(self.children[1]))
 
     def gencode(self, not_scope=True, parent=None):
-        subtree = (" "+self.op+" ").join([n.gencode(not_scope, self) for n in self.children])
+        subtree = (" "+type(self).op+" ").join([n.gencode(not_scope) for n in self.children])
         if parent and not isinstance(parent, (Par, self.__class__)):
             return wrap(subtree)
         return subtree
@@ -172,6 +187,12 @@ class UnaryExpr(Expr):
     def __init__(self, expr):
         super(UnaryExpr, self).__init__([expr])
 
+    def reconstruct(self, expr, **kwargs):
+        return type(self)(expr, **kwargs)
+
+    def gencode(self, not_scope=True, parent=None):
+        return "%s%s" % (type(self).op, self.children[0].gencode(not_scope)) + semicolon(not_scope)
+
     def __deepcopy__(self, memo):
         """Unary expressions always need to be copied as plain new objects,
         ignoring whether they have been copied before; that is, the ``memo``
@@ -185,10 +206,13 @@ class UnaryExpr(Expr):
 
 
 class Neg(UnaryExpr):
+    """Unary negation of an expression"""
+    op = "-"
 
-    "Unary negation of an expression"
-    def gencode(self, not_scope=False, parent=None):
-        return "-%s" % wrap(self.child.gencode(not_scope, self)) + semicolon(not_scope)
+
+class Not(UnaryExpr):
+    """Compare an expression to ``NULL`` using the operator ``!``."""
+    op = "!"
 
 
 class ArrayInit(Expr):
@@ -203,6 +227,12 @@ class ArrayInit(Expr):
 
     def __init__(self, values):
         self.values = values
+
+    def reconstruct(self, values, **kwargs):
+        return type(self)(values, **kwargs)
+
+    def operands(self):
+        return [self.values], {}
 
     def gencode(self, not_scope=True, parent=None):
         return self.values
@@ -224,6 +254,12 @@ class ColSparseArrayInit(ArrayInit):
         self.nonzero_bounds = nonzero_bounds
         self.numpy_values = numpy_values
 
+    def reconstruct(self, values, nonzero_bounds, numpy_values, **kwargs):
+        return type(self)(values, nonzero_bounds, numpy_values, **kwargs)
+
+    def operands(self):
+        return [self.values, self.nonzero_bounds, self.numpy_values], {}
+
     def gencode(self, not_scope=True, parent=None):
         return self.values
 
@@ -237,94 +273,53 @@ class Par(UnaryExpr):
 
 
 class Sum(BinExpr):
-
     """Binary sum."""
-
-    def __init__(self, expr1, expr2):
-        super(Sum, self).__init__(expr1, expr2, "+")
+    op = "+"
 
 
 class Sub(BinExpr):
-
     """Binary subtraction."""
-
-    def __init__(self, expr1, expr2):
-        super(Sub, self).__init__(expr1, expr2, "-")
+    op = "-"
 
 
 class Prod(BinExpr):
-
     """Binary product."""
-
-    def __init__(self, expr1, expr2):
-        super(Prod, self).__init__(expr1, expr2, "*")
+    op = "*"
 
 
 class Div(BinExpr):
-
     """Binary division."""
-
-    def __init__(self, expr1, expr2):
-        super(Div, self).__init__(expr1, expr2, "/")
+    op = "/"
 
 
 class Eq(BinExpr):
-
     """Compare two expressions using the operand ``==``."""
-
-    def __init__(self, expr1, expr2):
-        super(Eq, self).__init__(expr1, expr2, "==")
+    op = "=="
 
 
 class NEq(BinExpr):
-
     """Compare two expressions using the operand ``!=``."""
-
-    def __init__(self, expr1, expr2):
-        super(NEq, self).__init__(expr1, expr2, "!=")
+    op = "!="
 
 
 class Less(BinExpr):
-
     """Compare two expressions using the operand ``<``."""
-
-    def __init__(self, expr1, expr2):
-        super(Less, self).__init__(expr1, expr2, "<")
+    op = "<"
 
 
 class LessEq(BinExpr):
-
     """Compare two expressions using the operand ``<=``."""
-
-    def __init__(self, expr1, expr2):
-        super(LessEq, self).__init__(expr1, expr2, "<=")
+    op = "<="
 
 
 class Greater(BinExpr):
-
     """Compare two expressions using the operand ``>``."""
-
-    def __init__(self, expr1, expr2):
-        super(Greater, self).__init__(expr1, expr2, ">")
+    op = ">"
 
 
 class GreaterEq(BinExpr):
-
     """Compare two expressions using the operand ``>=``."""
-
-    def __init__(self, expr1, expr2):
-        super(GreaterEq, self).__init__(expr1, expr2, ">=")
-
-
-class Not(UnaryExpr):
-
-    """Compare an expression to ``NULL`` using the operator ``!``."""
-
-    def __init__(self, expr):
-        super(Not, self).__init__(expr)
-
-    def gencode(self, not_scope=True, parent=None):
-        return "!%s" % self.child.gencode(not_scope, self)
+    op = ">="
 
 
 class FunCall(Expr, Perfect):
@@ -334,6 +329,12 @@ class FunCall(Expr, Perfect):
     def __init__(self, function_name, *args):
         super(Expr, self).__init__(args)
         self.funcall = as_symbol(function_name)
+
+    def reconstruct(self, *args, **kwargs):
+        return type(self)(*args, **kwargs)
+
+    def operands(self):
+        return [self.funcall] + self.children, {}
 
     def gencode(self, not_scope=False, parent=None):
         return self.funcall.gencode() + \
@@ -347,8 +348,11 @@ class Ternary(Expr):
     def __init__(self, expr, true_stmt, false_stmt):
         super(Ternary, self).__init__([expr, true_stmt, false_stmt])
 
+    def reconstruct(self, *args, **kwargs):
+        return type(self)(*args, **kwargs)
+
     def gencode(self, not_scope=True, parent=None):
-        return ternary(*[c.gencode(True, self) for c in self.children]) + \
+        return ternary(*[c.gencode(True) for c in self.children]) + \
             semicolon(not_scope)
 
 
@@ -370,6 +374,9 @@ class Symbol(Expr):
         self.rank = rank
         self.offset = offset
 
+    def operands(self):
+        return [self.symbol, self.rank, self.offset], {}
+
     def gencode(self, not_scope=True, parent=None):
         points = ""
         if not self.offset:
@@ -388,41 +395,32 @@ class Symbol(Expr):
 
 # Vector expression classes ###
 
+class AVXBinOp(BinExpr):
 
-class AVXSum(Sum):
+    def gencode(self, not_scope=True):
+        op1 = self.children[0]
+        op2 = self.children[1]
+        return "%s(%s, %s)" % (type(self).op, op1.gencode(), op2.gencode())
 
+
+class AVXSum(AVXBinOp, Sum):
     """Sum of two vector registers using AVX intrinsics."""
-
-    def gencode(self, not_scope=True):
-        op1, op2 = self.children
-        return "_mm256_add_pd (%s, %s)" % (op1.gencode(), op2.gencode())
+    op = "_mm256_add_pd"
 
 
-class AVXSub(Sub):
-
+class AVXSub(AVXBinOp, Sub):
     """Subtraction of two vector registers using AVX intrinsics."""
-
-    def gencode(self, not_scope=True):
-        op1, op2 = self.children
-        return "_mm256_sub_pd (%s, %s)" % (op1.gencode(), op2.gencode())
+    op = "mm256_sub_pd"
 
 
-class AVXProd(Prod):
-
+class AVXProd(AVXBinOp, Prod):
     """Product of two vector registers using AVX intrinsics."""
-
-    def gencode(self, not_scope=True):
-        op1, op2 = self.children
-        return "_mm256_mul_pd (%s, %s)" % (op1.gencode(), op2.gencode())
+    op = "_mm256_mul_pd"
 
 
-class AVXDiv(Div):
-
+class AVXDiv(AVXBinOp, Div):
     """Division of two vector registers using AVX intrinsics."""
-
-    def gencode(self, not_scope=True):
-        op1, op2 = self.children
-        return "_mm256_div_pd (%s, %s)" % (op1.gencode(), op2.gencode())
+    op = "_mm256_div_pd"
 
 
 class AVXLoad(Symbol):
@@ -477,8 +475,8 @@ class FlatBlock(Statement, Perfect):
     """Treat a chunk of code as a single statement, i.e. a C string"""
 
     def __init__(self, code, pragma=None):
-        Statement.__init__(self, pragma)
-        self.children.append(code)
+        self.pragma = pragma
+        self.children = [code]
 
     def gencode(self, not_scope=False):
         return self.children[0]
@@ -496,55 +494,34 @@ class Assign(Statement, Perfect):
                       self.children[1].gencode()) + semicolon(not_scope)
 
 
-class Incr(Statement, Perfect):
+class AugmentedAssign(Statement, Perfect):
 
+    def __init__(self, sym, exp, pragma=None):
+        super(AugmentedAssign, self).__init__([sym, exp], pragma)
+
+    def gencode(self, not_scope=False):
+        sym, exp = self.children
+        return "%s %s %s%s" % (sym.gencode(), type(self).op, exp.gencode(), semicolon(not_scope))
+
+
+class Incr(AugmentedAssign):
     """Increment a symbol by an expression."""
-
-    def __init__(self, sym, exp, pragma=None):
-        super(Incr, self).__init__([sym, exp], pragma)
-
-    def gencode(self, not_scope=False):
-        sym, exp = self.children
-        if isinstance(exp, Symbol) and exp.symbol == 1:
-            return incr_by_1(sym.gencode()) + semicolon(not_scope)
-        else:
-            return incr(sym.gencode(), exp.gencode()) + semicolon(not_scope)
+    op = "+="
 
 
-class Decr(Statement, Perfect):
-
+class Decr(AugmentedAssign):
     """Decrement a symbol by an expression."""
-    def __init__(self, sym, exp, pragma=None):
-        super(Decr, self).__init__([sym, exp], pragma)
-
-    def gencode(self, not_scope=False):
-        sym, exp = self.children
-        if isinstance(exp, Symbol) and exp.symbol == 1:
-            return decr_by_1(sym.gencode()) + semicolon(not_scope)
-        else:
-            return decr(sym.gencode(), exp.gencode()) + semicolon(not_scope)
+    op = "-="
 
 
-class IMul(Statement, Perfect):
-
+class IMul(AugmentedAssign):
     """In-place multiplication of a symbol by an expression."""
-    def __init__(self, sym, exp, pragma=None):
-        super(IMul, self).__init__([sym, exp], pragma)
-
-    def gencode(self, not_scope=False):
-        sym, exp = self.children
-        return imul(sym.gencode(), exp.gencode()) + semicolon(not_scope)
+    op = "*="
 
 
-class IDiv(Statement, Perfect):
-
+class IDiv(AugmentedAssign):
     """In-place division of a symbol by an expression."""
-    def __init__(self, sym, exp, pragma=None):
-        super(IDiv, self).__init__([sym, exp], pragma)
-
-    def gencode(self, not_scope=False):
-        sym, exp = self.children
-        return idiv(sym.gencode(), exp.gencode()) + semicolon(not_scope)
+    op = "/="
 
 
 class Decl(Statement, Perfect):
@@ -566,6 +543,9 @@ class Decl(Statement, Perfect):
         self.qual = qualifiers or []
         self.attr = attributes or []
         self.init = as_symbol(init) if init is not None else EmptyStatement()
+
+    def operands(self):
+        return [self.typ, self.sym, self.init, self.qual, self.attr], {}
 
     @property
     def size(self):
@@ -631,13 +611,19 @@ class Block(Statement):
 
     """Block of statements."""
 
-    def __init__(self, stmts, pragma=None, open_scope=False):
+    def __init__(self, stmts, pragma=None, open_scope=None):
         if len(stmts) == 1 and isinstance(stmts[0], Block):
             # Avoid nesting of blocks
             super(Block, self).__init__(stmts[0].children, pragma)
         else:
             super(Block, self).__init__(stmts, pragma)
         self.open_scope = open_scope
+
+    def reconstruct(self, *stmts, **kwargs):
+        return type(self)(stmts, **kwargs)
+
+    def operands(self):
+        return self.children, {'pragma': self.pragma, 'open_scope': self.open_scope}
 
     def gencode(self, not_scope=False):
         code = "".join([n.gencode(not_scope) for n in self.children])
@@ -665,6 +651,12 @@ class For(Statement):
         self.init = init
         self.cond = cond
         self.incr = incr
+
+    def operands(self):
+        return [self.init, self.cond, self.incr, self.children[0]], {'pragma': self.pragma}
+
+    def reconstruct(self, init, cond, incr, body, **kwargs):
+        return type(self)(init, cond, incr, body, **kwargs)
 
     @property
     def dim(self):
@@ -722,6 +714,12 @@ class Switch(Statement):
         self.switch_expr = switch_expr
         self.cases = cases
 
+    def operands(self):
+        return [self.switch_expr, self.cases], {}
+
+    def reconstruct(self, expr, cases, **kwargs):
+        return type(self)(expr, cases, **kwargs)
+
     def gencode(self):
         return "switch (" + str(self.switch_expr) + ")\n{\n" \
             + indent("\n".join("case %s: \n{\n%s\n}" % (str(i), indent(str(s)))
@@ -739,6 +737,12 @@ class If(Statement):
     def __init__(self, if_expr, branches):
         super(If, self).__init__(branches)
         self.if_expr = if_expr
+
+    def operands(self):
+        return [self.if_expr, self.children], {}
+
+    def reconstruct(self, expr, branches, **kwargs):
+        return type(self)(expr, branches, **kwargs)
 
     def gencode(self, not_scope=False):
         else_branch = ""
@@ -766,6 +770,12 @@ class FunDecl(Statement):
         self.name = name
         self.args = args
         self.headers = headers or []
+
+    def operands(self):
+        return [self.ret, self.name, self.args, self.children[0], self.pred, self.headers], {}
+
+    def reconstruct(self, ret, name, args, body, pred, headers, **kwargs):
+        return type(self)(ret, name, args, body, pred, headers, **kwargs)
 
     @property
     def body(self):
@@ -806,6 +816,12 @@ class AVXLocalPermute(Statement):
         self.r = r
         self.mask = mask
 
+    def reconstruct(self, r, mask, **kwargs):
+        return type(self)(r, mask, **kwargs)
+
+    def operands(self):
+        return [self.r, self.mask], {}
+
     def gencode(self, not_scope=True):
         op = self.r.gencode()
         return "_mm256_permute_pd (%s, %s)" \
@@ -822,6 +838,12 @@ class AVXGlobalPermute(Statement):
         self.r2 = r2
         self.mask = mask
 
+    def reconstruct(self, r1, r2, mask, **kwargs):
+        return type(self)(r1, r2, mask, **kwargs)
+
+    def operands(self):
+        return [self.r1, self.r2, self.mask], {}
+
     def gencode(self, not_scope=True):
         op1 = self.r1.gencode()
         op2 = self.r2.gencode()
@@ -829,34 +851,35 @@ class AVXGlobalPermute(Statement):
             % (op1, op2, self.mask) + semicolon(not_scope)
 
 
-class AVXUnpackHi(Statement):
+class AVXUnpack(Statement):
+    def __init__(self, r1, r2):
+        self.r1 = r1
+        self.r2 = r2
+
+    def reconstruct(self, r1, r2, **kwargs):
+        return type(self)(r1, r2, **kwargs)
+
+    def operands(self):
+        return [self.r1, self.r2], {}
+
+    def gencode(self, not_scope=True):
+        op1 = self.r1.gencode()
+        op2 = self.r2.gencode()
+        return "%s(%s, %s)" % (type(self).op, op1, op2) + semicolon(not_scope)
+
+
+class AVXUnpackHi(AVXUnpack):
 
     """Unpack of values in a vector register using AVX intrinsics.
     The intrinsic function used is ``_mm256_unpackhi_pd``."""
-
-    def __init__(self, r1, r2):
-        self.r1 = r1
-        self.r2 = r2
-
-    def gencode(self, not_scope=True):
-        op1 = self.r1.gencode()
-        op2 = self.r2.gencode()
-        return "_mm256_unpackhi_pd (%s, %s)" % (op1, op2) + semicolon(not_scope)
+    op = "_mm256_unpackhi_pd"
 
 
-class AVXUnpackLo(Statement):
+class AVXUnpackLo(AVXUnpack):
 
     """Unpack of values in a vector register using AVX intrinsics.
     The intrinsic function used is ``_mm256_unpacklo_pd``."""
-
-    def __init__(self, r1, r2):
-        self.r1 = r1
-        self.r2 = r2
-
-    def gencode(self, not_scope=True):
-        op1 = self.r1.gencode()
-        op2 = self.r2.gencode()
-        return "_mm256_unpacklo_pd (%s, %s)" % (op1, op2) + semicolon(not_scope)
+    op = "_mm256_unpacklo_pd"
 
 
 class AVXSetZero(Statement):
@@ -864,6 +887,7 @@ class AVXSetZero(Statement):
     """Set to 0 the entries of a vector register using AVX intrinsics."""
 
     def gencode(self, not_scope=True):
+        # mm256_setzero_pd takes no arguments and returns zeroed vector register
         return "_mm256_setzero_pd ()" + semicolon(not_scope)
 
 
@@ -874,6 +898,12 @@ class Invert(Statement, Perfect, LinAlg):
     """In-place inversion of a square array."""
     def __init__(self, sym, dim, pragma=None):
         super(Invert, self).__init__([sym, dim, dim], pragma)
+
+    def reconstruct(self, sym, dim, **kwargs):
+        return type(self)(sym, dim, **kwargs)
+
+    def operands(self):
+        return [self.children[0], self.children[1]], {'pragma': self.pragma}
 
     def gencode(self, not_scope=True):
         sym, dim, lda = self.children
@@ -891,22 +921,37 @@ class Invert(Statement, Perfect, LinAlg):
 """ % (str(dim), str(lda), str(sym), str(sym))
 
 
-class Determinant1x1(Expr, Perfect, LinAlg):
+class Determinant(Expr, Perfect, LinAlg):
+    """Generic determinant"""
+    def __init__(self, sym, pragma=None):
+        super(Determinant, self).__init__([sym, type(self).dim, type(self).lda], pragma=pragma)
+
+    def reconstruct(self, sym, **kwargs):
+        return type(self)(sym, **kwargs)
+
+    def operands(self):
+        return self.children[0], {}
+
+    def gencode(self):
+        raise NotImplementedError("Not implemented")
+
+
+class Determinant1x1(Determinant):
 
     """Determinant of a 1x1 square array."""
-    def __init__(self, sym, pragma=None):
-        super(Determinant1x1, self).__init__([sym, 2, 2])
+    dim = 2
+    lda = 2
 
     def gencode(self, scope=False):
         sym, dim, lda = self.children
         return Symbol(sym.gencode(), (0, 0))
 
 
-class Determinant2x2(Expr, Perfect, LinAlg):
+class Determinant2x2(Determinant):
 
     """Determinant of a 2x2 square array."""
-    def __init__(self, sym, pragma=None):
-        super(Determinant2x2, self).__init__([sym, 2, 2])
+    dim = 2
+    lda = 2
 
     def gencode(self, scope=False):
         sym, dim, lda = self.children
@@ -918,8 +963,8 @@ class Determinant2x2(Expr, Perfect, LinAlg):
 class Determinant3x3(Expr, Perfect, LinAlg):
 
     """Determinant of a 3x3 square array."""
-    def __init__(self, sym, pragma=None):
-        super(Determinant3x3, self).__init__([sym, 2, 2])
+    dim = 2
+    lda = 2
 
     def gencode(self, scope=False):
         sym, dim, lda = self.children
@@ -944,6 +989,9 @@ class PreprocessNode(Node):
 
     def __init__(self, prep):
         super(PreprocessNode, self).__init__([prep])
+
+    def reconstruct(self, prep, **kwargs):
+        return type(self)(prep, **kwargs)
 
     def gencode(self, not_scope=False):
         return self.children[0].gencode()

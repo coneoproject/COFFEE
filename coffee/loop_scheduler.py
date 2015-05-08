@@ -47,6 +47,7 @@ from warnings import warn as warning
 from base import *
 from utils import *
 from expression import MetaExpr, copy_metaexpr
+from coffee.visitors import FindLoopNests
 
 
 class LoopScheduler(object):
@@ -140,7 +141,7 @@ class SSALoopMerger(LoopScheduler):
         for n in self.root.children:
             if isinstance(n, For):
                 # Track structure of iteration spaces
-                loops_infos = visit(n, self.root)['fors']
+                loops_infos = FindLoopNests().visit(n, {'node_parent': self.root})
                 for li in loops_infos:
                     loops, loops_parents = zip(*li)
                     # Note that only inner loops can be fused, and that they share
