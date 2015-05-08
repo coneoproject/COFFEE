@@ -101,6 +101,11 @@ class LoopOptimizer(object):
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             # 1) Rewrite the expressions
+            if expr_info.dimension in [0, 1]:
+                if mode in [1, 2, 3]:
+                    ew.licm(out_domain=True)
+                continue
+
             if mode == 1:
                 ew.licm()
 
