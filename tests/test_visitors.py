@@ -143,12 +143,6 @@ def fun_aa_in_body(block_aa):
     return FunDecl("void", "foo", [], block_aa)
 
 
-@pytest.fixture(params=[block_aa, fun_aa_in_args,
-                        fun_aa_in_body])
-def tree(request):
-    return request.param()
-
-
 @pytest.mark.parametrize("tree",
                          [block_aa(),
                           fun_aa_in_args(),
