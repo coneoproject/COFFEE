@@ -658,6 +658,10 @@ class ExpressionExpander(object):
             return self._expand(node.child, node)
 
         elif isinstance(node, (Div, FunCall)):
+            # Try to expand /within/ the children, but then return saying "I'm not
+            # expandable any further"
+            for n in node.children:
+                self._expand(n, node)
             return ([node], self.GROUP)
 
         elif isinstance(node, Prod):
@@ -782,6 +786,10 @@ class ExpressionFactorizer(object):
             return self._factorize(node.child, node)
 
         elif isinstance(node, (FunCall, Div)):
+            # Try to factorize /within/ the children, but then return saying
+            # "I'm not factorizable any further"
+            for n in node.children:
+                self._factorize(n, node)
             return self.Term(set([node]))
 
         elif isinstance(node, Prod):
