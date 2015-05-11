@@ -280,7 +280,6 @@ class ExpressionRewriter(object):
         injectable_nests = [n for n in nests if zip(*n)[0] != self.expr_info.loops]
 
         # Full unroll any unrollable, injectable loop
-        to_replace = {}
         for nest in injectable_nests:
             to_unroll = [(l, p) for l, p in nest if l not in self.expr_info.loops]
             nest_writers = visit(to_unroll[0][0], search=Writer)['search']
@@ -290,22 +289,26 @@ class ExpressionRewriter(object):
                     continue
                 # At this point, must be /op = Incr/
                 for stmt in stmts:
+                    sym, expr = stmt.children
                     if stmt in [l.incr for l, p in to_unroll]:
                         # Ignore useless stmts
                         continue
                     for l, p in reversed(to_unroll):
-                        inject_expr = [dcopy(stmt.children[1]) for i in range(l.size)]
+                        inject_expr = [dcopy(expr) for i in range(l.size)]
                         # Update rank of symbols
                         for i, e in enumerate(inject_expr):
                             e_syms = visit(e, search=Symbol)['search'][Symbol]
                             for s in e_syms:
                                 s.rank = tuple([r if r != l.dim else i for r in s.rank])
-                        stmt.children[1] = ast_make_expr(Sum, inject_expr)
-                        p.children.remove(l)
-                    to_replace[stmt.children[0]] = stmt.children[1]
+                        expr = ast_make_expr(Sum, inject_expr)
+                    # Inject the unrolled operation into the expression
+                    ast_replace(self.stmt, {sym: expr}, copy=True)
+                    # Clean up
+                    p.children.remove(self.decls[sym.symbol])
+                    self.decls.pop(sym.symbol)
+            for l, p in to_unroll:
+                p.children.remove(l)
 
-        # Inject the unrolled operation into the expression
-        ast_replace(self.stmt, to_replace, copy=True)
 
     @staticmethod
     def reset():
