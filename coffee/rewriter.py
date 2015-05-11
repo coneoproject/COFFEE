@@ -212,7 +212,7 @@ class ExpressionRewriter(object):
         # Perform the factorization
         self.expr_factorizer.factorize(should_factorize)
 
-    def reassociate(self):
+    def reassociate(self, reorder=lambda x: x):
         """Reorder symbols in associative operations following a convention.
         By default, the convention is to order the symbols based on their rank.
         For example, the terms in the expression ::
@@ -248,7 +248,7 @@ class ExpressionRewriter(object):
                     _reassociate(n, p)
                 # Create the reassociated product and modify the original AST
                 children = zip(*other_nodes)[0] if other_nodes else ()
-                children += zip(*symbols)[1] if symbols else ()
+                children += tuple(reorder(zip(*symbols)[1] if symbols else ()))
                 reassociated_node = ast_make_expr(Prod, children)
                 parent.children[parent.children.index(node)] = reassociated_node
 
