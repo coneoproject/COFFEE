@@ -125,6 +125,14 @@ class LoopOptimizer(object):
                     ew.reassociate()
                     ew.licm(hoist_domain_const=True)
 
+            elif mode == 4:
+                if expr_info.is_tensor:
+                    ew.expand(mode='full')
+                    ew.factorize(mode='immutable')
+                    ew.licm(hoist_out_domain=True)
+                    ew.factorize()
+                    ew.licm()
+
             # 2) Try merging and optimizing the loops created by rewriting
             lm = SSALoopMerger(self.header, ew.expr_graph)
             merged_loops = lm.merge()
