@@ -33,16 +33,10 @@
 
 """Utility functions for the transformation of ASTs."""
 
-try:
-    from collections import OrderedDict
-# OrderedDict was added in Python 2.7. Earlier versions can use ordereddict
-# from PyPI
-except ImportError:
-    from ordereddict import OrderedDict
 import resource
 import operator
 from warnings import warn as warning
-from copy import deepcopy as dcopy, copy as wcopy
+from copy import deepcopy as dcopy
 from collections import defaultdict
 
 from base import *

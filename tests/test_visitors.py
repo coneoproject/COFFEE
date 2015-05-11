@@ -78,6 +78,7 @@ def test_find_inner_loops(structure):
     v = FindInnerLoops()
 
     inner_loops = []
+
     def build_loop(structure):
         ret = []
         for entry in structure:
@@ -129,11 +130,13 @@ def block_aa():
     a = Symbol("a")
     return Block([a, a])
 
+
 @pytest.fixture
 def fun_aa_in_args():
     a = Symbol("a")
     return FunDecl("void", "foo", [a, a], Block([Assign(Symbol("b"),
                                                         Symbol("c"))]))
+
 
 @pytest.fixture
 def fun_aa_in_body(block_aa):
@@ -144,6 +147,7 @@ def fun_aa_in_body(block_aa):
                         fun_aa_in_body])
 def tree(request):
     return request.param()
+
 
 @pytest.mark.parametrize("tree",
                          [block_aa(),
@@ -176,7 +180,7 @@ def test_uniquify(tree):
         check.visit(tree)
 
     assert check.visit(new_tree)
-    
+
 
 if __name__ == "__main__":
     import os
