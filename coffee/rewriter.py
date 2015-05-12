@@ -37,7 +37,7 @@ import itertools
 
 from base import *
 from utils import *
-from coffee.visitors import SymbolReferences
+from coffee.visitors import SymbolReferences, SymbolDependencies, FindInstances
 
 
 class ExpressionRewriter(object):
@@ -311,17 +311,66 @@ class ExpressionRewriter(object):
 
     def simplify(self):
         """Simplify an expression by applying transformations which should enhance
-        the effectiveness of later rewriting passes. For example, replace division
-        by a constant with multiplication, which gives expansion and factorization
-        more restructuring possibilities."""
+        the effectiveness of later rewriting passes. The transformations applied
+        are: ::
 
-        divisions = visit(self.stmt.children[1], search=Div)['search'][Div]
+            * ``division replacement``: replace divisions by a constant with
+                multiplications, which gives expansion and factorization more
+                rewriting opportunities
+            * ``loop reduction``: simplify loops along which a reduction is
+                performed by 1) preaccumulating along the dimension of the
+                reduction and 2) removing the reduction loop
+        """
+        # Aliases
+        stmt, expr_info = self.stmt, self.expr_info
+
+        # Division replacement
+        divisions = visit(stmt.children[1], search=Div)['search'][Div]
         to_replace = {}
         for i in divisions:
             if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
                 to_replace[i] = Prod(i.left, Div(1, i.right.symbol))
-        ast_replace(self.stmt.children[1], to_replace, copy=True, mode='symbol')
+        ast_replace(stmt.children[1], to_replace, copy=True, mode='symbol')
 
+        ###
+
+        # Loop reduction
+        if not stmt.__class__ in [Incr, Decr, IMul, IDiv]:
+            # Not a reduction expression, give up
+            return
+        expr_syms = FindInstances(Symbol).visit(stmt.children[1])[Symbol]
+        reduction_loops = expr_info.out_domain_loops_info
+        if any([not is_perfect_loop(l) for l, p in reduction_loops]):
+            # Unsafe if not a perfect loop nest
+            return
+        for i, (l, p) in enumerate(reduction_loops):
+            syms_dep = SymbolDependencies().visit(l)
+            if not all([tuple(syms_dep[s]) == expr_info.loops and
+                        s.dim == len(expr_info.loops) for s in expr_syms if syms_dep[s]]):
+                # A sufficient (although not necessary) condition for loop reduction to
+                # be safe is that all symbols in the expression are either constants or
+                # tensors assuming a distinct value in each point of the iteration space.
+                # So if this condition fails, we give up
+                return
+            # At this point, tensors can be reduced along the reducible dimensions
+            reducible_syms = [s for s in expr_syms if s.rank]
+            # All involved symbols must result from hoisting
+            if not all([s.symbol in self.hoisted for s in reducible_syms]):
+                return
+            # Replace hoisted assignments with reductions
+            finder = FindInstances(Assign, stop_when_found=True, with_parent=True)
+            for hoisted_loop in self.hoisted.all_loops:
+                for assign, parent in finder.visit(hoisted_loop)[Assign]:
+                    sym, expr = assign.children
+                    decl = self.hoisted[sym.symbol].decl
+                    if sym.symbol in [s.symbol for s in reducible_syms]:
+                        parent.children[parent.children.index(assign)] = Incr(sym, expr)
+                        sym.rank = self.expr_info.domain_dims
+                        decl.sym.rank = decl.sym.rank[i+1:]
+            # Remove the reduction loop and update the rank of its symbols
+            p.children[p.children.index(l)] = l.body[0]
+            for s in reducible_syms:
+                s.rank = self.expr_info.domain_dims
 
     @staticmethod
     def reset():

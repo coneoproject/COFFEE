@@ -124,6 +124,7 @@ class LoopOptimizer(object):
                     ew.licm(hoist_out_domain=True)
                     ew.reassociate()
                     ew.licm(hoist_domain_const=True)
+                    ew.simplify()
 
             elif mode == 4:
                 if expr_info.is_tensor:
