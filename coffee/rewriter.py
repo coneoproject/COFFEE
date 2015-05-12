@@ -729,15 +729,15 @@ class ExpressionExpander(object):
 
         # Now see if some of the expanded terms are groupable at the level
         # of hoisted expressions
-        to_replace, to_remove = {}, set()
         for expansion in self.expansions:
             exp, grp = expansion.left, expansion.right
             hoisted = self._hoist(expansion, exp, grp)
             if hoisted:
-                to_replace.update(hoisted)
-                to_remove.add(grp)
-        ast_replace(self.stmt, to_replace, copy=True)
-        ast_remove(self.stmt, to_remove, mode='symbol')
+                # Note: replacing here impacts the expansions tracked in
+                # /self.expansions/. This is on purpose, since allows hoisting
+                # to be correctly applied incrementally
+                ast_replace(self.stmt, hoisted, copy=True, mode='symbol')
+                ast_remove(self.stmt, grp, mode='symbol')
 
 
 class ExpressionFactorizer(object):
