@@ -371,6 +371,10 @@ class Symbol(Expr):
     def operands(self):
         return [self.symbol, self.rank, self.offset], {}
 
+    @property
+    def dim(self):
+        return len(self.rank)
+
     def gencode(self, not_scope=True, parent=None):
         points = ""
         if not self.offset:
