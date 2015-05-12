@@ -309,6 +309,19 @@ class ExpressionRewriter(object):
             for l, p in to_unroll:
                 p.children.remove(l)
 
+    def simplify(self):
+        """Simplify an expression by applying transformations which should enhance
+        the effectiveness of later rewriting passes. For example, replace division
+        by a constant with multiplication, which gives expansion and factorization
+        more restructuring possibilities."""
+
+        divisions = visit(self.stmt.children[1], search=Div)['search'][Div]
+        to_replace = {}
+        for i in divisions:
+            if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
+                to_replace[i] = Prod(i.left, Div(1, i.right.symbol))
+        ast_replace(self.stmt.children[1], to_replace, copy=True, mode='symbol')
+
 
     @staticmethod
     def reset():
