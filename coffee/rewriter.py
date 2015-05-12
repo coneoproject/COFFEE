@@ -562,6 +562,9 @@ class ExpressionHoister(object):
             for i in hoisted_decls:
                 self.hoisted.update_stmt(i.sym.symbol, loop=inv_code[0], place=place)
 
+        # Finally, make sure symbols are unique in the AST
+        self.stmt.children[1] = dcopy(self.stmt.children[1])
+
 
 class ExpressionExpander(object):
 
