@@ -217,7 +217,6 @@ def test_symbol_declarations_fundecl_args():
     assert set(ret.keys()) == set([a.symbol, b.symbol])
 
 
-@pytest.mark.xfail
 def test_symbol_declarations_fundecl_body():
     a = Symbol("a")
     b = Symbol("b")
@@ -234,7 +233,6 @@ def test_symbol_declarations_fundecl_body():
     assert set(ret.keys()) == set([a.symbol, b.symbol])
 
 
-@pytest.mark.xfail
 def test_symbol_declarations_fundecl_both():
     a = Symbol("a")
     b = Symbol("b")
