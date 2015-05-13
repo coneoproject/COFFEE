@@ -640,11 +640,14 @@ class ExpressionExpander(object):
         self.expanded_decls = {}
         self.cache = {}
 
-    def _hoist(self, expansion, exp, grp):
-        """Expand an hoisted expression. If there are no data dependencies,
-        the hoisted expression is expanded and no new symbols are introduced.
-        Otherwise, (e.g., the symbol to be expanded appears multiple times, or
-        it depends on other hoisted symbols), create a new symbol."""
+    def _hoist(self, expansion):
+        """Try to aggregate an expanded expression E with a previously hoisted
+        expression H. If there are no dependencies, H is expanded with E, so
+        no new symbols need be introduced. Otherwise (e.g., the H temporary
+        appears in multiple places), create a new symbol."""
+        exp, grp = expansion.left, expansion.right
+        cache_key = (str(exp), str(grp))
+
         # First, check if any of the symbols in /exp/ have been hoisted
         try:
             exp = [s for s in FindInstances(Symbol).visit(exp)[Symbol]
@@ -652,6 +655,12 @@ class ExpressionExpander(object):
         except:
             # No hoisted symbols in the expanded expression, so return
             return {}
+
+        # Before moving on, access the cache to check whether the same expansion
+        # has alredy been performed. If that's the case, we retrieve and return the
+        # result of that expansion, since there is no need to add further temporaries
+        if cache_key in self.cache:
+            return {exp: self.cache[cache_key]}
 
         # Aliases
         hoisted_expr = self.hoisted[exp.symbol].expr
@@ -671,28 +680,11 @@ class ExpressionExpander(object):
             if l in hoisted_place.children:
                 break
 
-        # The expression used for expansion is assigned to a temporary value in order
-        # to minimize code size
-        if str(grp) in self.cache:
-            grp = dcopy(self.cache[str(grp)])
-        elif not isinstance(grp, Symbol):
-            grp_sym = Symbol(self._expanded_sym % {'loop_dep': 'CONST',
-                                                   'expr_id': self.expr_id,
-                                                   'i': len(self.cache)})
-            grp_decl = Decl(self.expr_info.type, dcopy(grp_sym), grp)
-            grp_decl.scope = LOCAL
-            # Track the new temporary
-            self.expanded_decls[grp_decl.sym.symbol] = grp_decl
-            self.cache[str(grp)] = grp_sym
-            self.expr_graph.add_dependency(grp_sym, grp)
-            # Update the AST
-            insert_at_elem(hoisted_place.children, hoisted_loop, grp_decl)
-            grp = grp_sym
-
         # No dependencies, just perform the expansion
         if not self.expr_graph.is_read(exp):
             hoisted_expr.children[0] = op(Par(hoisted_expr.children[0]), dcopy(grp))
             self.expr_graph.add_dependency(exp, grp)
+            self.cache[cache_key] = exp
             return {exp: exp}
 
         # Create new symbol, expression, and declaration
@@ -710,6 +702,7 @@ class ExpressionExpander(object):
         self.expanded_decls[decl.sym.symbol] = decl
         self.hoisted[hoisted_exp.symbol] = (expr, decl, hoisted_loop, hoisted_place)
         self.expr_graph.add_dependency(hoisted_exp, expr)
+        self.cache[cache_key] = hoisted_exp
         return {exp: hoisted_exp}
 
     def _expand(self, node, parent):
@@ -774,17 +767,12 @@ class ExpressionExpander(object):
         # Expand according to the /should_expand/ heuristic
         self._expand(self.stmt.children[1], self.stmt)
 
-        # Now see if some of the expanded terms are groupable at the level
-        # of hoisted expressions
+        # Try to aggregate expanded terms with hoisted expressions (if any)
         for expansion in self.expansions:
-            exp, grp = expansion.left, expansion.right
-            hoisted = self._hoist(expansion, exp, grp)
+            hoisted = self._hoist(expansion)
             if hoisted:
-                # Note: replacing here impacts the expansions tracked in
-                # /self.expansions/. This is on purpose, since allows hoisting
-                # to be correctly applied incrementally
                 ast_replace(self.stmt, hoisted, copy=True, mode='symbol')
-                ast_remove(self.stmt, grp, mode='symbol')
+                ast_remove(self.stmt, expansion.right, mode='symbol')
 
 
 class ExpressionFactorizer(object):
