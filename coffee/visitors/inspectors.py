@@ -485,6 +485,8 @@ class SymbolDeclarations(Visitor):
         ret = OrderedDict()
         for op in o.args:
             ret.update(self.visit(op, env=new_env))
+        for op in o.children:
+            ret.update(self.visit(op, env=env))
         return ret
 
     def visit_Decl(self, o, env):
