@@ -176,6 +176,81 @@ def test_uniquify(tree):
     assert check.visit(new_tree)
 
 
+def test_symbol_declarations_decl():
+    a = Symbol("a")
+
+    tree = Decl("double", a)
+
+    v = SymbolDeclarations()
+
+    ret = v.visit(tree)
+
+    assert set(ret.keys()) == set([a.symbol])
+
+
+def test_symbol_declarations_block():
+    a = Symbol("a")
+    b = Symbol("b")
+
+    tree = Block([Decl("int", a),
+                  Decl("double", b)])
+
+    v = SymbolDeclarations()
+
+    ret = v.visit(tree)
+
+    assert set(ret.keys()) == set([a.symbol, b.symbol])
+
+
+def test_symbol_declarations_fundecl_args():
+    a = Symbol("a")
+    b = Symbol("b")
+
+    body = Block([Assign(b, a)])
+
+    tree = FunDecl("void", "foo", [Decl("double", a), Decl("double", b)],
+                   body)
+
+    v = SymbolDeclarations()
+
+    ret = v.visit(tree)
+    assert set(ret.keys()) == set([a.symbol, b.symbol])
+
+
+@pytest.mark.xfail
+def test_symbol_declarations_fundecl_body():
+    a = Symbol("a")
+    b = Symbol("b")
+
+    body = Block([Decl("int", a),
+                  Decl("double", b)])
+
+    tree = FunDecl("void", "foo", [],
+                   body)
+
+    v = SymbolDeclarations()
+
+    ret = v.visit(tree)
+    assert set(ret.keys()) == set([a.symbol, b.symbol])
+
+
+@pytest.mark.xfail
+def test_symbol_declarations_fundecl_both():
+    a = Symbol("a")
+    b = Symbol("b")
+
+    body = Block([Decl("int", a),
+                  Assign(a, b)])
+
+    tree = FunDecl("void", "foo", [Decl("int", b)],
+                   body)
+
+    v = SymbolDeclarations()
+
+    ret = v.visit(tree)
+    assert set(ret.keys()) == set([a.symbol, b.symbol])
+
+
 if __name__ == "__main__":
     import os
     pytest.main(os.path.abspath(__file__))
