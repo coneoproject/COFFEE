@@ -509,7 +509,7 @@ class ExpressionHoister(object):
             extracted = self._extract(self.stmt.children[1], symbols, **kwargs)
             for dep, subexprs in extracted.items():
                 # -1) Remove identical subexpressions
-                subexprs = dict([(str(e), e) for e in subexprs]).values()
+                subexprs = uniquify(subexprs)
 
                 # 0) Determine the loop nest level where invariant expressions
                 # should be hoisted. The goal is to hoist them as far as possible
