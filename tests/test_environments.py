@@ -11,6 +11,7 @@ def env():
 def child(env):
     return Environment(env, bar=2)
 
+
 @pytest.fixture
 def shadow(env):
     return Environment(env, foo=2)
