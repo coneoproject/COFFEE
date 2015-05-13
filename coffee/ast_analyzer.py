@@ -41,7 +41,7 @@ except ImportError:
 import networkx as nx
 
 from base import *
-from utils import visit
+from coffee.visitors import FindInstances
 
 
 class StmtInfo():
@@ -139,15 +139,15 @@ class ExpressionGraph(object):
         :param node: root of the AST visited to initialize the ExpressionGraph.
         """
         self.deps = nx.DiGraph()
-        search = visit(node, search=Writer)['search']
-        for type, nodes in search.items():
+        writes = FindInstances(Writer).visit(node)
+        for type, nodes in writes.items():
             nodes = [n for n in nodes if not isinstance(n.children[1], int)]
             for n in nodes:
                 self.add_dependency(*n.children)
 
     def add_dependency(self, sym, expr):
         """Add dependency between ``sym`` and symbols appearing in ``expr``."""
-        expr_symbols = visit(expr, search=Symbol)['search'][Symbol]
+        expr_symbols = FindInstances(Symbol).visit(expr)[Symbol]
         for es in expr_symbols:
             self.deps.add_edge(sym.symbol, es.symbol)
 
@@ -155,7 +155,7 @@ class ExpressionGraph(object):
         """Return True if any symbols in ``expr`` is read by ``target_sym``,
         False otherwise. If ``target_sym`` is None, Return True if any symbols
         in ``expr`` are read by at least one symbol, False otherwise."""
-        input_syms = visit(expr, search=Symbol)['search'][Symbol]
+        input_syms = FindInstances(Symbol).visit(expr)[Symbol]
         for s in input_syms:
             if s.symbol not in self.deps:
                 continue
@@ -170,7 +170,7 @@ class ExpressionGraph(object):
         """Return True if any symbols in ``expr`` is written by ``target_sym``,
         False otherwise. If ``target_sym`` is None, Return True if any symbols
         in ``expr`` are written by at least one symbol, False otherwise."""
-        input_syms = visit(expr, search=Symbol)['search'][Symbol]
+        input_syms = FindInstances(Symbol).visit(expr)[Symbol]
         for s in input_syms:
             if s.symbol not in self.deps:
                 continue

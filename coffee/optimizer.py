@@ -37,7 +37,7 @@ from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler, SSALoopMerger
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
-from coffee.visitors import MaxLoopDepth
+from coffee.visitors import MaxLoopDepth, FindInstances
 
 
 class LoopOptimizer(object):
@@ -148,8 +148,8 @@ class LoopOptimizer(object):
                          for k, v in d.items())
         for l in self.hoisted.all_loops:
             l_occs = count(l, read_only=True)
-            info = visit(l, search=Block)
-            innermost_block = info['search'][Block][-1]
+            info = visit(l)
+            innermost_block = FindInstances(Block).visit(l)[Block][-1]
             to_replace, to_remove = {}, []
             for (symbol, rank), sym_occs in l_occs.items():
                 # If the symbol appears once, then it is a potential candidate

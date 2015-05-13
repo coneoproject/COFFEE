@@ -143,8 +143,7 @@ class ExpressionRewriter(object):
                      * mode == 'full': expansion is performed aggressively without \
                                        any specific restrictions.
         """
-        info = visit(self.stmt.children[1], search=Symbol)
-        symbols = info['search'][Symbol]
+        symbols = FindInstances(Symbol).visit(self.stmt.children[1])[Symbol]
 
         # Select the expansion strategy
         if mode == 'standard':
@@ -189,8 +188,7 @@ class ExpressionRewriter(object):
                                             grouped together, within the obvious \
                                             limits imposed by the expression itself.
         """
-        info = visit(self.stmt.children[1], search=Symbol)
-        symbols = info['search'][Symbol]
+        symbols = FindInstances(Symbol).visit(self.stmt.children[1])[Symbol]
 
         # Select the expansion strategy
         if mode == 'standard':
@@ -282,7 +280,7 @@ class ExpressionRewriter(object):
         # Full unroll any unrollable, injectable loop
         for nest in injectable_nests:
             to_unroll = [(l, p) for l, p in nest if l not in self.expr_info.loops]
-            nest_writers = visit(to_unroll[0][0], search=Writer)['search']
+            nest_writers = FindInstances(Writer).visit(to_unroll[0][0])
             for op, stmts in nest_writers.items():
                 if op in [Assign, IMul, IDiv]:
                     # Unroll is unsafe, skip
@@ -297,7 +295,7 @@ class ExpressionRewriter(object):
                         inject_expr = [dcopy(expr) for i in range(l.size)]
                         # Update rank of symbols
                         for i, e in enumerate(inject_expr):
-                            e_syms = visit(e, search=Symbol)['search'][Symbol]
+                            e_syms = FindInstances(Symbol).visit(e)[Symbol]
                             for s in e_syms:
                                 s.rank = tuple([r if r != l.dim else i for r in s.rank])
                         expr = ast_make_expr(Sum, inject_expr)
@@ -325,7 +323,7 @@ class ExpressionRewriter(object):
         stmt, expr_info = self.stmt, self.expr_info
 
         # Division replacement
-        divisions = visit(stmt.children[1], search=Div)['search'][Div]
+        divisions = FindInstances(Div).visit(stmt.children[1])[Div]
         to_replace = {}
         for i in divisions:
             if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
@@ -649,7 +647,7 @@ class ExpressionExpander(object):
         it depends on other hoisted symbols), create a new symbol."""
         # First, check if any of the symbols in /exp/ have been hoisted
         try:
-            exp = [s for s in visit(exp, search=Symbol)['search'][Symbol]
+            exp = [s for s in FindInstances(Symbol).visit(exp)[Symbol]
                    if s.symbol in self.hoisted and self.should_expand(s)][0]
         except:
             # No hoisted symbols in the expanded expression, so return
