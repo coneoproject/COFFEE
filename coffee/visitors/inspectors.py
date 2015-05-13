@@ -337,14 +337,28 @@ class SymbolDependencies(Visitor):
     """
     Visit the tree and return a dict collecting symbol dependencies.
 
-    The returned dict contains both maps from nodes to a (possibly
-    empty) loop list the symbol depends on, and maps symbol names to
-    WRITE access.
+    The returned dict contains maps from nodes to a (possibly
+    empty) loop list the symbol depends on.
     """
 
     def visit_Symbol(self, o, env):
-        # Empty loop nest for starters
-        return {o: []}
+        try:
+            write = env["write"]
+        except KeyError:
+            write = False
+        try:
+            nest = env["loop_nest"]
+        except KeyError:
+            nest = []
+        if write:
+            # Remember that this symbol /name/ was written,
+            # as well as the full current loop nest for the
+            # symbol itself
+            return {o: [l for l in nest],
+                    o.symbol: True}
+        # Not being written, only care if the loop indices
+        # of the current nest access the symbol
+        return {o: [l for l in nest if l.dim in o.rank]}
 
     def visit_object(self, o, env):
         return {}
@@ -371,41 +385,46 @@ class SymbolDependencies(Visitor):
     visit_FunCall = visit_Node
 
     def visit_Invert(self, o, env):
-        lvalue = self.visit(o.children[0], env=env)
-        for k, v in lvalue.iteritems():
-            # lvalue name is WRITTEN
-            lvalue[k.symbol] = WRITE
-        return lvalue
+        return self.visit(o.children[0], env=env)
 
     def visit_Writer(self, o, env):
         ret = OrderedDict()
-        lvalue = self.visit(o.children[0], env=env)
-        for k, v in lvalue.iteritems():
-            ret[k] = v
-            # lvalue name is WRITTEN
-            ret[k.symbol] = WRITE
+        write_env = Environment(env, write=True)
+        lvalue = self.visit(o.children[0], env=write_env)
+        ret.update(lvalue)
         for r in o.children[1:]:
             d = self.visit(r, env=env)
             ret.update(d)
         return ret
 
     def visit_For(self, o, env):
+        try:
+            loop_nest = env["loop_nest"]
+        except KeyError:
+            loop_nest = []
+        new_env = Environment(env, loop_nest=loop_nest + [o])
         # Don't care about symbol access in increments, only children
-        args = [self.visit(op, env=env) for op in o.children]
+        args = [self.visit(op, env=new_env) for op in o.children]
         ret = OrderedDict()
-        # First merge args
         for a in args:
             ret.update(a)
-        # Now fill in symbol loop dependencies.  If the symbol name is
-        # WRITTEN anywhere, then it's dependent on all loops in the
-        # current nest, otherwise only the ones that access it.
+
+        # Dependencies for variables that are written in one nest
+        # and read in a subsequent one need to respect this.
+        nest = new_env["loop_nest"]
         for k, v in ret.iteritems():
             if type(k) is not Symbol:
-                # name, don't care about it here.
                 continue
-            mode = ret.get(k.symbol, READ)
-            if (mode == WRITE) or (o.dim in k.rank):
-                ret[k] = [o] + v
+            if k.symbol in ret:
+                # Symbol name was written in some nest
+                # The dependency for this symbol is therefore
+                # whatever nest came from visiting the children
+                # plus the current nest at this point in the tree,
+                # suitably uniquified.
+                new_v = [l for l in nest]
+                new_v.extend([l for l in v if l not in new_v])
+                ret[k] = new_v
+
         return ret
 
 
@@ -469,6 +488,7 @@ class SymbolModes(Visitor):
         return ret
 
     visit_Invert = visit_Writer
+
 
 class SymbolDeclarations(Visitor):
 

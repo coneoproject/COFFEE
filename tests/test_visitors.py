@@ -249,6 +249,72 @@ def test_symbol_declarations_fundecl_both():
     assert set(ret.keys()) == set([a.symbol, b.symbol])
 
 
+def test_symbol_dependencies_no_nest():
+    a = Symbol("a")
+
+    tree = Assign(a, Symbol("1"))
+
+    v = SymbolDependencies()
+
+    ret = v.visit(tree)
+
+    assert ret[a] == []
+
+
+def test_symbol_dependencies_single_loop():
+
+    a = Symbol("a")
+    i = Symbol("i")
+    tree = c_for(i, 2, [Assign(a, i)])
+
+    v = SymbolDependencies()
+
+    ret = v.visit(tree)
+
+    assert ret[a] == [tree.children[0]]
+
+
+def test_symbol_dependencies_read_single_loop():
+    a = Symbol("a", rank=("i", ))
+    b = Symbol("b")
+    tree = c_for("i", 2, [Assign(b, a)])
+
+    v = SymbolDependencies()
+    ret = v.visit(tree)
+
+    assert ret[b] == [tree.children[0]]
+
+    assert ret[a] == [tree.children[0]]
+
+
+def test_symbol_dependencies_double_loop():
+    a = Symbol("a", rank=("i", ))
+    b = Symbol("b")
+    tree = c_for("i", 2, [c_for("j", 1, [IMul(b, a)])])
+    v = SymbolDependencies()
+
+    ret = v.visit(tree)
+
+    assert ret[b] == [tree.children[0], tree.children[0].body[0]]
+    assert ret[a] == [tree.children[0]]
+
+
+def test_symbol_dependencies_write_then_read_inner_loop():
+    a = Symbol("a")
+    a2 = Symbol("a")
+    b = Symbol("b")
+    tree = c_for("i", 2, [c_for("j", 1, [Assign(a, 1)]),
+                          c_for("j", 2, [Assign(b, a2)])])
+
+    v = SymbolDependencies()
+
+    ret = v.visit(tree)
+
+    assert ret[a2] == [tree.children[0]]
+    assert ret[a] == [tree.children[0], tree.children[0].body[0].children[0]]
+    assert ret[b] == [tree.children[0], tree.children[0].body[1].children[0]]
+
+
 if __name__ == "__main__":
     import os
     pytest.main(os.path.abspath(__file__))

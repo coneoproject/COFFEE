@@ -386,10 +386,12 @@ def visit(node, parent=None):
     env = dict(node_parent=parent)
     deps = inspectors.SymbolDependencies().visit(node)
     # Prune access mode:
+    ret = OrderedDict()
     for k, v in deps.iteritems():
         if type(k) is not Symbol:
-            del deps[k]
-    info['symbols_dep'] = deps
+            continue
+        ret[k] = v
+    info['symbols_dep'] = ret
     info['fors'] = inspectors.FindLoopNests().visit(node, env=env)
     info['symbols_mode'] = inspectors.SymbolModes().visit(node, env=env)
     info['symbol_refs'] = inspectors.SymbolReferences().visit(node, env=env)
