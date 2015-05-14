@@ -549,65 +549,65 @@ class ExpressionHoister(object):
                     wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, len(dep)))
                     next_loop = od_find_next(expr_dims_loops, dep[0])
 
-                # 1) Create the new invariant sub-expressions and temporaries
+                # 1) Create the new invariant temporary symbols
                 loop_size = tuple([l.size for l in wrap_loop])
                 loop_dim = tuple([l.dim for l in wrap_loop])
-                hoisted_syms = [Symbol(self._hoisted_sym % {
+                inv_syms = [Symbol(self._hoisted_sym % {
                     'loop_dep': '_'.join(dep).upper() if dep else 'CONST',
                     'expr_id': self.expr_id,
                     'round': self.counter,
                     'i': i
                 }, loop_size) for i in range(len(subexprs))]
-                hoisted_decls = [Decl(self.expr_info.type, s) for s in hoisted_syms]
-                inv_loop_syms = [Symbol(d.sym.symbol, loop_dim) for d in hoisted_decls]
+                inv_decls = [Decl(self.expr_info.type, s) for s in inv_syms]
+                inv_syms = [Symbol(s.symbol, loop_dim) for s in inv_syms]
 
-                # 2) Create the new for loop containing invariant statements
-                _subexprs = [Par(dcopy(e)) if not isinstance(e, Par) else dcopy(e)
-                             for e in subexprs]
-                inv_loop = [Assign(s, e) for s, e in zip(dcopy(inv_loop_syms), _subexprs)]
-
-                # 3) Update the dictionary of known declarations
-                for d in hoisted_decls:
+                # 2) Keep track of new declarations for later easy access
+                for d in inv_decls:
                     d.scope = LOCAL
                     self.decls[d.sym.symbol] = d
 
-                # 4) Replace invariant sub-trees with the proper tmp variable
-                to_replace = dict(zip(subexprs, inv_loop_syms))
+                # 3) Replace invariant subtrees with the proper temporary
+                to_replace = dict(zip(subexprs, inv_syms))
                 n_replaced = ast_replace(self.stmt.children[1], to_replace)
 
-                # 5) Track hoisted symbols and symbols dependencies
-                sym_info = [(i, j, inv_loop) for i, j in zip(_subexprs, hoisted_decls)]
-                self.hoisted.update(zip([s.symbol for s in inv_loop_syms], sym_info))
-                for s, e in zip(inv_loop_syms, subexprs):
+                # 4) Update symbol dependencies
+                for s, e in zip(inv_syms, subexprs):
                     self.expr_graph.add_dependency(s, e)
                     if n_replaced[str(s)] > 1:
                         self.expr_graph.add_dependency(s, s)
                     symbols[s] = dep
 
-                # 6) Update expressions hoisted along a known dimension (same dep)
+                # 5) Create the body containing invariant statements
+                subexprs = [Par(dcopy(e)) if not isinstance(e, Par) else
+                            dcopy(e) for e in subexprs]
+                inv_stmts = [Assign(s, e) for s, e in zip(dcopy(inv_syms), subexprs)]
+
+                # 6) Track necessary information for AST construction
                 inv_info = (loop_dim, place, next_loop, wrap_loop)
                 if inv_info not in inv_dep:
-                    inv_dep[inv_info] = (hoisted_decls, inv_loop)
+                    inv_dep[inv_info] = (inv_decls, inv_stmts)
                 else:
-                    inv_dep[inv_info][0].extend(hoisted_decls)
-                    inv_dep[inv_info][1].extend(inv_loop)
+                    inv_dep[inv_info][0].extend(inv_decls)
+                    inv_dep[inv_info][1].extend(inv_stmts)
 
-        for inv_info, (hoisted_decls, inv_loop) in sorted(inv_dep.items()):
+        for inv_info, (inv_decls, inv_stmts) in sorted(inv_dep.items()):
             loop_dim, place, next_loop, wrap_loop = inv_info
             # Create the hoisted code
             if wrap_loop:
-                outer_wrap_loop = ast_make_for(inv_loop, wrap_loop[-1])
+                outer_wrap_loop = ast_make_for(inv_stmts, wrap_loop[-1])
                 for l in reversed(wrap_loop[:-1]):
                     outer_wrap_loop = ast_make_for([outer_wrap_loop], l)
-                inv_loop = inv_code = [outer_wrap_loop]
+                inv_code = [outer_wrap_loop]
+                inv_loop = inv_code[0]
             else:
-                inv_code = [None]
+                inv_code = inv_stmts
+                inv_loop = None
             # Insert the new nodes at the right level in the loop nest
             ofs = place.children.index(next_loop)
-            place.children[ofs:ofs] = hoisted_decls + inv_loop + [FlatBlock("\n")]
-            # Update hoisted symbols metadata
-            for i in hoisted_decls:
-                self.hoisted.update_stmt(i.sym.symbol, loop=inv_code[0], place=place)
+            place.children[ofs:ofs] = inv_decls + inv_code + [FlatBlock("\n")]
+            # Track hoisted symbols
+            for i, j in zip(inv_stmts, inv_decls):
+                self.hoisted[j.sym.symbol] = (i, j, inv_loop, place)
 
         # Finally, make sure symbols are unique in the AST
         self.stmt.children[1] = dcopy(self.stmt.children[1])
@@ -663,7 +663,7 @@ class ExpressionExpander(object):
             return {exp: self.cache[cache_key]}
 
         # Aliases
-        hoisted_expr = self.hoisted[exp.symbol].expr
+        hoisted_expr = self.hoisted[exp.symbol].stmt.children[1]
         hoisted_decl = self.hoisted[exp.symbol].decl
         hoisted_loop = self.hoisted[exp.symbol].loop
         hoisted_place = self.hoisted[exp.symbol].place
@@ -695,12 +695,13 @@ class ExpressionExpander(object):
                                                    'i': len(self.expanded_decls)}
         decl = dcopy(hoisted_decl)
         decl.sym.symbol = hoisted_exp.symbol
+        stmt = Assign(hoisted_exp, expr)
         # Update the AST
-        hoisted_loop.body.append(Assign(hoisted_exp, expr))
+        hoisted_loop.body.append(stmt)
         insert_at_elem(hoisted_place.children, hoisted_decl, decl)
         # Update tracked information
         self.expanded_decls[decl.sym.symbol] = decl
-        self.hoisted[hoisted_exp.symbol] = (expr, decl, hoisted_loop, hoisted_place)
+        self.hoisted[hoisted_exp.symbol] = (stmt, decl, hoisted_loop, hoisted_place)
         self.expr_graph.add_dependency(hoisted_exp, expr)
         self.cache[cache_key] = hoisted_exp
         return {exp: hoisted_exp}

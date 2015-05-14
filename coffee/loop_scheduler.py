@@ -474,8 +474,7 @@ class ZeroLoopScheduler(LoopScheduler):
         # If iteration space along which they are accessed is bigger than the
         # non-zero region, hoisted symbols must be initialized to zero
         for sym, nz_regions in found_syms:
-            sym_decl = self.hoisted.get(sym)
-            if not sym_decl:
+            if not self.hoisted.get(sym):
                 continue
             for dim, size in itspace:
                 dim_nz_regions = nz_regions.get(dim)
@@ -494,7 +493,7 @@ class ZeroLoopScheduler(LoopScheduler):
                         break
                 if not iteration_ok:
                     # Iterating over a non-initialized region, need to zero it
-                    sym_decl.decl.init = FlatBlock("{0.0}")
+                    self.hoisted[sym].decl.init = ArrayInit("{0.0}")
 
     def _track_expr_nz_columns(self, node):
         """Return the first and last indices assumed by the iteration variables

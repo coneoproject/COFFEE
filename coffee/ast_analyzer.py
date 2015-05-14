@@ -47,7 +47,7 @@ from coffee.visitors import FindInstances
 class StmtInfo():
     """Simple container class defining ``StmtTracker`` values."""
 
-    INFO = ['expr', 'decl', 'loop', 'place']
+    INFO = ['stmt', 'decl', 'loop', 'place']
 
     def __init__(self, **kwargs):
         for k, v in kwargs.iteritems():
@@ -61,17 +61,16 @@ class StmtTracker(OrderedDict):
 
     Each key in the dictionary is a string representing a symbol. As such,
     StmtTracker can be used only in SSA scopes. Each entry in the dictionary
-    is tuple containing information about the symbol: ::
+    is a 4-tuple containing information about the symbol: ::
 
-        (expression, declaration, closest_for, place)
+        (statement, declaration, closest_for, place)
 
     whose semantics is, respectively, as follows:
 
-        * The AST root node of the right-hand side of the statement whose
-          left-hand side is ``sym``
+        * The AST node whose ``str(lvalue)`` is used as dictionary key
         * The AST node of the symbol declaration
         * The AST node of the closest loop enclosing the statement
-        * The parent block of the loop
+        * The parent of the closest loop
     """
 
     def __setitem__(self, key, value):
@@ -86,10 +85,10 @@ class StmtTracker(OrderedDict):
         specified in ``kwargs``. If ``sym`` is not present, return ``None``.
         ``kwargs`` is based on the following special keys:
 
-            * "expr": change the expression
+            * "stmt": change the statement
             * "decl": change the declaration
             * "loop": change the closest loop
-            * "place": change the parent block of the loop
+            * "place": change the parent the closest loop
         """
         if sym not in self:
             return None
@@ -105,8 +104,8 @@ class StmtTracker(OrderedDict):
                 self.update_stmt(sym, **{'loop': loop_b})
 
     @property
-    def expr(self, sym):
-        return self[sym].expr if self.get(sym) else None
+    def stmt(self, sym):
+        return self[sym].stmt if self.get(sym) else None
 
     @property
     def decl(self, sym):

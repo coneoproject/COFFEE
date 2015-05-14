@@ -163,7 +163,7 @@ class LoopOptimizer(object):
                     continue
                 decl = self.hoisted[symbol].decl
                 place = self.hoisted[symbol].place
-                expr = self.hoisted[symbol].expr
+                expr = self.hoisted[symbol].stmt.children[1]
                 if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
                     continue
                 # Delete any replaced hoisted symbol, declaration, and evaluation
