@@ -531,15 +531,15 @@ class FindInstances(Visitor):
     Visit the tree and return a dict mapping types to a list of
     instances of that type in the tree.
 
-    :arg types: list of types or single type to search for in the
-          tree.
-    :arg stop_when_found: optional, don't traverse the children of
-          matching types.
+    :arg types: list of types or single type to search for in the tree.
+    :arg stop_when_found: optional, don't traverse the children of matching types.
+    :arg with_parent: optional, track also the parent of the matching type.
     """
 
-    def __init__(self, types, stop_when_found=False):
+    def __init__(self, types, stop_when_found=False, with_parent=False):
         self.types = types
         self.stop_when_found = stop_when_found
+        self.with_parent = with_parent
         super(FindInstances, self).__init__()
 
     def visit_object(self, o, env):
@@ -555,15 +555,17 @@ class FindInstances(Visitor):
 
     def visit_Node(self, o, env):
         ret = defaultdict(list)
+        new_env = Environment(env, node_parent=o)
         if isinstance(o, self.types):
-            ret[type(o)].append(o)
+            found = (o, env["node_parent"]) if self.with_parent else o
+            ret[type(o)].append(found)
             # Don't traverse children if stop-on-found
             if self.stop_when_found:
                 return ret
         # Not found, or traversing children anyway
         ops, _ = o.operands()
         for op in ops:
-            a = self.visit(op, env=env)
+            a = self.visit(op, env=new_env)
             for k, v in a.iteritems():
                 ret[k].extend(v)
         return ret
