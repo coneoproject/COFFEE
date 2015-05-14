@@ -35,6 +35,7 @@
 Abstract Syntax Tree (AST)."""
 
 from copy import deepcopy as dcopy
+import numpy as np
 
 # Utilities for simple exprs and commands
 point = lambda p: "[%s]" % p
@@ -53,6 +54,7 @@ decl = lambda q, t, s, a: "%s%s %s %s" % (q, t, s, a)
 decl_init = lambda q, t, s, a, e: "%s%s %s %s = %s" % (q, t, s, a, e)
 for_loop = lambda s1, e, s2, s3: "for (%s; %s; %s)\n%s" % (s1, e, s2, s3)
 ternary = lambda e, s1, s2: wrap("%s ? %s : %s" % (e, s1, s2))
+init_array = lambda v: '{%s}' % ', '.join([str(i) for i in v])
 
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
 
@@ -215,11 +217,14 @@ class ArrayInit(Expr):
     to some values. For example ::
 
         A[3][3] = {{0.0}} or A[3] = {1, 1, 1}.
-
-    At the moment, initial values like ``{{0.0}}`` and ``{1, 1, 1}`` are passed
-    in as simple strings."""
+    """
 
     def __init__(self, values):
+        """Initialize an ArrayInit object.
+
+        :arg values: representation of the values the array is initialized to
+        :type values: a string or a numpy ndarray.
+        """
         self.values = values
 
     def reconstruct(self, values, **kwargs):
@@ -228,7 +233,30 @@ class ArrayInit(Expr):
     def operands(self):
         return [self.values], {}
 
+    @property
+    def values(self):
+        return self._values
+
+    def _tabulate_values(self, arr):
+        if len(arr.shape) == 1:
+            # 1-dimensional case
+            return init_array(arr)
+        else:
+            # n-dimensional case
+            return init_array([self._tabulate_values(arr[0])] + \
+                ["\n%s" % self._tabulate_values(arr[i]) for i in range(1, arr.shape[0])])
+
+    @values.setter
+    def values(self, val):
+        if not isinstance(val, (np.ndarray, str)):
+            raise TypeError
+        self._values = val
+
     def gencode(self, not_scope=True, parent=None):
+        if isinstance(self.values, np.ndarray):
+            if len(self.values.shape) == 1 and self.values.shape[0] == 1:
+                return str(self.values[0])
+            return self._tabulate_values(self.values)
         return self.values
 
 
@@ -237,25 +265,24 @@ class ColSparseArrayInit(ArrayInit):
     """Array initilizer in which zero-columns, i.e. columns full of zeros, are
     explictly tracked. Only bi-dimensional arrays are allowed."""
 
-    def __init__(self, values, nonzero_bounds, numpy_values):
-        """Zero columns are tracked once the object is instantiated.
+    def __init__(self, values, nonzero_bounds):
+        """Initialize an ArrayInit object in which blocks of zero columns are
+        explicitly tracked.
 
-        :arg values: string representation of the values the array is initialized to
-        :arg zerobounds: a tuple of two integers indicating the indices of the first
-                         and last nonzero columns
+        :arg values: representation of the values the array is initialized to
+        :type values: a string or a numpy ndarray.
+        :arg zerobounds: a list of 2-tuple of integers, each tuple indicating
+                         the indices of the columns at the boundary of a dense
+                         block
         """
         super(ColSparseArrayInit, self).__init__(values)
         self.nonzero_bounds = nonzero_bounds
-        self.numpy_values = numpy_values
 
-    def reconstruct(self, values, nonzero_bounds, numpy_values, **kwargs):
-        return type(self)(values, nonzero_bounds, numpy_values, **kwargs)
+    def reconstruct(self, values, nonzero_bounds, **kwargs):
+        return type(self)(values, nonzero_bounds, **kwargs)
 
     def operands(self):
-        return [self.values, self.nonzero_bounds, self.numpy_values], {}
-
-    def gencode(self, not_scope=True, parent=None):
-        return self.values
+        return [self.values, self.nonzero_bounds], {}
 
 
 class Par(UnaryExpr):
