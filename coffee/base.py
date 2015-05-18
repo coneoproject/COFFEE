@@ -54,7 +54,7 @@ decl = lambda q, t, s, a: "%s%s %s %s" % (q, t, s, a)
 decl_init = lambda q, t, s, a, e: "%s%s %s %s = %s" % (q, t, s, a, e)
 for_loop = lambda s1, e, s2, s3: "for (%s; %s; %s)\n%s" % (s1, e, s2, s3)
 ternary = lambda e, s1, s2: wrap("%s ? %s : %s" % (e, s1, s2))
-init_array = lambda v: '{%s}' % ', '.join([str(i) for i in v])
+init_array = lambda v, f=str: '{%s}' % ', '.join([f(i) for i in v])
 
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
 
@@ -219,16 +219,22 @@ class ArrayInit(Expr):
         A[3][3] = {{0.0}} or A[3] = {1, 1, 1}.
     """
 
-    def __init__(self, values):
+    _default_precision = 12
+
+    def __init__(self, values, precision=None):
         """Initialize an ArrayInit object.
 
         :arg values: representation of the values the array is initialized to
         :type values: a string or a numpy ndarray.
+        :arg precision: the number of decimal digits that should be used when
+            converting a float (in a numpy array) to a string.
+        :type precision: integer (defaults to 12)
         """
         self.values = values
+        self.precision = precision or ArrayInit._default_precision
 
-    def reconstruct(self, values, **kwargs):
-        return type(self)(values, **kwargs)
+    def reconstruct(self, values, precision, **kwargs):
+        return type(self)(values, precision, **kwargs)
 
     def operands(self):
         return [self.values], {}
@@ -237,25 +243,34 @@ class ArrayInit(Expr):
     def values(self):
         return self._values
 
-    def _tabulate_values(self, arr):
-        if len(arr.shape) == 1:
-            # 1-dimensional case
-            return init_array(arr)
-        else:
-            # n-dimensional case
-            return init_array([self._tabulate_values(arr[0])] + \
-                ["\n%s" % self._tabulate_values(arr[i]) for i in range(1, arr.shape[0])])
-
     @values.setter
     def values(self, val):
         if not isinstance(val, (np.ndarray, str)):
             raise TypeError
         self._values = val
 
+    def _formatter(self, v):
+        """Format a float into a string, showing up to ``precision`` decimal digits.
+        This function is partly extracted from the open_source "FFC: the FEniCS Form
+        Compiler", freely accessible at https://bitbucket.org/fenics-project/ffc."""
+        f = "%%.%dg" % self.precision
+        f_int  = "%%.%df" % 1
+        eps = eval("1e-%s" % self.precision)
+        return f_int % v if abs(v - round(v, 1)) < eps else f % v
+
+    def _tabulate_values(self, arr):
+        if len(arr.shape) == 1:
+            # 1-dimensional case
+            return init_array(arr, lambda v: self._formatter(v))
+        else:
+            # n-dimensional case
+            return init_array([self._tabulate_values(arr[0])] + \
+                ["\n%s" % self._tabulate_values(arr[i]) for i in range(1, arr.shape[0])])
+
     def gencode(self, not_scope=True, parent=None):
         if isinstance(self.values, np.ndarray):
             if len(self.values.shape) == 1 and self.values.shape[0] == 1:
-                return str(self.values[0])
+                return self._formatter(self.values[0])
             return self._tabulate_values(self.values)
         return self.values
 
@@ -265,21 +280,24 @@ class ColSparseArrayInit(ArrayInit):
     """Array initilizer in which zero-columns, i.e. columns full of zeros, are
     explictly tracked. Only bi-dimensional arrays are allowed."""
 
-    def __init__(self, values, nonzero_bounds):
+    def __init__(self, values, precision, nonzero_bounds):
         """Initialize an ArrayInit object in which blocks of zero columns are
         explicitly tracked.
 
         :arg values: representation of the values the array is initialized to
         :type values: a string or a numpy ndarray.
+        :arg precision: the number of decimal digits that should be used when
+            converting a float (in a numpy array) to a string.
+        :type precision: integer (defaults to 12)
         :arg zerobounds: a list of 2-tuple of integers, each tuple indicating
                          the indices of the columns at the boundary of a dense
                          block
         """
-        super(ColSparseArrayInit, self).__init__(values)
+        super(ColSparseArrayInit, self).__init__(values, precision)
         self.nonzero_bounds = nonzero_bounds
 
-    def reconstruct(self, values, nonzero_bounds, **kwargs):
-        return type(self)(values, nonzero_bounds, **kwargs)
+    def reconstruct(self, values, precision, nonzero_bounds, **kwargs):
+        return type(self)(values, precision, nonzero_bounds, **kwargs)
 
     def operands(self):
         return [self.values, self.nonzero_bounds], {}
