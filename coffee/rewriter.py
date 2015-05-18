@@ -37,7 +37,7 @@ import itertools
 
 from base import *
 from utils import *
-from coffee.visitors import SymbolReferences, SymbolDependencies, FindInstances
+from coffee.visitors import *
 
 
 class ExpressionRewriter(object):
@@ -317,7 +317,8 @@ class ExpressionRewriter(object):
                 rewriting opportunities
             * ``loop reduction``: simplify loops along which a reduction is
                 performed by 1) preaccumulating along the dimension of the
-                reduction and 2) removing the reduction loop
+                reduction, 2) removing the reduction loop, 3) precomputing
+                constant expressions
         """
         # Aliases
         stmt, expr_info = self.stmt, self.expr_info
@@ -369,6 +370,18 @@ class ExpressionRewriter(object):
             p.children[p.children.index(l)] = l.body[0]
             for s in reducible_syms:
                 s.rank = self.expr_info.domain_dims
+
+        ###
+
+        # Precompute constant expressions
+        finder = FindInstances(Incr, with_parent=True)
+        for hoisted_loop in self.hoisted.all_loops:
+            incrs = finder.visit(hoisted_loop)[Incr]
+            const_evals = Evaluate(self.decls).visit(hoisted_loop)
+            for s, values in const_evals.items():
+                self.hoisted[s.symbol].decl.init = ArrayInit(values)
+                self.hoisted[s.symbol].decl.qual = ['static', 'const']
+            self.header.children.remove(hoisted_loop)
 
     @staticmethod
     def reset():
