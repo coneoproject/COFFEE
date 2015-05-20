@@ -343,7 +343,7 @@ class ExpressionRewriter(object):
             # Unsafe if not a perfect loop nest
             return
         for i, (l, p) in enumerate(reduction_loops):
-            syms_dep = SymbolDependencies().visit(l)
+            syms_dep = SymbolDependencies().visit(l, env=SymbolDependencies.default_env)
             if not all([tuple(syms_dep[s]) == expr_info.loops and
                         s.dim == len(expr_info.loops) for s in expr_syms if syms_dep[s]]):
                 # A sufficient (although not necessary) condition for loop reduction to
@@ -377,8 +377,8 @@ class ExpressionRewriter(object):
         finder = FindInstances(Incr, with_parent=True)
         for hoisted_loop in self.hoisted.all_loops:
             incrs = finder.visit(hoisted_loop)[Incr]
-            const_evals = Evaluate(self.decls).visit(hoisted_loop)
-            for s, values in const_evals.items():
+            evals = Evaluate(self.decls).visit(hoisted_loop, env=Evaluate.default_env)
+            for s, values in evals.items():
                 self.hoisted[s.symbol].decl.init = ArrayInit(values)
                 self.hoisted[s.symbol].decl.qual = ['static', 'const']
             self.header.children.remove(hoisted_loop)
@@ -683,9 +683,9 @@ class ExpressionExpander(object):
         op = expansion.__class__
 
         # Is the grouped symbol hoistable, or does it break some data dependency?
-        grp_symbols = SymbolReferences().visit(grp).keys()
+        grp_syms = SymbolReferences().visit(grp, env=SymbolReferences.default_env).keys()
         for l in reversed(self.expr_info.loops):
-            for g in grp_symbols:
+            for g in grp_syms:
                 g_refs = self.info['symbol_refs'][g]
                 g_deps = set(flatten([self.info['symbols_dep'][r[0]] for r in g_refs]))
                 if any([l.dim in g.dim for g in g_deps]):

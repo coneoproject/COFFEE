@@ -94,6 +94,9 @@ class Evaluate(Visitor):
 
     :arg decls: dictionary mapping symbol names to known Decl nodes.
     """
+
+    default_env = dict(loop_nest=[])
+
     def __init__(self, decls):
         self.decls = decls
         self.mapper = {
@@ -120,20 +123,12 @@ class Evaluate(Visitor):
         return ret
 
     def visit_For(self, o, env):
-        try:
-            loop_nest = env["loop_nest"]
-        except KeyError:
-            loop_nest = []
-        new_env = Environment(env, loop_nest=loop_nest + [o])
+        new_env = Environment(env, loop_nest=env["loop_nest"] + [o])
         return self.visit(o.body, env=new_env)
 
     def visit_Writer(self, o, env):
-        try:
-            loop_nest = env["loop_nest"]
-        except KeyError:
-            loop_nest = []
         lvalue = o.children[0]
-        writes = [l for l in loop_nest if l.dim in lvalue.rank]
+        writes = [l for l in env["loop_nest"] if l.dim in lvalue.rank]
         # Evaluate the expression for each point in in the n-dimensional space
         # represented by /writes/
         dims = tuple(l.dim for l in writes)
@@ -158,16 +153,16 @@ class Evaluate(Visitor):
         try:
             point = env["point"]
         except KeyError:
-            return
+            raise RuntimeError("Unknown iteration space point.")
         try:
             decl = self.decls[o.symbol]
         except KeyError:
-            return
+            raise RuntimeError("Couldn't find a declaration for symbol %s" % o)
         try:
             values = decl.init.values
             shape = values.shape
         except AttributeError:
-            return
+            raise RuntimeError("%s not initialized with a numpy array" % decl)
         sliced = 0
         for i, (r, s) in enumerate(zip(o.rank, shape)):
             dim = i - sliced

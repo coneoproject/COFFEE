@@ -40,7 +40,7 @@ from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict
 
 from base import *
-from coffee.visitors import inspectors
+from coffee.visitors.inspectors import *
 
 
 def increase_stack(loop_opts):
@@ -381,10 +381,13 @@ def visit(node, parent=None):
     :param node: AST root node of the visit
     :param parent: parent node of ``node``
     """
-
     info = {}
-    env = dict(node_parent=parent)
-    deps = inspectors.SymbolDependencies().visit(node)
+
+    info['max_depth'] = MaxLoopDepth().visit(node)
+
+    info['decls'] = SymbolDeclarations().visit(node, env=SymbolDeclarations.default_env)
+
+    deps = SymbolDependencies().visit(node, env=SymbolDependencies.default_env)
     # Prune access mode:
     ret = OrderedDict()
     for k, v in deps.iteritems():
@@ -392,12 +395,17 @@ def visit(node, parent=None):
             continue
         ret[k] = v
     info['symbols_dep'] = ret
-    info['fors'] = inspectors.FindLoopNests().visit(node, env=env)
-    info['symbols_mode'] = inspectors.SymbolModes().visit(node, env=env)
-    info['symbol_refs'] = inspectors.SymbolReferences().visit(node, env=env)
-    info['decls'] = inspectors.SymbolDeclarations().visit(node)
-    info['exprs'] = inspectors.FindCoffeeExpressions().visit(node, env=env)
-    info['max_depth'] = inspectors.MaxLoopDepth().visit(node)
+
+    env = dict(node_parent=parent)
+    info['exprs'] = FindCoffeeExpressions().visit(node, env=env)
+
+    info['fors'] = FindLoopNests().visit(node, env=env)
+
+    info['symbol_refs'] = SymbolReferences().visit(node, env=env)
+
+    env = dict(SymbolModes.default_env.items() + env.items())
+    info['symbols_mode'] = SymbolModes().visit(node, env=env)
+
     return info
 
 
@@ -420,16 +428,13 @@ def explore_operator(node):
 def inner_loops(node):
     """Find inner loops in the subtree rooted in ``node``."""
 
-    v = inspectors.FindInnerLoops()
-    return v.visit(node)
+    return FindInnerLoops().visit(node, env=FindInnerLoops.default_env)
 
 
 def is_perfect_loop(loop):
     """Return True if ``loop`` is part of a perfect loop nest, False otherwise."""
 
-    env = dict(in_loop=False, multiple_statements=False)
-    v = inspectors.CheckPerfectLoop()
-    return v.visit(loop, env=env)
+    return CheckPerfectLoop().visit(loop, env=CheckPerfectLoop.default_env)
 
 
 def count(node, mode='symbol', read_only=False):
@@ -470,7 +475,7 @@ def count(node, mode='symbol', read_only=False):
     else:
         raise RuntimeError("`Count` function got a wrong mode (valid: %s)" % modes)
 
-    v = inspectors.CountOccurences(key=key, only_rvalues=read_only)
+    v = CountOccurences(key=key, only_rvalues=read_only)
     return v.visit(node)
 
 
@@ -484,7 +489,7 @@ def check_type(stmt, decls):
     :param decls: a dictionary from symbol identifiers (i.e., strings representing
                   the name of a symbol) to Decl nodes
     """
-    v = inspectors.SymbolReferences()
+    v = SymbolReferences()
     env = dict(node_parent=stmt)
     lhs_symbol = v.visit(stmt.children[0], env=env).keys()[0]
     rhs_symbols = v.visit(stmt.children[1], env=env).keys()

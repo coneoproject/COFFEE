@@ -42,16 +42,15 @@ class CheckPerfectLoop(Visitor):
     Check if a Node is a perfect loop nest.
     """
 
+    default_env = dict(in_loop=False, multiple_statements=False)
+
     def visit_object(self, o, env):
         # Unhandled, return False to be safe.
         return False
 
     def visit_Node(self, o, env):
         # Assume all nodes are in a perfect loop if they're in a loop.
-        try:
-            return env["in_loop"]
-        except KeyError:
-            return False
+        return env["in_loop"]
 
     def visit_For(self, o, env):
         if env["in_loop"] and env["multiple_statements"]:
@@ -184,6 +183,8 @@ class FindLoopNests(Visitor):
 
     """
 
+    default_env = dict(node_parent=None)
+
     def visit_object(self, o, env):
         return []
 
@@ -197,10 +198,7 @@ class FindLoopNests(Visitor):
         # Transform operands using generic visit_Node
         args = self.visit_Node(o, env)
         # Cons (node, node_parent) onto front of current loop-nest list
-        try:
-            parent = env["node_parent"]
-        except KeyError:
-            parent = None
+        parent = env["node_parent"]
         me = (o, parent)
         if len(args) == 0:
             # Bottom of the nest, just return self
@@ -227,6 +225,8 @@ class FindCoffeeExpressions(Visitor):
 
     """
 
+    default_env = dict(node_parent=None)
+
     def visit_object(self, o, env):
         return {}
 
@@ -248,10 +248,7 @@ class FindCoffeeExpressions(Visitor):
                 continue
             if opts[1] == "coffee" and opts[2] == "expression":
                 # (parent, loop-nest, rank)
-                try:
-                    parent = env["node_parent"]
-                except KeyError:
-                    parent = None
+                parent = env["node_parent"]
                 return {o: (parent, None, o.children[0].rank)}
         return {}
 
@@ -262,10 +259,7 @@ class FindCoffeeExpressions(Visitor):
         if len(args) == 0:
             return {}
         ret = OrderedDict()
-        try:
-            parent = env["node_parent"]
-        except KeyError:
-            parent = None
+        parent = env["node_parent"]
         me = (o, parent)
         for k, v in args.iteritems():
             p, nest, rank = v
@@ -300,12 +294,11 @@ class SymbolReferences(Visitor):
 
     """
 
+    default_env = dict(node_parent=None)
+
     def visit_Symbol(self, o, env):
         # Map name to (node, parent) tuple
-        try:
-            parent = env["node_parent"]
-        except KeyError:
-            parent = None
+        parent = env["node_parent"]
         return {o.symbol: [(o, parent)]}
 
     def visit_object(self, o, env):
@@ -341,15 +334,11 @@ class SymbolDependencies(Visitor):
     empty) loop list the symbol depends on.
     """
 
+    default_env = dict(loop_nest=[], write=False)
+
     def visit_Symbol(self, o, env):
-        try:
-            write = env["write"]
-        except KeyError:
-            write = False
-        try:
-            nest = env["loop_nest"]
-        except KeyError:
-            nest = []
+        write = env["write"]
+        nest = env["loop_nest"]
         if write:
             # Remember that this symbol /name/ was written,
             # as well as the full current loop nest for the
@@ -398,10 +387,7 @@ class SymbolDependencies(Visitor):
         return ret
 
     def visit_For(self, o, env):
-        try:
-            loop_nest = env["loop_nest"]
-        except KeyError:
-            loop_nest = []
+        loop_nest = env["loop_nest"]
         new_env = Environment(env, loop_nest=loop_nest + [o])
         # Don't care about symbol access in increments, only children
         args = [self.visit(op, env=new_env) for op in o.children]
@@ -446,6 +432,9 @@ class SymbolModes(Visitor):
        v.visit(symbol, {"node_parent": parent})
 
     """
+
+    default_env = dict(access_mode=READ, node_parent=None)
+
     def visit_object(self, o, env):
         return {}
 
@@ -461,14 +450,8 @@ class SymbolModes(Visitor):
         return ret
 
     def visit_Symbol(self, o, env):
-        try:
-            mode = env["access_mode"]
-        except KeyError:
-            mode = READ
-        try:
-            parent = env["node_parent"]
-        except KeyError:
-            parent = None
+        mode = env["access_mode"]
+        parent = env["node_parent"]
         return {o: (mode, parent.__class__)}
 
     # Don't do anything with declarations.  If you want lvalues to get
@@ -497,6 +480,9 @@ class SymbolDeclarations(Visitor):
     whether it is a LOCAL declaration or EXTERNAL (via a function
     argument).
     """
+
+    default_env = dict(scope=LOCAL)
+
     def visit_object(self, o, env):
         return {}
 
@@ -518,10 +504,7 @@ class SymbolDeclarations(Visitor):
 
     def visit_Decl(self, o, env):
         # FIXME: be side-effect free
-        try:
-            o.scope = env["scope"]
-        except KeyError:
-            o.scope = LOCAL
+        o.scope = env["scope"]
         return {o.sym.symbol: o}
 
 
