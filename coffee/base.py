@@ -237,7 +237,7 @@ class ArrayInit(Expr):
         return type(self)(values, precision, **kwargs)
 
     def operands(self):
-        return [self.values], {}
+        return [self.values, self.precision], {}
 
     @property
     def values(self):
@@ -255,7 +255,7 @@ class ArrayInit(Expr):
         Compiler", freely accessible at https://bitbucket.org/fenics-project/ffc."""
         f = "%%.%dg" % self.precision
         f_int  = "%%.%df" % 1
-        eps = eval("1e-%s" % self.precision)
+        eps = 10.0**(-self.precision)
         return f_int % v if abs(v - round(v, 1)) < eps else f % v
 
     def _tabulate_values(self, arr):
@@ -300,7 +300,7 @@ class ColSparseArrayInit(ArrayInit):
         return type(self)(values, precision, nonzero_bounds, **kwargs)
 
     def operands(self):
-        return [self.values, self.nonzero_bounds], {}
+        return [self.values, self.precision, self.nonzero_bounds], {}
 
 
 class Par(UnaryExpr):
