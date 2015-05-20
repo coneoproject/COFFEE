@@ -285,7 +285,7 @@ class ExpressionRewriter(object):
                 if op in [Assign, IMul, IDiv]:
                     # Unroll is unsafe, skip
                     continue
-                # At this point, must be /op = Incr/
+                assert op in [Incr, Decr]
                 for stmt in stmts:
                     sym, expr = stmt.children
                     if stmt in [l.incr for l, p in to_unroll]:
@@ -334,7 +334,7 @@ class ExpressionRewriter(object):
         ###
 
         # Loop reduction
-        if not stmt.__class__ in [Incr, Decr, IMul, IDiv]:
+        if not isinstance(stmt, (Incr, Decr, IMul, IDiv)):
             # Not a reduction expression, give up
             return
         expr_syms = FindInstances(Symbol).visit(stmt.children[1])[Symbol]

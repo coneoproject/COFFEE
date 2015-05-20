@@ -140,7 +140,6 @@ class ExpressionGraph(object):
         self.deps = nx.DiGraph()
         writes = FindInstances(Writer).visit(node)
         for type, nodes in writes.items():
-            nodes = [n for n in nodes if not isinstance(n.children[1], int)]
             for n in nodes:
                 self.add_dependency(*n.children)
 
