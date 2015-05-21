@@ -542,10 +542,8 @@ class ZeroLoopScheduler(LoopScheduler):
             # already been encountered, non-zero bounds get merged together.
             nz_in_expr = tuple(dim_nz_bounds[r] for r in rank)
             if symbol in nz_in_syms:
-                merged_nz_in_sym = []
-                for i in zip(nz_in_expr, nz_in_syms[symbol]):
-                    merged_nz_in_sym.append(itspace_merge(flatten(i)))
-                nz_in_expr = tuple(merged_nz_in_sym)
+                nz_in_expr = tuple([itspace_merge(flatten(i)) for i in
+                                    zip(nz_in_expr, nz_in_syms[symbol])])
             nz_in_syms[symbol] = nz_in_expr
             if loop_nest:
                 # Track the propagation of non-zero blocks in this specific
