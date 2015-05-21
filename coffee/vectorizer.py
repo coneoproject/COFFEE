@@ -236,8 +236,8 @@ class LoopVectorizer(object):
             # region or in a zero-valued region
             alignable_stmts = []
             read_regions = defaultdict(list)
-            nonzero_info_l = self.loop_opt.nonzero_info.get(l, [])
-            for stmt, ofs in nonzero_info_l:
+            nz_info_l = self.loop_opt.nz_info.get(l, [])
+            for stmt, ofs in nz_info_l:
                 expr = dcopy(stmt.children[1])
                 ast_update_ofs(expr, dict([(l.dim, 0)]))
                 l_ofs = dict(ofs)[l.dim]
@@ -263,7 +263,7 @@ class LoopVectorizer(object):
                     ast_update_ofs(stmt, ofs)
                 # If all statements were successfully aligned, then put a
                 # suitable pragma to tell the compiler
-                if len(alignable_stmts) == len(nonzero_info_l):
+                if len(alignable_stmts) == len(nz_info_l):
                     adjusted_loops.append(l)
                 # Successful bound adjustment allows forcing simdization
                 if plan.compiler.get('force_simdization'):

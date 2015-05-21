@@ -225,7 +225,7 @@ class ArrayInit(Expr):
     def __init__(self, values, precision=None):
         """Initialize an ArrayInit object.
 
-        :arg values: representation of the values the array is initialized to
+        :arg values: a representation of the values the array is initialized to
         :type values: a string or a numpy ndarray.
         :arg precision: the number of decimal digits that should be used when
             converting a float (in a numpy array) to a string.
@@ -277,32 +277,43 @@ class ArrayInit(Expr):
         return self.values
 
 
-class ColSparseArrayInit(ArrayInit):
+class SparseArrayInit(ArrayInit):
 
-    """Array initilizer in which zero-columns, i.e. columns full of zeros, are
-    explictly tracked. Only bi-dimensional arrays are allowed."""
+    """Array initializer in which non-zero blocks are explictly tracked."""
 
-    def __init__(self, values, precision, nonzero_bounds):
-        """Initialize an ArrayInit object in which blocks of zero columns are
-        explicitly tracked.
+    def __init__(self, values, precision, nonzero):
+        """Initialize a SparseArrayInit object.
 
-        :arg values: representation of the values the array is initialized to
-        :type values: a string or a numpy ndarray.
+        :arg values: a representation of the values the array is initialized to
+        :type values: a string or a numpy ndarray
         :arg precision: the number of decimal digits that should be used when
-            converting a float (in a numpy array) to a string.
+            converting a float (in a numpy array) to a string
         :type precision: integer (defaults to 12)
-        :arg zerobounds: a list of 2-tuple of integers, each tuple indicating
-                         the indices of the columns at the boundary of a dense
-                         block
-        """
-        super(ColSparseArrayInit, self).__init__(values, precision)
-        self.nonzero_bounds = nonzero_bounds
+        :arg nonzero: track a non-zero valued block in the initializer
+        :type nonzero: an n-tuple, where n is the rank of the tensor initialized.
+            Each entry is a list of 2-tuple. A 2-tuple reprsents a "panel" of
+            zero-values in the array. For example, consider the following array: ::
 
-    def reconstruct(self, values, precision, nonzero_bounds, **kwargs):
-        return type(self)(values, precision, nonzero_bounds, **kwargs)
+                A[4][3] = {{0, 0, 0},
+                           {2, 1, 0},
+                           {0, 0, 0},
+                           {3, 3, 0}}
+
+            then, ``nonzero`` takes the following form: ::
+
+                nonzero = ([(1, 2), (3, 4)], [(0, 2)])
+
+            since there are two non-contiguous rows (rows 1 and 3) and one panel
+            (columns 0 and 1) of non-zero valued data
+        """
+        super(SparseArrayInit, self).__init__(values, precision)
+        self.nonzero = nonzero
+
+    def reconstruct(self, values, precision, nonzero, **kwargs):
+        return type(self)(values, precision, nonzero, **kwargs)
 
     def operands(self):
-        return [self.values, self.precision, self.nonzero_bounds], {}
+        return [self.values, self.precision, self.nonzero], {}
 
 
 class Par(UnaryExpr):
@@ -638,18 +649,8 @@ class Decl(Statement):
 
     @property
     def nonzero(self):
-        """If the declared array:
-
-        * is a bi-dimensional array,
-        * is initialized to some values,
-        * the initialized values are of type ColSparseArrayInit
-
-        Then return a tuple of the first and last non-zero columns in the array.
-        Else, return an empty tuple."""
-        if len(self.sym.rank) == 2 and isinstance(self.init, ColSparseArrayInit):
-            return self.init.nonzero_bounds
-        else:
-            return ()
+        """Return the location of non-zero valued blocks, if any."""
+        return self.init.nonzero if isinstance(self.init, SparseArrayInit) else ()
 
     def gencode(self, not_scope=False):
         if isinstance(self.init, EmptyStatement):

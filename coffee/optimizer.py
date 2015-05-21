@@ -56,7 +56,7 @@ class LoopOptimizer(object):
         self.exprs = exprs
 
         # Track nonzero regions accessed in the loop nest
-        self.nonzero_info = {}
+        self.nz_info = {}
         # Track data dependencies
         self.expr_graph = ExpressionGraph(self.header)
         # Track hoisted expressions
@@ -192,8 +192,7 @@ class LoopOptimizer(object):
         if not any([d.nonzero for d in self.decls.values()]):
             return
         zls = ZeroLoopScheduler(self.exprs, self.expr_graph, self.decls, self.hoisted)
-        zls.reschedule()
-        self.nonzero_info = zls.nonzero_info
+        self.nz_info = zls.reschedule()
 
     def precompute(self, mode=0):
         """Precompute statements out of ``self.loop``, which implies scalar
