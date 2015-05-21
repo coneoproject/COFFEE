@@ -536,16 +536,11 @@ class ZeroLoopScheduler(LoopScheduler):
             sym, expr = node.children
             symbol, rank = sym.symbol, sym.rank
             dim_nz_bounds = self._track_nz_expr(expr, nz_in_syms)
-            if not dim_nz_bounds:
+            if not all([r in dim_nz_bounds for r in rank]):
                 return
-            # Reflect the propagation of non-zero blocks in /symbol/. Bounds
-            # of non-zero blocks are kept in order with the loops visited.
-            # For example, if the rank 2 /symbol/ is A[i][j], the first element
-            # of the 2-tuple stored in /nz_in_syms[symbol]/ represents the
-            # bounds for /j/, while the second element represents the bounds
-            # for /k/. If /symbol/ had already been encountered, non-zero bounds
-            # are merged together.
-            nz_in_expr = tuple(dim_nz_bounds[l.dim] for l in loop_nest if l.dim in rank)
+            # Reflect the propagation of non-zero blocks in /symbol/. If /symbol/ had
+            # already been encountered, non-zero bounds get merged together.
+            nz_in_expr = tuple(dim_nz_bounds[r] for r in rank)
             if symbol in nz_in_syms:
                 merged_nz_in_sym = []
                 for i in zip(nz_in_expr, nz_in_syms[symbol]):
