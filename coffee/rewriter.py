@@ -374,9 +374,7 @@ class ExpressionRewriter(object):
         ###
 
         # Precompute constant expressions
-        finder = FindInstances(Incr, with_parent=True)
         for hoisted_loop in self.hoisted.all_loops:
-            incrs = finder.visit(hoisted_loop)[Incr]
             evals = Evaluate(self.decls).visit(hoisted_loop, env=Evaluate.default_env)
             for s, values in evals.items():
                 self.hoisted[s.symbol].decl.init = ArrayInit(values)

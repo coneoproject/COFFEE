@@ -255,7 +255,7 @@ class ArrayInit(Expr):
         This function is partly extracted from the open_source "FFC: the FEniCS Form
         Compiler", freely accessible at https://bitbucket.org/fenics-project/ffc."""
         f = "%%.%dg" % self.precision
-        f_int  = "%%.%df" % 1
+        f_int = "%%.%df" % 1
         eps = 10.0**(-self.precision)
         return f_int % v if abs(v - round(v, 1)) < eps else f % v
 
@@ -265,8 +265,9 @@ class ArrayInit(Expr):
             return init_array(arr, lambda v: self._formatter(v))
         else:
             # n-dimensional case
-            return init_array([self._tabulate_values(arr[0])] + \
-                ["\n%s" % self._tabulate_values(arr[i]) for i in range(1, arr.shape[0])])
+            return init_array([self._tabulate_values(arr[0])] +
+                              ["\n%s" % self._tabulate_values(arr[i])
+                               for i in range(1, arr.shape[0])])
 
     def gencode(self, not_scope=True, parent=None):
         if isinstance(self.values, np.ndarray):
