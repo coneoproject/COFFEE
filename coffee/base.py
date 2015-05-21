@@ -162,7 +162,8 @@ class BinExpr(Expr):
         return self.__class__(dcopy(self.children[0]), dcopy(self.children[1]))
 
     def gencode(self, not_scope=True, parent=None):
-        subtree = (" "+type(self).op+" ").join([n.gencode(not_scope) for n in self.children])
+        children = [n.gencode(not_scope, self) for n in self.children]
+        subtree = (" "+type(self).op+" ").join(children)
         if parent and not isinstance(parent, (Par, self.__class__)):
             return wrap(subtree)
         return subtree
