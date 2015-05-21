@@ -151,6 +151,12 @@ class Evaluate(Visitor):
 
     def visit_Symbol(self, o, env):
         try:
+            # Any time a symbol is encountered, we expect to know the /point/ of
+            # the iteration space which is being evaluated. In particular,
+            # /point/ is pushed (and then popped) on the environment by a Writer
+            # node. If /point/ is missing, that means the root of the visit does
+            # not enclose the whole iteration space, which in turn indicates an
+            # error in the use of the visitor.
             point = env["point"]
         except KeyError:
             raise RuntimeError("Unknown iteration space point.")
