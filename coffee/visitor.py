@@ -100,10 +100,8 @@ class Visitor(object):
     In both cases, the instance itself is passed in as :data:`o` and
     the visitor also receives a :class:`Environment` object in
     :data:`env` which it may inspect if wished.
-
     """
     def __init__(self):
-
         handlers = {}
         # visit methods are spelt visit_Foo.
         prefix = "visit_"
@@ -130,6 +128,19 @@ class Visitor(object):
                 raise RuntimeError("Post-order visitor must be visit_Foo(self, o, env, *args, **kwargs)")
             handlers[name[len(prefix):]] = (meth, children_first)
         self._handlers = handlers
+
+    """
+    :attr:`default_env`. Provide the visitor with a default environment.
+    This environment is not used by default in :meth:`visit`, however,
+    a caller may obtain it to pass to :meth:`visit` by accessing
+    :attr:`default_env`.  For example::
+
+    .. code-block::
+
+       v = FooVisitor()
+       v.visit(node, env=v.default_env)
+    """
+    default_env = None
 
     def lookup_method(self, instance):
         """Look up a handler method for a visitee.

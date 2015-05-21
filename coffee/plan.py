@@ -361,12 +361,17 @@ class ASTKernel(object):
                 'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2),
                 'precompute': 1
             }
-        elif opts.get('O3'):
+        elif opts.get('O4'):
             params = {
                 'rewrite': 2,
                 'dead_ops_elimination': True,
                 'align_pad': True,
                 'precompute': 1
+            }
+        elif opts.get('O3'):
+            params = {
+                'rewrite': 3,
+                'align_pad': True
             }
         elif opts.get('O2'):
             params = {

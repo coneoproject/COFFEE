@@ -37,10 +37,10 @@ import resource
 import operator
 from warnings import warn as warning
 from copy import deepcopy as dcopy
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 from base import *
-from coffee.visitors import inspectors
+from coffee.visitors.inspectors import *
 
 
 def increase_stack(loop_opts):
@@ -150,6 +150,13 @@ def postprocess(node):
     make_blocks()
 
 
+def uniquify(exprs):
+    """Iterate over ``exprs`` and return a list of expressions in which duplicates
+    have been discarded. This function considers two expressions identical if they
+    have the same string representation."""
+    return dict([(str(e), e) for e in exprs]).values()
+
+
 #####################################
 # Functions to manipulate AST nodes #
 #####################################
@@ -168,7 +175,7 @@ def ast_replace(node, to_replace, copy=False, mode='all'):
 
     if mode == 'all':
         to_replace = dict(zip([str(s) for s in to_replace.keys()], to_replace.values()))
-        __ast_replace = lambda n: to_replace.get(str(n)) or to_replace.get(str(Par(n)))
+        __ast_replace = lambda n: to_replace.get(str(n))
     elif mode == 'symbol':
         __ast_replace = lambda n: to_replace.get(n)
     else:
@@ -284,9 +291,7 @@ def ast_make_for(stmts, loop, copy=False):
     """Create a for loop having the same iteration space as  ``loop`` enclosing
     the statements in  ``stmts``. If ``copy == True``, then new instances of
     ``stmts`` are created"""
-    if copy:
-        stmts = dcopy(stmts)
-    wrap = Block(stmts, open_scope=True)
+    wrap = Block(dcopy(stmts) if copy else stmts, open_scope=True)
     new_loop = For(dcopy(loop.init), dcopy(loop.cond), dcopy(loop.incr),
                    wrap, dcopy(loop.pragma))
     return new_loop
@@ -299,8 +304,7 @@ def ast_make_expr(op, nodes):
         return nodes[0] if len(nodes) == 1 else op(nodes[0], _ast_make_expr(nodes[1:]))
 
     try:
-        expr = _ast_make_expr(nodes)
-        return expr if len(nodes) == 1 else Par(expr)
+        return _ast_make_expr(nodes)
     except IndexError:
         return None
 
@@ -377,37 +381,60 @@ def visit(node, parent=None):
     :param node: AST root node of the visit
     :param parent: parent node of ``node``
     """
-
     info = {}
-    env = dict(node_parent=parent)
-    deps = inspectors.SymbolDependencies().visit(node)
+
+    info['max_depth'] = MaxLoopDepth().visit(node)
+
+    info['decls'] = SymbolDeclarations().visit(node, env=SymbolDeclarations.default_env)
+
+    deps = SymbolDependencies().visit(node, env=SymbolDependencies.default_env)
     # Prune access mode:
+    ret = OrderedDict()
     for k, v in deps.iteritems():
         if type(k) is not Symbol:
-            del deps[k]
-    info['symbols_dep'] = deps
-    info['fors'] = inspectors.FindLoopNests().visit(node, env=env)
-    info['symbols_mode'] = inspectors.SymbolModes().visit(node, env=env)
-    info['symbol_refs'] = inspectors.SymbolReferences().visit(node, env=env)
-    info['decls'] = inspectors.SymbolDeclarations().visit(node)
-    info['exprs'] = inspectors.FindCoffeeExpressions().visit(node, env=env)
-    info['max_depth'] = inspectors.MaxLoopDepth().visit(node)
+            continue
+        ret[k] = v
+    info['symbols_dep'] = ret
+
+    env = dict(node_parent=parent)
+    info['exprs'] = FindCoffeeExpressions().visit(node, env=env)
+
+    info['fors'] = FindLoopNests().visit(node, env=env)
+
+    info['symbol_refs'] = SymbolReferences().visit(node, env=env)
+
+    env = dict(SymbolModes.default_env.items() + env.items())
+    info['symbols_mode'] = SymbolModes().visit(node, env=env)
+
     return info
+
+
+def explore_operator(node):
+    """Return a list of the operands composing the operation whose root is
+    ``node``."""
+
+    def _explore_operator(node, operator, children):
+        for n in node.children:
+            if n.__class__ == operator or isinstance(n, Par):
+                _explore_operator(n, operator, children)
+            else:
+                children.append((n, node))
+
+    children = []
+    _explore_operator(node, node.__class__, children)
+    return children
 
 
 def inner_loops(node):
     """Find inner loops in the subtree rooted in ``node``."""
 
-    v = inspectors.FindInnerLoops()
-    return v.visit(node)
+    return FindInnerLoops().visit(node, env=FindInnerLoops.default_env)
 
 
 def is_perfect_loop(loop):
     """Return True if ``loop`` is part of a perfect loop nest, False otherwise."""
 
-    env = dict(in_loop=False, multiple_statements=False)
-    v = inspectors.CheckPerfectLoop()
-    return v.visit(loop, env=env)
+    return CheckPerfectLoop().visit(loop, env=CheckPerfectLoop.default_env)
 
 
 def count(node, mode='symbol', read_only=False):
@@ -448,7 +475,7 @@ def count(node, mode='symbol', read_only=False):
     else:
         raise RuntimeError("`Count` function got a wrong mode (valid: %s)" % modes)
 
-    v = inspectors.CountOccurences(key=key, only_rvalues=read_only)
+    v = CountOccurences(key=key, only_rvalues=read_only)
     return v.visit(node)
 
 
@@ -462,7 +489,7 @@ def check_type(stmt, decls):
     :param decls: a dictionary from symbol identifiers (i.e., strings representing
                   the name of a symbol) to Decl nodes
     """
-    v = inspectors.SymbolReferences()
+    v = SymbolReferences()
     env = dict(node_parent=stmt)
     lhs_symbol = v.visit(stmt.children[0], env=env).keys()[0]
     rhs_symbols = v.visit(stmt.children[1], env=env).keys()
@@ -559,13 +586,21 @@ def itspace_from_for(loops, mode=0):
         return tuple((l.dim, (l.start, l.end - 1)) for l in loops)
 
 
-def itspace_copy(loop_a, loop_b):
-    """Copy the iteration space of ``loop_b`` into ``loop_a``, while preserving
-    the body."""
-    loop_a.init = dcopy(loop_b.init)
-    loop_a.cond = dcopy(loop_b.cond)
-    loop_a.incr = dcopy(loop_b.incr)
-    loop_a.pragma = dcopy(loop_b.pragma)
+def itspace_copy(loop_a, loop_b=None):
+    """Copy the iteration space of ``loop_a`` into ``loop_b``, while preserving
+    the body. If ``loop_b = None``, a new For node is created and returned."""
+    init = dcopy(loop_a.init)
+    cond = dcopy(loop_a.cond)
+    incr = dcopy(loop_a.incr)
+    pragma = dcopy(loop_a.pragma)
+    if not loop_b:
+        loop_b = For(init, cond, incr, loop_a.body, pragma)
+        return loop_b
+    loop_b.init = init
+    loop_b.cond = cond
+    loop_b.incr = incr
+    loop_b.pragma = pragma
+    return loop_b
 
 
 #############################

@@ -179,7 +179,7 @@ class SSALoopMerger(LoopScheduler):
                                          parent.children[bound_left:bound_right]])
                 # Check condition 2
                 for ws, lws in itertools.product(_written_syms, ln_written_syms):
-                    if self.expr_graph.has_dep(ws, lws):
+                    if self.expr_graph.is_written(ws, lws):
                         is_mergeable = False
                         break
                 # Check condition 3
@@ -222,8 +222,6 @@ class SSALoopMerger(LoopScheduler):
             for i = 0 to N
               A[i] = B[i] + C[i]
               D[i] = A[i]
-
-        Note this last step is not done by compilers like Intel's (version 14).
         """
 
         def replace_expr(node, parent, parent_idx, dim, hoisted_expr):
@@ -330,7 +328,7 @@ class ExpressionFissioner(LoopScheduler):
             split = (stmt_left, MetaExpr(expr_info.type,
                                          expr_parent,
                                          expr_info.loops_info,
-                                         expr_info.domain))
+                                         expr_info.domain_dims))
 
             # Append the right-split (remainder) expression
             if copy_loops:
@@ -354,7 +352,7 @@ class ExpressionFissioner(LoopScheduler):
             splittable = (stmt_right, MetaExpr(expr_info.type,
                                                new_domain_innerloop_block,
                                                new_loops_info,
-                                               expr_info.domain))
+                                               expr_info.domain_dims))
             return (split, splittable)
         return ((stmt, expr_info), ())
 
@@ -476,8 +474,7 @@ class ZeroLoopScheduler(LoopScheduler):
         # If iteration space along which they are accessed is bigger than the
         # non-zero region, hoisted symbols must be initialized to zero
         for sym, nz_regions in found_syms:
-            sym_decl = self.hoisted.get(sym)
-            if not sym_decl:
+            if not self.hoisted.get(sym):
                 continue
             for dim, size in itspace:
                 dim_nz_regions = nz_regions.get(dim)
@@ -496,7 +493,7 @@ class ZeroLoopScheduler(LoopScheduler):
                         break
                 if not iteration_ok:
                     # Iterating over a non-initialized region, need to zero it
-                    sym_decl.decl.init = FlatBlock("{0.0}")
+                    self.hoisted[sym].decl.init = ArrayInit("{0.0}")
 
     def _track_expr_nz_columns(self, node):
         """Return the first and last indices assumed by the iteration variables

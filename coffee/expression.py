@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from utils import is_perfect_loop
+from utils import *
 
 
 class MetaExpr(object):
@@ -60,8 +60,24 @@ class MetaExpr(object):
         return self._type
 
     @property
+    def dims(self):
+        return [l.dim for l in self.loops]
+
+    @property
+    def domain_dims(self):
+        return self._domain
+
+    @property
+    def out_domain_dims(self):
+        return [d for d in self.dims if d not in self.domain_dims]
+
+    @property
     def loops(self):
         return zip(*self._loops_info)[0]
+
+    @property
+    def loops_from_dims(self):
+        return OrderedDict(zip(self.dims, self.loops))
 
     @property
     def loops_parents(self):
@@ -73,31 +89,27 @@ class MetaExpr(object):
 
     @property
     def domain_loops(self):
-        return tuple([l for l in self.loops if l.dim in self._domain])
+        return tuple([l for l in self.loops if l.dim in self.domain_dims])
 
     @property
     def domain_loops_parents(self):
-        return tuple([p for l, p in self._loops_info if l.dim in self._domain])
+        return tuple([p for l, p in self._loops_info if l.dim in self.domain_dims])
 
     @property
     def domain_loops_info(self):
-        return tuple([(l, p) for l, p in self._loops_info if l.dim in self._domain])
+        return tuple([(l, p) for l, p in self._loops_info if l.dim in self.domain_dims])
 
     @property
     def out_domain_loops(self):
-        return tuple(set(self.loops) - set(self.domain_loops))
+        return tuple([l for l in self.loops if l not in self.domain_loops])
 
     @property
     def out_domain_loops_parents(self):
-        return tuple(set(self.loops_parents) - set(self.domain_loops_parents))
+        return tuple([p for p in self.loops_parents if p not in self.domain_loops_parents])
 
     @property
     def out_domain_loops_info(self):
-        return tuple(set(self.loops_info) - set(self.domain_loops_info))
-
-    @property
-    def out_loop(self):
-        return self.loops[0]
+        return tuple([i for i in self.loops_info if i not in self.domain_loops_info])
 
     @property
     def perfect_loops(self):
@@ -109,16 +121,16 @@ class MetaExpr(object):
         return self._parent
 
     @property
-    def domain(self):
-        return self._domain
+    def outermost_loop(self):
+        return self.loops[0]
 
     @property
     def dimension(self):
-        return len(self._domain) if not self.is_scalar else 0
+        return len(self.domain_dims) if not self.is_scalar else 0
 
     @property
     def is_scalar(self):
-        return all([isinstance(i, int) for i in self.domain])
+        return all([isinstance(i, int) for i in self.domain_dims])
 
     @property
     def is_tensor(self):
@@ -136,7 +148,7 @@ def copy_metaexpr(expr_info, **kwargs):
     * ``domain``: the domain of the output tensor evaluated by the expression.
     """
     parent = kwargs.get('parent', expr_info.parent)
-    domain = kwargs.get('domain', expr_info.domain)
+    domain = kwargs.get('domain', expr_info.domain_dims)
 
     new_loops_info, old_loops_info = [], expr_info.loops_info
     to_replace_loops_info = kwargs.get('loops_info', [])

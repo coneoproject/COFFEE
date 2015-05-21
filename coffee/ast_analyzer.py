@@ -41,12 +41,13 @@ except ImportError:
 import networkx as nx
 
 from base import *
+from coffee.visitors import FindInstances
 
 
 class StmtInfo():
     """Simple container class defining ``StmtTracker`` values."""
 
-    INFO = ['expr', 'decl', 'loop', 'place']
+    INFO = ['stmt', 'decl', 'loop', 'place']
 
     def __init__(self, **kwargs):
         for k, v in kwargs.iteritems():
@@ -60,17 +61,16 @@ class StmtTracker(OrderedDict):
 
     Each key in the dictionary is a string representing a symbol. As such,
     StmtTracker can be used only in SSA scopes. Each entry in the dictionary
-    is tuple containing information about the symbol: ::
+    is a 4-tuple containing information about the symbol: ::
 
-        (expression, declaration, closest_for, place)
+        (statement, declaration, closest_for, place)
 
     whose semantics is, respectively, as follows:
 
-        * The AST root node of the right-hand side of the statement whose
-          left-hand side is ``sym``
+        * The AST node whose ``str(lvalue)`` is used as dictionary key
         * The AST node of the symbol declaration
         * The AST node of the closest loop enclosing the statement
-        * The parent block of the loop
+        * The parent of the closest loop
     """
 
     def __setitem__(self, key, value):
@@ -85,10 +85,10 @@ class StmtTracker(OrderedDict):
         specified in ``kwargs``. If ``sym`` is not present, return ``None``.
         ``kwargs`` is based on the following special keys:
 
-            * "expr": change the expression
+            * "stmt": change the statement
             * "decl": change the declaration
             * "loop": change the closest loop
-            * "place": change the parent block of the loop
+            * "place": change the parent the closest loop
         """
         if sym not in self:
             return None
@@ -103,27 +103,9 @@ class StmtTracker(OrderedDict):
             if sym_info.loop == loop_a:
                 self.update_stmt(sym, **{'loop': loop_b})
 
-    def delete_hoisted(self, sym):
-        """Remove the hoisted statement whose temporary is symbol ``sym``.
-        The removal is total: it is deleted from the loop nest in which it is
-        computed, as well as from the dictionary."""
-
-        decl = self[sym].decl
-        place = self[sym].place
-        loop = self[sym].loop
-
-        place.children.remove(decl)
-        to_remove = None
-        for stmt in loop.children[0].children:
-            if stmt.children[0].symbol == sym:
-                to_remove = stmt
-        loop.children[0].children.remove(to_remove)
-
-        self.pop(sym)
-
     @property
-    def expr(self, sym):
-        return self[sym].expr if self.get(sym) else None
+    def stmt(self, sym):
+        return self[sym].stmt if self.get(sym) else None
 
     @property
     def decl(self, sym):
@@ -150,39 +132,49 @@ class ExpressionGraph(object):
 
     """Track read-after-write dependencies between symbols."""
 
-    def __init__(self):
+    def __init__(self, node):
+        """Initialize the ExpressionGraph.
+
+        :param node: root of the AST visited to initialize the ExpressionGraph.
+        """
         self.deps = nx.DiGraph()
+        writes = FindInstances(Writer).visit(node)
+        for type, nodes in writes.items():
+            for n in nodes:
+                self.add_dependency(*n.children)
 
-    def add_dependency(self, sym, expr, self_loop):
-        """Extract symbols from ``expr`` and create a read-after-write dependency
-        with ``sym``. If ``sym`` already has a dependency, then ``sym`` has a
-        self dependency on itself."""
+    def add_dependency(self, sym, expr):
+        """Add dependency between ``sym`` and symbols appearing in ``expr``."""
+        expr_symbols = FindInstances(Symbol).visit(expr)[Symbol]
+        for es in expr_symbols:
+            self.deps.add_edge(sym.symbol, es.symbol)
 
-        def extract_syms(sym, node, deps):
-            if isinstance(node, Symbol):
-                deps.add_edge(sym, node.symbol)
-            else:
-                for n in node.children:
-                    extract_syms(sym, n, deps)
+    def is_read(self, expr, target_sym=None):
+        """Return True if any symbols in ``expr`` is read by ``target_sym``,
+        False otherwise. If ``target_sym`` is None, Return True if any symbols
+        in ``expr`` are read by at least one symbol, False otherwise."""
+        input_syms = FindInstances(Symbol).visit(expr)[Symbol]
+        for s in input_syms:
+            if s.symbol not in self.deps:
+                continue
+            elif not target_sym:
+                if zip(*self.deps.in_edges(s.symbol)):
+                    return True
+            elif nx.has_path(self.deps, target_sym.symbol, s.symbol):
+                return True
+        return False
 
-        sym = sym.symbol
-        # Add self-dependency
-        if self_loop:
-            self.deps.add_edge(sym, sym)
-        extract_syms(sym, expr, self.deps)
-
-    def has_dep(self, sym, target_sym=None):
-        """If ``target_sym`` is not provided, return True if ``sym`` has a
-        read-after-write dependency with some other symbols. This is the case if
-        ``sym`` has either a self dependency or at least one input edge, meaning
-        that other symbols depend on it.
-        Otherwise, if ``target_sym`` is not None, return True if ``sym`` has a
-        read-after-write dependency on it, i.e. if there is an edge from
-        ``target_sym`` to ``sym``."""
-
-        sym = sym.symbol
-        if not target_sym:
-            return sym in self.deps and zip(*self.deps.in_edges(sym))
-        else:
-            target_sym = target_sym.symbol
-            return sym in self.deps and self.deps.has_edge(sym, target_sym)
+    def is_written(self, expr, target_sym=None):
+        """Return True if any symbols in ``expr`` is written by ``target_sym``,
+        False otherwise. If ``target_sym`` is None, Return True if any symbols
+        in ``expr`` are written by at least one symbol, False otherwise."""
+        input_syms = FindInstances(Symbol).visit(expr)[Symbol]
+        for s in input_syms:
+            if s.symbol not in self.deps:
+                continue
+            elif not target_sym:
+                if zip(*self.deps.out_edges(s.symbol)):
+                    return True
+            elif nx.has_path(self.deps, s.symbol, target_sym.symbol):
+                return True
+        return False

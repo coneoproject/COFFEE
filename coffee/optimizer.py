@@ -33,16 +33,14 @@
 
 from base import *
 from utils import *
-from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler
+from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler, SSALoopMerger
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
-from coffee.visitors import MaxLoopDepth
+from coffee.visitors import MaxLoopDepth, FindInstances
 
 
 class LoopOptimizer(object):
-
-    """Loop optimizer class."""
 
     def __init__(self, loop, header, decls, exprs):
         """Initialize the LoopOptimizer.
@@ -60,11 +58,11 @@ class LoopOptimizer(object):
         # Track nonzero regions accessed in the loop nest
         self.nonzero_info = {}
         # Track data dependencies
-        self.expr_graph = ExpressionGraph()
+        self.expr_graph = ExpressionGraph(loop)
         # Track hoisted expressions
         self.hoisted = StmtTracker()
 
-    def rewrite(self, level):
+    def rewrite(self, mode):
         """Rewrite a compute-intensive expression found in the loop nest so as to
         minimize floating point operations and to relieve register pressure.
         This involves several possible transformations:
@@ -73,26 +71,115 @@ class LoopOptimizer(object):
         2. Factorization of common loop-dependent terms
         3. Expansion of constants over loop-dependent terms
 
-        :param level: The optimization level (0, 1, 2). The higher, the more
-                      invasive is the re-writing of the expression, trying to
-                      eliminate unnecessary floating point operations.
+        :param mode: Any value in (0, 1, 2, 3). Each ``mode`` corresponds to a
+            different expression rewriting strategy. A strategy impacts the aspects:
+            amount of floating point calculations required to evaluate the expression;
+            amount of temporary storage introduced; accuracy of the result.
 
-                      * level == 1: performs generalized loop-invariant code motion only
-                      * level == 2: level 1; terms expansion (to expose factorization \
-                                    opportunities); terms factorization (to expose \
-                                    code motion opportunities); and a final pass of \
-                                    generalized loop-invariant code motion.
+            * mode == 0: No rewriting is performed
+            * mode == 1: Apply one pass: generalized loop-invariant code motion.
+                Safest: accuracy not affected
+            * mode == 2: Apply four passes: generalized loop-invariant code motion;
+                expansion of inner-loop dependent expressions; factorization of
+                inner-loop dependent terms; generalized loop-invariant code motion.
+                Barely affects accuracy, improves performance while trying to
+                minimize temporary storage
+            * mode == 3: Apply four passes: generalized loop-invariant code motion
+                of outer-loop dependent expressions; expansion of inner-loop dependent
+                expressions; factorization of inner-loop dependent terms; 'aggressive'
+                generalized loop-invariant code motion (in which n-rank temporary
+                arrays can be allocated to keep expressions independent of more than
+                one loop). Due to hoisting less expressions, factorization can be
+                more aggressive, so accuracy can be more affected than in modes 0, 1,
+                and 2. This ``mode`` is ideal if one wants to precompute as much
+                expressions as possible outside the whole loop nest. Therefore, it is
+                recommended to execute a ``precompute`` pass after ``rewrite(mode=3)``.
+                This aggressively reduces flops, but also increases temporary storage
         """
         ExpressionRewriter.reset()
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
-            if level > 0:
+            # 1) Rewrite the expressions
+            if expr_info.dimension in [0, 1]:
+                if mode in [1, 2, 3]:
+                    ew.licm(hoist_out_domain=True)
+                continue
+
+            if mode == 1:
                 ew.licm()
-            if level > 1 and expr_info.is_tensor:
-                ew.expand()
-                ew.factorize()
-                ew.licm(merge_and_simplify=True, compact_tmps=True)
+
+            elif mode == 2:
+                ew.licm()
+                if expr_info.is_tensor:
+                    ew.expand()
+                    ew.factorize()
+                    ew.licm()
+
+            elif mode == 3:
+                ew.inject()
+                if expr_info.is_tensor:
+                    ew.expand(mode='full')
+                    ew.factorize(mode='immutable')
+                    ew.licm(hoist_out_domain=True)
+                    ew.reassociate()
+                    ew.licm(hoist_domain_const=True)
+                    ew.simplify()
+
+            elif mode == 4:
+                if expr_info.is_tensor:
+                    ew.expand(mode='full')
+                    ew.factorize(mode='immutable')
+                    ew.licm(hoist_out_domain=True)
+                    ew.factorize()
+                    ew.licm()
+
+            # 2) Try merging and optimizing the loops created by rewriting
+            lm = SSALoopMerger(self.header, ew.expr_graph)
+            merged_loops = lm.merge()
+            for merged, merged_in in merged_loops:
+                [self.hoisted.update_loop(l, merged_in) for l in merged]
+            lm.simplify()
+
+        # 3) Reduce storage by removing temporaries read in only one place
+        stmt_occs = dict((k, v)
+                         for d in [count(stmt, mode='symbol_id', read_only=True)
+                                   for stmt in self.exprs.keys()]
+                         for k, v in d.items())
+        for l in self.hoisted.all_loops:
+            l_occs = count(l, read_only=True)
+            info = visit(l)
+            innermost_block = FindInstances(Block).visit(l)[Block][-1]
+            to_replace, to_remove = {}, []
+            for (symbol, rank), sym_occs in l_occs.items():
+                # If the symbol appears once, then it is a potential candidate
+                # for removal. It is actually removed if it does't appear in
+                # the expression from which was extracted. Symbols appearing
+                # more than once are removed if they host an expression made
+                # of just one symbol
+                if symbol not in self.hoisted or symbol in stmt_occs:
+                    continue
+                if self.hoisted[symbol].loop is not l:
+                    continue
+                decl = self.hoisted[symbol].decl
+                place = self.hoisted[symbol].place
+                expr = self.hoisted[symbol].stmt.children[1]
+                if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
+                    continue
+                # Delete any replaced hoisted symbol, declaration, and evaluation
+                symbol_refs = info['symbol_refs'][symbol]
+                syms_mode = info['symbols_mode']
+                # Note: only one write is possible
+                write = [(s, p) for s, p in symbol_refs if syms_mode[s][0] == WRITE][0]
+                to_replace[write[0]] = expr
+                to_remove.append(write[1])
+                place.children.remove(decl)
+                self.hoisted.pop(symbol)
+                self.decls.pop(symbol)
+            for stmt in innermost_block.children:
+                ast_replace(stmt.children[1], to_replace, copy=True)
+            for stmt in to_remove:
+                innermost_block.children.remove(stmt)
 
     def eliminate_zeros(self):
         """Avoid accessing blocks of contiguous (i.e. unit-stride) zero-valued
@@ -313,8 +400,8 @@ class CPULoopOptimizer(LoopOptimizer):
         inner_loop = inner_loops(self.loop)[0]
 
         tmp = dcopy(inner_loop)
-        itspace_copy(inner_loop, self.loop)
-        itspace_copy(self.loop, tmp)
+        itspace_copy(self.loop, inner_loop)
+        itspace_copy(tmp, self.loop)
 
         to_transpose = set()
         if transpose:

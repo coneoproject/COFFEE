@@ -34,13 +34,8 @@
 """This file contains the hierarchy of classes that implement a kernel's
 Abstract Syntax Tree (AST)."""
 
-try:
-    from collections import OrderedDict
-# OrderedDict was added in Python 2.7. Earlier versions can use ordereddict
-# from PyPI
-except ImportError:
-    from ordereddict import OrderedDict
 from copy import deepcopy as dcopy
+import numpy as np
 
 # Utilities for simple exprs and commands
 point = lambda p: "[%s]" % p
@@ -59,6 +54,7 @@ decl = lambda q, t, s, a: "%s%s %s %s" % (q, t, s, a)
 decl_init = lambda q, t, s, a, e: "%s%s %s %s = %s" % (q, t, s, a, e)
 for_loop = lambda s1, e, s2, s3: "for (%s; %s; %s)\n%s" % (s1, e, s2, s3)
 ternary = lambda e, s1, s2: wrap("%s ? %s : %s" % (e, s1, s2))
+init_array = lambda v, f=str: '{%s}' % ', '.join([f(i) for i in v])
 
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
 
@@ -127,9 +123,9 @@ class Root(Node):
 # Meta classes for semantic decoration of AST nodes ##
 
 
-class Perfect(Node):
-    """Dummy mixin class used to decorate classes which can form part
-    of a perfect loop nest."""
+class Writer(Node):
+    """Dummy mixin class used to decorate classes which represent write
+    operations (e.g., assignments, since lvalues get modified)."""
     pass
 
 
@@ -166,7 +162,8 @@ class BinExpr(Expr):
         return self.__class__(dcopy(self.children[0]), dcopy(self.children[1]))
 
     def gencode(self, not_scope=True, parent=None):
-        subtree = (" "+type(self).op+" ").join([n.gencode(not_scope) for n in self.children])
+        children = [n.gencode(not_scope, self) for n in self.children]
+        subtree = (" "+type(self).op+" ").join(children)
         if parent and not isinstance(parent, (Par, self.__class__)):
             return wrap(subtree)
         return subtree
@@ -221,20 +218,62 @@ class ArrayInit(Expr):
     to some values. For example ::
 
         A[3][3] = {{0.0}} or A[3] = {1, 1, 1}.
+    """
 
-    At the moment, initial values like ``{{0.0}}`` and ``{1, 1, 1}`` are passed
-    in as simple strings."""
+    _default_precision = 12
 
-    def __init__(self, values):
+    def __init__(self, values, precision=None):
+        """Initialize an ArrayInit object.
+
+        :arg values: representation of the values the array is initialized to
+        :type values: a string or a numpy ndarray.
+        :arg precision: the number of decimal digits that should be used when
+            converting a float (in a numpy array) to a string.
+        :type precision: integer (defaults to 12)
+        """
         self.values = values
+        self.precision = precision or ArrayInit._default_precision
 
-    def reconstruct(self, values, **kwargs):
-        return type(self)(values, **kwargs)
+    def reconstruct(self, values, precision, **kwargs):
+        return type(self)(values, precision, **kwargs)
 
     def operands(self):
-        return [self.values], {}
+        return [self.values, self.precision], {}
+
+    @property
+    def values(self):
+        return self._values
+
+    @values.setter
+    def values(self, val):
+        if not isinstance(val, (np.ndarray, str)):
+            raise TypeError
+        self._values = val
+
+    def _formatter(self, v):
+        """Format a float into a string, showing up to ``precision`` decimal digits.
+        This function is partly extracted from the open_source "FFC: the FEniCS Form
+        Compiler", freely accessible at https://bitbucket.org/fenics-project/ffc."""
+        f = "%%.%dg" % self.precision
+        f_int = "%%.%df" % 1
+        eps = 10.0**(-self.precision)
+        return f_int % v if abs(v - round(v, 1)) < eps else f % v
+
+    def _tabulate_values(self, arr):
+        if len(arr.shape) == 1:
+            # 1-dimensional case
+            return init_array(arr, lambda v: self._formatter(v))
+        else:
+            # n-dimensional case
+            return init_array([self._tabulate_values(arr[0])] +
+                              ["\n%s" % self._tabulate_values(arr[i])
+                               for i in range(1, arr.shape[0])])
 
     def gencode(self, not_scope=True, parent=None):
+        if isinstance(self.values, np.ndarray):
+            if len(self.values.shape) == 1 and self.values.shape[0] == 1:
+                return self._formatter(self.values[0])
+            return self._tabulate_values(self.values)
         return self.values
 
 
@@ -243,25 +282,27 @@ class ColSparseArrayInit(ArrayInit):
     """Array initilizer in which zero-columns, i.e. columns full of zeros, are
     explictly tracked. Only bi-dimensional arrays are allowed."""
 
-    def __init__(self, values, nonzero_bounds, numpy_values):
-        """Zero columns are tracked once the object is instantiated.
+    def __init__(self, values, precision, nonzero_bounds):
+        """Initialize an ArrayInit object in which blocks of zero columns are
+        explicitly tracked.
 
-        :arg values: string representation of the values the array is initialized to
-        :arg zerobounds: a tuple of two integers indicating the indices of the first
-                         and last nonzero columns
+        :arg values: representation of the values the array is initialized to
+        :type values: a string or a numpy ndarray.
+        :arg precision: the number of decimal digits that should be used when
+            converting a float (in a numpy array) to a string.
+        :type precision: integer (defaults to 12)
+        :arg zerobounds: a list of 2-tuple of integers, each tuple indicating
+                         the indices of the columns at the boundary of a dense
+                         block
         """
-        super(ColSparseArrayInit, self).__init__(values)
+        super(ColSparseArrayInit, self).__init__(values, precision)
         self.nonzero_bounds = nonzero_bounds
-        self.numpy_values = numpy_values
 
-    def reconstruct(self, values, nonzero_bounds, numpy_values, **kwargs):
-        return type(self)(values, nonzero_bounds, numpy_values, **kwargs)
+    def reconstruct(self, values, precision, nonzero_bounds, **kwargs):
+        return type(self)(values, precision, nonzero_bounds, **kwargs)
 
     def operands(self):
-        return [self.values, self.nonzero_bounds, self.numpy_values], {}
-
-    def gencode(self, not_scope=True, parent=None):
-        return self.values
+        return [self.values, self.precision, self.nonzero_bounds], {}
 
 
 class Par(UnaryExpr):
@@ -322,7 +363,7 @@ class GreaterEq(BinExpr):
     op = ">="
 
 
-class FunCall(Expr, Perfect):
+class FunCall(Expr):
 
     """Function call. """
 
@@ -376,6 +417,10 @@ class Symbol(Expr):
 
     def operands(self):
         return [self.symbol, self.rank, self.offset], {}
+
+    @property
+    def dim(self):
+        return len(self.rank)
 
     def gencode(self, not_scope=True, parent=None):
         points = ""
@@ -463,7 +508,7 @@ class Statement(Node):
         super(Statement, self).__init__(children, pragma)
 
 
-class EmptyStatement(Statement, Perfect):
+class EmptyStatement(Statement):
 
     """Empty statement."""
 
@@ -471,7 +516,7 @@ class EmptyStatement(Statement, Perfect):
         return ""
 
 
-class FlatBlock(Statement, Perfect):
+class FlatBlock(Statement):
     """Treat a chunk of code as a single statement, i.e. a C string"""
 
     def __init__(self, code, pragma=None):
@@ -482,7 +527,7 @@ class FlatBlock(Statement, Perfect):
         return self.children[0]
 
 
-class Assign(Statement, Perfect):
+class Assign(Statement, Writer):
 
     """Assign an expression to a symbol."""
 
@@ -494,7 +539,7 @@ class Assign(Statement, Perfect):
                       self.children[1].gencode()) + semicolon(not_scope)
 
 
-class AugmentedAssign(Statement, Perfect):
+class AugmentedAssign(Statement, Writer):
 
     def __init__(self, sym, exp, pragma=None):
         super(AugmentedAssign, self).__init__([sym, exp], pragma)
@@ -524,7 +569,7 @@ class IDiv(AugmentedAssign):
     op = "/="
 
 
-class Decl(Statement, Perfect):
+class Decl(Statement):
 
     """Declaration of a symbol.
 
@@ -688,11 +733,6 @@ class For(Statement):
     @body.setter
     def body(self, new_body):
         self.children[0].children = new_body
-
-    @staticmethod
-    def fromloops(loops):
-        loops_dims = [l.dim for l in loops]
-        return OrderedDict(zip(loops_dims, loops))
 
     def gencode(self, not_scope=False):
         return "\n".join(self.pragma) + "\n" + for_loop(self.init.gencode(True),
@@ -894,7 +934,7 @@ class AVXSetZero(Statement):
 # Linear Algebra classes
 
 
-class Invert(Statement, Perfect, LinAlg):
+class Invert(Statement, LinAlg):
     """In-place inversion of a square array."""
     def __init__(self, sym, dim, pragma=None):
         super(Invert, self).__init__([sym, dim, dim], pragma)
@@ -921,7 +961,7 @@ class Invert(Statement, Perfect, LinAlg):
 """ % (str(dim), str(lda), str(sym), str(sym))
 
 
-class Determinant(Expr, Perfect, LinAlg):
+class Determinant(Expr, LinAlg):
     """Generic determinant"""
     def __init__(self, sym, pragma=None):
         super(Determinant, self).__init__([sym, type(self).dim, type(self).lda], pragma=pragma)
@@ -960,7 +1000,7 @@ class Determinant2x2(Determinant):
                    Prod(Symbol(v, (0, 1)), Symbol(v, (1, 0))))
 
 
-class Determinant3x3(Expr, Perfect, LinAlg):
+class Determinant3x3(Determinant):
 
     """Determinant of a 3x3 square array."""
     dim = 2
