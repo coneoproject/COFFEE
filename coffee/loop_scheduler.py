@@ -432,7 +432,7 @@ class ZeroLoopScheduler(LoopScheduler):
             # iteration variable. Unify contiguous regions (for example,
             # [(1,3), (4,6)] -> [(1,6)]
             new_nz_bounds = nz_bounds + dim_nz_bounds_r.get(dim, ())
-            merged_nz_bounds = itspace_merge(new_nz_bounds)
+            merged_nz_bounds = list(itspace_merge(new_nz_bounds))
             new_dim_nz_bounds[dim] = merged_nz_bounds
         return new_dim_nz_bounds
 
@@ -572,14 +572,7 @@ class ZeroLoopScheduler(LoopScheduler):
         # The starting point of this pass consists of identifying the location
         # of non-zero valued blocks in the symbols appearing in /root/. For this,
         # the declarations of such symbols are examined.
-        nz_in_syms = {}
-        for s, d in self.decls.items():
-            if d.nonzero:
-                nz_in_syms[s] = ((d.nonzero[0],), (d.nonzero[1],))
-
-        # If zeros were not found, then just give up
-        if not nz_in_syms:
-            return {}
+        nz_in_syms = {s: d.nonzero for s, d in self.decls.items() if d.nonzero}
 
         # Track propagation of zero blocks by symbolically executing the code
         nz_info = OrderedDict()
