@@ -399,17 +399,14 @@ class ZeroLoopScheduler(LoopScheduler):
           B[i] = E[i]*F[i]
     """
 
-    def __init__(self, exprs, expr_graph, decls, hoisted):
+    def __init__(self, exprs, decls, hoisted):
         """Initialize the ZeroLoopScheduler.
 
         :param exprs: the expressions for which the zero-elimination is performed.
-        :param expr_graph: the ExpressionGraph tracking all data dependencies involving
-                           identifiers that appear in ``root``.
         :param decls: lists of declarations visible to ``exprs``.
         :param hoisted: dictionary that tracks hoisted sub-expressions
         """
         self.exprs = exprs
-        self.expr_graph = expr_graph
         self.decls = decls
         self.hoisted = hoisted
 
@@ -504,7 +501,7 @@ class ZeroLoopScheduler(LoopScheduler):
             else:
                 raise RuntimeError("Zeros error: unsupported operation: %s" % str(node))
 
-    def _track_nz_blocks(self, node, nz_in_syms, nz_info, loop_nest=()):
+    def _track_nz_blocks(self, node, nz_in_syms, nz_info, nest=None, parent=None):
         """Track the propagation of zero blocks along the computation which is
         rooted in ``node``.
 
@@ -536,30 +533,35 @@ class ZeroLoopScheduler(LoopScheduler):
             sym, expr = node.children
             symbol, rank = sym.symbol, sym.rank
             dim_nz_bounds = self._track_nz_expr(expr, nz_in_syms)
-            if not all([r in dim_nz_bounds for r in rank]):
-                return
+
             # Reflect the propagation of non-zero blocks in /symbol/. If /symbol/ had
             # already been encountered, non-zero bounds get merged together.
+            if not all([r in dim_nz_bounds for r in rank]):
+                return
             nz_in_expr = tuple(dim_nz_bounds[r] for r in rank)
             if symbol in nz_in_syms:
                 nz_in_expr = tuple([itspace_merge(flatten(i)) for i in
                                     zip(nz_in_expr, nz_in_syms[symbol])])
             nz_in_syms[symbol] = nz_in_expr
-            if loop_nest:
-                # Track the propagation of non-zero blocks in this specific
-                # loop nest. Outer loops, i.e. loops that have non been
-                # encountered as visiting from the root, are discarded.
-                dim_nz_bounds = dict([(k, v) for k, v in dim_nz_bounds.items()
-                                      if k in [l.dim for l in loop_nest]])
-                nz_info.setdefault(loop_nest, []).append((node, dim_nz_bounds))
+
+            nest = tuple([(l, p) for l, p in (nest or []) if is_perfect_loop(l)])
+            if not nest:
+                # Nothing to be tracked
+                return
+            # Note: outer, non-perfect loops are discarded for transformation
+            # safety. In fact, splitting non-perfect loop nests inherently
+            # breaks the code
+            dim_nz_bounds = dict([(k, v) for k, v in dim_nz_bounds.items()
+                                  if k in [l.dim for l, _ in nest]])
+            nz_info.setdefault(nest, []).append((node, dim_nz_bounds))
 
         elif isinstance(node, For):
-            new_loop_nest = loop_nest + (node,)
-            self._track_nz_blocks(node.children[0], nz_in_syms, nz_info, new_loop_nest)
+            new_nest = (nest or []) + [(node, parent)]
+            self._track_nz_blocks(node.children[0], nz_in_syms, nz_info, new_nest, node)
 
         elif isinstance(node, (Root, Block)):
             for n in node.children:
-                self._track_nz_blocks(n, nz_in_syms, nz_info, loop_nest)
+                self._track_nz_blocks(n, nz_in_syms, nz_info, nest, node)
 
         elif isinstance(node, (If, Switch)):
             raise RuntimeError("Unexpected control flow while tracking zero blocks")
@@ -609,55 +611,53 @@ class ZeroLoopScheduler(LoopScheduler):
         """
 
         track_exprs, new_nz_info = {}, {}
-        for loop, stmt_itspaces in nz_info.items():
-            fissioned_loops = defaultdict(list)
-            # Fission the loops on an intermediate representation
+        for nest, stmt_itspaces in nz_info.items():
+            loops, loops_parents = zip(*nest)
+            fissioned_nests = defaultdict(list)
+            # Fission the nest to get rid of computation over zero-valued blocks
             for stmt, stmt_itspace in stmt_itspaces:
                 nz_bounds_list = [i for i in itertools.product(*stmt_itspace.values())]
                 for nz_bounds in nz_bounds_list:
                     dim_nz_bounds = tuple(zip(stmt_itspace.keys(), nz_bounds))
                     if not dim_nz_bounds:
-                        # If no non_zero bounds, then just reuse the existing loops
-                        dim_nz_bounds = itspace_from_for(loop, mode=1)
+                        # If no non_zero bounds, then just reuse the existing nest
+                        dim_nz_bounds = itspace_from_for(loops, mode=1)
                     itspace, stmt_ofs = itspace_size_ofs(dim_nz_bounds)
                     copy_stmt = dcopy(stmt)
-                    fissioned_loops[itspace].append((copy_stmt, stmt_ofs))
+                    fissioned_nests[itspace].append((copy_stmt, stmt_ofs))
                     if stmt in self.exprs:
                         track_exprs[copy_stmt] = self.exprs[stmt]
-            # Generate the actual code.
+            # Generate the fissioned loop nests
             # The dictionary is sorted because we must first execute smaller
-            # loop nests, since larger ones may depend on them
-            for itspace, stmt_ofs in sorted(fissioned_loops.items()):
-                loops_info, inner_block = itspace_to_for(itspace, root)
+            # nests, since larger ones may depend on them
+            for itspace, stmt_ofs in sorted(fissioned_nests.items()):
+                nests_info, inner_block = itspace_to_for(itspace, root)
                 for stmt, ofs in stmt_ofs:
-                    dict_ofs = dict(ofs)
-                    ast_update_ofs(stmt, dict_ofs)
-                    self._init_decl_to_zero(stmt, nz_in_syms, dict_ofs, itspace)
+                    ast_update_ofs(stmt, dict(ofs))
+                    self._init_decl_to_zero(stmt, nz_in_syms, dict(ofs), itspace)
                     inner_block.children.append(stmt)
                     # Update expressions and hoisting-related information
                     if stmt in track_exprs:
                         self.exprs[stmt] = copy_metaexpr(track_exprs[stmt],
                                                          parent=inner_block,
-                                                         loops_info=loops_info)
+                                                         loops_info=nests_info)
                     self.hoisted.update_stmt(stmt.children[0].symbol,
-                                             loop=loops_info[0][0], place=root)
-                new_nz_info[loops_info[-1][0]] = stmt_ofs
+                                             loop=nests_info[0][0], place=root)
+                new_nz_info[nests_info[-1][0]] = stmt_ofs
                 # Append the created loops to the root
-                index = root.children.index(loop[0])
-                root.children.insert(index, loops_info[0][0])
-            root.children.remove(loop[0])
+                insert_at_elem(loops_parents[0].children, loops[0], nests_info[0][0])
+            loops_parents[0].children.remove(loops[0])
 
         nz_info.clear()
         nz_info.update(new_nz_info)
 
-    def reschedule(self):
-        """Restructure the loop nests embedding ``self.exprs`` based on the
-        propagation of zero-valued columns along the computation. This, therefore,
-        involves fissing and fusing loops so as to remove iterations spent
-        performing arithmetic operations over zero-valued entries."""
+    def reschedule(self, root):
+        """Restructure the loop nests in ``root`` to avoid computation over
+        zero-valued data spaces. This is achieved through symbolic execution
+        starting from ``root``. Control flow, in the form of If, Switch, etc.,
+        is forbidden."""
 
-        roots = set()
-        elf = ExpressionFissioner(1)
+        elf = ExpressionFissioner(cut=1)
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
                 continue
@@ -667,15 +667,9 @@ class ZeroLoopScheduler(LoopScheduler):
                 # may have zero-valued blocks at different offsets
                 self.exprs.pop(stmt)
                 self.exprs.update(elf.fission(stmt, expr_info, False))
-            roots.add(expr_info.domain_loops_parents[0])
-
-        if len(roots) > 1:
-            warning("Found multiple roots while performing zero-elimination")
-            warning("The code generation is undefined")
-        root = roots.pop()
 
         # Symbolically execute the code starting from root to track the
-        # propagation of zero-valued blocks in the various arrays
+        # propagation of zero-valued blocks
         nz_in_syms, nz_info = self._track_nz(root)
 
         # At this point, we know the final location of non-zero values, so we can

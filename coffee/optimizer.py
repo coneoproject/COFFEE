@@ -183,16 +183,13 @@ class LoopOptimizer(object):
                 innermost_block.children.remove(stmt)
 
     def eliminate_zeros(self):
-        """Avoid accessing blocks of contiguous (i.e. unit-stride) zero-valued
-        columns when computing an expression."""
+        """Restructure the iteration spaces nested in this LoopOptimizer to
+        avoid evaluation of arithmetic operations involving zero-valued blocks
+        in statically initialized arrays."""
 
-        # Search for zero-valued columns and restructure the iteration spaces;
-        # the ZeroLoopScheduler analyzes statements "one by one", and changes
-        # the iteration spaces of the enclosing loops accordingly.
-        if not any([d.nonzero for d in self.decls.values()]):
-            return
-        zls = ZeroLoopScheduler(self.exprs, self.expr_graph, self.decls, self.hoisted)
-        self.nz_info = zls.reschedule()
+        if any([d.nonzero for d in self.decls.values()]):
+            zls = ZeroLoopScheduler(self.exprs, self.decls, self.hoisted)
+            self.nz_info = zls.reschedule(self.header)
 
     def precompute(self, mode=0):
         """Precompute statements out of ``self.loop``, which implies scalar

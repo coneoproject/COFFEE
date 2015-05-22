@@ -563,14 +563,14 @@ def itspace_merge(itspaces):
 
 
 def itspace_to_for(itspaces, loop_parent):
-    """Given an iterator of iteration spaces, each iteration space represented
-    as a 2-tuple containing the start and the end point, return a tuple
-    ``(loops_info, inner_block)``, in which ``loops_info`` is the tuple of all
-    tuples (loop, loop_parent) embedding ``inner_block``."""
+    """Given an iterator of iteration spaces, each iteration space being
+    a 2-tuple containing the start and the end point, return a 2-tuple
+    ``(loops_info, inner_block)``, in which ``loops_info`` represents the
+    loop nest enclosing ``inner_block``."""
     inner_block = Block([], open_scope=True)
     loops, loops_parents = [], [loop_parent]
     loop_body = inner_block
-    for i, itspace in enumerate(itspaces):
+    for i, itspace in enumerate(reversed(itspaces)):
         start, stop = itspace
         loops.insert(0, For(Decl("int", start, Symbol(0)), Less(start, stop),
                             Incr(start, Symbol(1)), loop_body))
