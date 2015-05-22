@@ -580,7 +580,7 @@ class ZeroLoopScheduler(LoopScheduler):
 
         return (nz_in_syms, nz_info)
 
-    def _reschedule_itspace(self, root, exprs, nz_in_syms, nz_info):
+    def _reschedule_itspace(self, root, nz_in_syms, nz_info):
         """Consider two statements A and B, and their iteration spaces.
         If the two iteration spaces have
 
@@ -608,8 +608,7 @@ class ZeroLoopScheduler(LoopScheduler):
         Return the dictionary of the updated expressions.
         """
 
-        new_exprs, new_nz_info = {}, {}
-        track_exprs = {}
+        track_exprs, new_nz_info = {}, {}
         for loop, stmt_itspaces in nz_info.items():
             fissioned_loops = defaultdict(list)
             # Fission the loops on an intermediate representation
@@ -623,8 +622,8 @@ class ZeroLoopScheduler(LoopScheduler):
                     itspace, stmt_ofs = itspace_size_ofs(dim_nz_bounds)
                     copy_stmt = dcopy(stmt)
                     fissioned_loops[itspace].append((copy_stmt, stmt_ofs))
-                    if stmt in exprs:
-                        track_exprs[copy_stmt] = exprs[stmt]
+                    if stmt in self.exprs:
+                        track_exprs[copy_stmt] = self.exprs[stmt]
             # Generate the actual code.
             # The dictionary is sorted because we must first execute smaller
             # loop nests, since larger ones may depend on them
@@ -637,9 +636,9 @@ class ZeroLoopScheduler(LoopScheduler):
                     inner_block.children.append(stmt)
                     # Update expressions and hoisting-related information
                     if stmt in track_exprs:
-                        new_exprs[stmt] = copy_metaexpr(track_exprs[stmt],
-                                                        parent=inner_block,
-                                                        loops_info=loops_info)
+                        self.exprs[stmt] = copy_metaexpr(track_exprs[stmt],
+                                                         parent=inner_block,
+                                                         loops_info=loops_info)
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              loop=loops_info[0][0], place=root)
                 new_nz_info[loops_info[-1][0]] = stmt_ofs
@@ -650,7 +649,6 @@ class ZeroLoopScheduler(LoopScheduler):
 
         nz_info.clear()
         nz_info.update(new_nz_info)
-        return new_exprs
 
     def reschedule(self):
         """Restructure the loop nests embedding ``self.exprs`` based on the
@@ -658,7 +656,7 @@ class ZeroLoopScheduler(LoopScheduler):
         involves fissing and fusing loops so as to remove iterations spent
         performing arithmetic operations over zero-valued entries."""
 
-        roots, new_exprs = set(), {}
+        roots = set()
         elf = ExpressionFissioner(1)
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
@@ -667,8 +665,8 @@ class ZeroLoopScheduler(LoopScheduler):
                 # Split expressions based on sum's associativity. This exposes more
                 # opportunities for rescheduling loops, since different summands
                 # may have zero-valued blocks at different offsets
-                new_exprs.update(elf.fission(stmt, expr_info, False))
                 self.exprs.pop(stmt)
+                self.exprs.update(elf.fission(stmt, expr_info, False))
             roots.add(expr_info.domain_loops_parents[0])
 
         if len(roots) > 1:
@@ -682,7 +680,6 @@ class ZeroLoopScheduler(LoopScheduler):
 
         # At this point, we know the final location of non-zero values, so we can
         # restructure the iteration spaces to avoid useless computation
-        new_exprs = self._reschedule_itspace(root, new_exprs, nz_in_syms, nz_info)
-        self.exprs.update(new_exprs)
+        self._reschedule_itspace(root, nz_in_syms, nz_info)
 
         return nz_info
