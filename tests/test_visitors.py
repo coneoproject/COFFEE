@@ -110,19 +110,19 @@ def test_check_perfect_loop():
     loop = c_for("i", 10, [Assign(a, b)]).children[0]
 
     env = dict(in_loop=True, multiple_statements=False)
-    assert v.visit(loop, env=env)
+    assert v.visit(loop, **env)
 
     loop2 = c_for("j", 10, [loop]).children[0]
 
-    assert v.visit(loop2, env=env)
+    assert v.visit(loop2, **env)
 
     loop3 = c_for("k", 10, [loop2, Assign(b, a)]).children[0]
 
-    assert not v.visit(loop3, env=env)
+    assert not v.visit(loop3, **env)
 
     loop4 = c_for("k", 10, [Assign(a, b), Assign(b, a)]).children[0]
 
-    assert v.visit(loop4, env=env)
+    assert v.visit(loop4, **env)
 
 
 @pytest.fixture
@@ -183,7 +183,7 @@ def test_symbol_declarations_decl():
 
     v = SymbolDeclarations()
 
-    ret = v.visit(tree, env=SymbolDeclarations.default_env)
+    ret = v.visit(tree)
 
     assert set(ret.keys()) == set([a.symbol])
 
@@ -197,7 +197,7 @@ def test_symbol_declarations_block():
 
     v = SymbolDeclarations()
 
-    ret = v.visit(tree, env=SymbolDeclarations.default_env)
+    ret = v.visit(tree)
 
     assert set(ret.keys()) == set([a.symbol, b.symbol])
 
@@ -213,7 +213,7 @@ def test_symbol_declarations_fundecl_args():
 
     v = SymbolDeclarations()
 
-    ret = v.visit(tree, env=SymbolDeclarations.default_env)
+    ret = v.visit(tree)
     assert set(ret.keys()) == set([a.symbol, b.symbol])
 
 
@@ -229,7 +229,7 @@ def test_symbol_declarations_fundecl_body():
 
     v = SymbolDeclarations()
 
-    ret = v.visit(tree, env=SymbolDeclarations.default_env)
+    ret = v.visit(tree)
     assert set(ret.keys()) == set([a.symbol, b.symbol])
 
 
@@ -245,7 +245,7 @@ def test_symbol_declarations_fundecl_both():
 
     v = SymbolDeclarations()
 
-    ret = v.visit(tree, env=SymbolDeclarations.default_env)
+    ret = v.visit(tree)
     assert set(ret.keys()) == set([a.symbol, b.symbol])
 
 
@@ -256,7 +256,7 @@ def test_symbol_dependencies_no_nest():
 
     v = SymbolDependencies()
 
-    ret = v.visit(tree, env=SymbolDependencies.default_env)
+    ret = v.visit(tree, **SymbolDependencies.default_args)
 
     assert ret[a] == []
 
@@ -269,7 +269,7 @@ def test_symbol_dependencies_single_loop():
 
     v = SymbolDependencies()
 
-    ret = v.visit(tree, env=SymbolDependencies.default_env)
+    ret = v.visit(tree, **SymbolDependencies.default_args)
 
     assert ret[a] == [tree.children[0]]
 
@@ -280,7 +280,7 @@ def test_symbol_dependencies_read_single_loop():
     tree = c_for("i", 2, [Assign(b, a)])
 
     v = SymbolDependencies()
-    ret = v.visit(tree, env=SymbolDependencies.default_env)
+    ret = v.visit(tree, **SymbolDependencies.default_args)
 
     assert ret[b] == [tree.children[0]]
 
@@ -293,7 +293,7 @@ def test_symbol_dependencies_double_loop():
     tree = c_for("i", 2, [c_for("j", 1, [IMul(b, a)])])
     v = SymbolDependencies()
 
-    ret = v.visit(tree, env=SymbolDependencies.default_env)
+    ret = v.visit(tree, **SymbolDependencies.default_args)
 
     assert ret[b] == [tree.children[0], tree.children[0].body[0]]
     assert ret[a] == [tree.children[0]]
@@ -308,7 +308,7 @@ def test_symbol_dependencies_write_then_read_inner_loop():
 
     v = SymbolDependencies()
 
-    ret = v.visit(tree, env=SymbolDependencies.default_env)
+    ret = v.visit(tree, **SymbolDependencies.default_args)
 
     assert ret[a2] == [tree.children[0]]
     assert ret[a] == [tree.children[0], tree.children[0].body[0].children[0]]
