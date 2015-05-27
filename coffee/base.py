@@ -432,7 +432,7 @@ class Symbol(Expr):
         super(Symbol, self).__init__([])
         self.symbol = symbol
         self.rank = rank
-        self.offset = offset
+        self.offset = offset or tuple([(1, 0) for r in rank])
 
     def operands(self):
         return [self.symbol, self.rank, self.offset], {}
