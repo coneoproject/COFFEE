@@ -315,6 +315,183 @@ def test_symbol_dependencies_write_then_read_inner_loop():
     assert ret[b] == [tree.children[0], tree.children[0].body[1].children[0]]
 
 
+def test_unroll_factors_single():
+    tree = c_for("i", 2, [])
+
+    v = DetermineUnrollFactors()
+
+    ret = v.visit(tree)
+
+    assert ret["i"] == (1, )
+
+
+def test_unroll_factors_nested():
+    tree = c_for("i", 10, [c_for("j", 4, []),
+                           c_for("k", 6, [c_for("l", 2, [])])])
+
+    v = DetermineUnrollFactors()
+
+    ret = v.visit(tree)
+
+    assert ret["j"] == (1, )
+    assert ret["l"] == (1, )
+    assert ret["k"] == (1, 2, 3, 6)
+    assert ret["i"] == (1, 2, 5, 10)
+
+
+def test_max_loop_depth_single():
+    tree = c_for("i", 2, [])
+
+    v = MaxLoopDepth()
+
+    assert v.visit(tree) == 1
+    assert v.visit(tree.children[0].body) == 0
+
+
+def test_max_loop_depth_nested():
+    tree = c_for("i", 10, [c_for("j", 4, []),
+                           c_for("k", 6, [c_for("l", 2, [])])])
+
+    v = MaxLoopDepth()
+
+    assert v.visit(tree) == 3
+
+
+def test_find_loop_nests_single():
+    tree = c_for("i", 2, [])
+    v = FindLoopNests()
+
+    ret = v.visit(tree)
+
+    assert len(ret) == 1
+    assert ret[0] == [(tree.children[0], tree)]
+
+
+def test_find_loop_nests_nested():
+    tree = c_for("i", 10, [c_for("j", 4, []),
+                           c_for("k", 6, [c_for("l", 2, [])])])
+
+    v = FindLoopNests()
+
+    ret = v.visit(tree)
+
+    assert len(ret) == 2
+
+    iloop = tree.children[0]
+    jloop = iloop.children[0].children[0].children[0]
+    kloop = iloop.children[0].children[1].children[0]
+    lloop = kloop.children[0].children[0]
+
+    assert ret[0][0][0] == iloop
+    assert ret[0][1][0] == jloop
+    assert len(ret[0]) == 2
+    assert ret[1][0][0] == iloop
+    assert ret[1][1][0] == kloop
+    assert ret[1][2][0] == lloop
+    assert len(ret[1]) == 3
+
+
+def test_find_coffee_expressions_empty():
+    tree = c_for("i", 10, [])
+    v = FindCoffeeExpressions()
+
+    ret = v.visit(tree)
+
+    assert len(ret) == 0
+
+
+def test_find_coffee_expressions_single():
+    a = Symbol("a")
+    b = Symbol("b")
+    assign = Assign(a, b, pragma="#pragma coffee expression")
+    tree = c_for("i", 10, [assign])
+
+    v = FindCoffeeExpressions()
+
+    ret = v.visit(tree)
+
+    assert len(ret) == 1
+
+    val = ret[assign]
+
+    assert len(val) == 3
+
+    assert val[2] == ()
+    assert val[1] == [(tree.children[0], tree)]
+    assert val[0] == tree.children[0].children[0]
+
+
+def test_find_coffee_expressions_nested():
+    a = Symbol("a")
+    b = Symbol("b")
+    assign1 = Assign(a, b, pragma="#pragma coffee expression")
+
+    c = Symbol("c")
+    d = Symbol("d", rank=("i", ))
+
+    assign2 = Assign(d, c, pragma="#pragma coffee expression")
+    tree = c_for("i", 10, [c_for("j",
+                                 2, [assign2]),
+                           assign1])
+
+    v = FindCoffeeExpressions()
+    ret = v.visit(tree)
+
+    assert len(ret) == 2
+
+    val1 = ret[assign1]
+    val2 = ret[assign2]
+
+    assert val1[0] == tree.children[0].children[0]
+    assert val1[1] == [(tree.children[0], tree)]
+    assert val1[2] == ()
+
+    assert val2[0] == tree.children[0].body[0].children[0].children[0]
+    assert val2[1] == [(tree.children[0], tree),
+                       (tree.children[0].body[0].children[0],
+                        tree.children[0].body[0])]
+    assert val2[2] == ("i", )
+
+
+def test_symbol_modes_simple():
+    a = Symbol("a")
+    b = Symbol("b")
+    tree = Assign(a, b)
+
+    v = SymbolModes()
+
+    ret = v.visit(tree)
+
+    assert len(ret) == 2
+
+    assert ret[a] == (WRITE, tree.__class__)
+    assert ret[b] == (READ, tree.__class__)
+
+
+def test_symbol_modes_nested():
+    a = Symbol("a")
+    b = Symbol("b")
+
+    assign = Assign(a, b)
+
+    c = Symbol("c")
+    d = Symbol("a")
+
+    assign2 = Assign(c, d)
+
+    tree = c_for("i", 10, [assign,
+                           c_for("j", 10, [c_for("k", 10, [assign2])])])
+
+    v = SymbolModes()
+
+    ret = v.visit(tree)
+
+    assert ret[a] == (WRITE, Assign)
+    assert ret[b] == (READ, Assign)
+    assert ret[c] == (WRITE, Assign)
+    assert ret[d] == (READ, Assign)
+
+
 if __name__ == "__main__":
     import os
     pytest.main(os.path.abspath(__file__))
