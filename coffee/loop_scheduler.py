@@ -410,28 +410,6 @@ class ZeroRemover(LoopScheduler):
         self.decls = decls
         self.hoisted = hoisted
 
-    def _merge_dims_nz_bounds(self, dim_nz_bounds_l, dim_nz_bounds_r):
-        """Merge two dictionaries associating iteration space variables to
-        ranges of (non) zero-valued blocks; return the merged dictionary.
-        For example: ::
-
-            dict1 = {'j': [(1,3), (5,6)], 'k': [(5,7)]}
-            dict2 = {'j': [(3,4)], 'k': [(1,4)]}
-            return -> {'j': [(1,6)], 'k': [(1,7)]}
-        """
-        new_dim_nz_bounds = {}
-        for dim, nz_bounds in dim_nz_bounds_l.items():
-            if dim.isdigit():
-                # Skip constant dimensions
-                continue
-            # Compute the union of non-zero bounds along the same
-            # iteration variable. Unify contiguous regions (for example,
-            # [(1,3), (4,6)] -> [(1,6)]
-            new_nz_bounds = nz_bounds + dim_nz_bounds_r.get(dim, ())
-            merged_nz_bounds = list(itspace_merge(new_nz_bounds))
-            new_dim_nz_bounds[dim] = merged_nz_bounds
-        return new_dim_nz_bounds
-
     def _init_decl_to_zero(self, node, nz_in_syms, ofs, itspace):
         """Scan each variable ``v`` in ``node``: if non-initialized elements in ``v``
         are touched as iterating along ``itspace``, initialize ``v`` to 0.0."""
@@ -468,55 +446,88 @@ class ZeroRemover(LoopScheduler):
                     # Iterating over a non-initialized region, need to zero it
                     self.hoisted[symbol].decl.init = ArrayInit("{0.0}")
 
-    def _track_nz_expr(self, node, nz_in_syms):
-        """Return the first and last indices assumed by the iteration space
-        variables appearing in ``node`` over regions of non zero-valued blocks.
-        For example: ::
+    def _track_nz_expr(self, node, nz_in_syms, nest):
+        """For the expression rooted in ``node``, return iteration space and
+        offset required to iterate over non zero-valued blocks. For example: ::
 
-            A[i][j] = B[i]*C[j]
+            for i = 0 to N
+              for j = 0 to N
+                A[i][j] = B[i]*C[j]
 
         If B along `i` is non-zero in ranges [0, k1] and [k2, k3], while C along
         `j` is non-zero in range [N-k4, N], return the following dictionary: ::
 
-            {i: ((0, k1), (k2, k3)), j: ((N-k4, N),)}
+            {i: [(k1, 0), (k3-k2, k2)], j: [(N-(N-k4), N-k4)]}
 
-        If there are no zero-blocks, return {}."""
+        That is, for each iteration space variable, return a list of 2-tuples,
+        in which the first entry represents the size of the iteration space,
+        and the second entry represents the offset in memory to access the
+        correct values.
+
+        If zero-valued blocks are not present, simply return {}."""
+
         if isinstance(node, Symbol):
-            if any([o != (1, 0) for o in node.offset]):
-                raise RuntimeError("Zeros error: offsets not supported: %s" % str(node))
-            nz_bounds = nz_in_syms.get(node.symbol)
-            return dict(zip(node.rank, nz_bounds)) if nz_bounds else {}
+            itspace = {l.dim: [(l.size, 0)] for l, _ in nest}
+            nz_bounds = nz_in_syms.get(node.symbol, ())
+            for r, o, nz_bs in zip(node.rank, node.offset, nz_bounds):
+                if o[0] != 1:
+                    # Cannot handle jumps in memory accesses
+                    continue
+                try:
+                    loop = [l for l, p in nest if l.dim == r][0]
+                except:
+                    # No loop means constant access along /r/
+                    continue
+                offset = o[1]
+                r_size_ofs = []
+                for nz_b in nz_bs:
+                    nz_b_size, nz_b_offset = nz_b
+                    end = nz_b_size + nz_b_offset
+                    if offset >= end:
+                        # Discard out-of-nz-bounds accesses
+                        continue
+                    start = max(offset, nz_b_offset)
+                    r_offset = start - offset
+                    r_size = min(offset + loop.size, end) - start
+                    r_size_ofs.append((r_size, r_offset))
+                itspace[r] = r_size_ofs
+            return itspace
 
         elif isinstance(node, (Par, FunCall)):
-            return self._track_nz_expr(node.children[0], nz_in_syms)
-
-        elif isinstance(node, (Prod, Div)):
-            # Merge the non-zero bounds
-            dim_nz_bounds_l = self._track_nz_expr(node.children[0], nz_in_syms)
-            dim_nz_bounds_r = self._track_nz_expr(node.children[1], nz_in_syms)
-            return dict(dim_nz_bounds_l.items() + dim_nz_bounds_r.items())
-
-        elif isinstance(node, (Sum, Sub)):
-            # Take the union of the non-zero bounds
-            dim_nz_bounds_l = self._track_nz_expr(node.children[0], nz_in_syms)
-            dim_nz_bounds_r = self._track_nz_expr(node.children[1], nz_in_syms)
-            return self._merge_dims_nz_bounds(dim_nz_bounds_l, dim_nz_bounds_r)
+            return self._track_nz_expr(node.children[0], nz_in_syms, nest)
 
         else:
-            raise RuntimeError("Zero avoidance: unsupported operation: %s" % str(node))
+            itspace_l = self._track_nz_expr(node.left, nz_in_syms, nest)
+            itspace_r = self._track_nz_expr(node.right, nz_in_syms, nest)
+            # Take the intersection of the iteration spaces
+            itspace = {}
+            itspace.update(itspace_l)
+            for r_r, r_size_ofs in itspace_r.items():
+                if not r_r in itspace:
+                    itspace[r_r] = r_size_ofs
+                l_size_ofs = itspace[r_r]
+                if isinstance(node, (Prod, Div)):
+                    to_intersect = itertools.product(l_ssize_ofs, r_size_ofs)
+                    bounds = [itspace_intersect(b, mode=1) for b in to_intersect]
+                elif isinstance(node, (Sum, Sub)):
+                    bounds = itspace_merge(l_size_ofs + r_size_ofs, mode=1)
+                else:
+                    raise RuntimeError("Zero-avoidance: unexpected op %s", str(node))
+                itspace[r_r] = bounds
+            return itspace
 
     def _track_nz_blocks(self, node, nz_in_syms, nz_info, nest=None, parent=None):
         """Track the propagation of zero blocks along the computation which is
         rooted in ``node``.
 
         ``nz_in_syms`` contains, for each known identifier, the ranges of
-        its zero blocks. For example, assuming identifier A is an array and has
-        non-zero values in positions from 0 to k and from N-k to N, then
+        its non zero-valued blocks. For example, assuming identifier A is an
+        array and has non-zero values in positions [0, k] and [N-k, N], then
         ``nz_in_syms`` will contain an entry {"A": ((0, k), (N-k, N))}.
         If A is modified by some statements rooted in ``node``, then
         ``nz_in_syms["A"]`` will be modified accordingly.
 
-        This method also updates ``nz_info``, which maps loop nests to the
+        This method also populates ``nz_info``, which maps loop nests to the
         enclosed symbols' non-zero blocks. For example, given the following
         code: ::
 
@@ -536,28 +547,27 @@ class ZeroRemover(LoopScheduler):
         if isinstance(node, (Assign, Incr, Decr)):
             sym, expr = node.children
             symbol, rank = sym.symbol, sym.rank
-            dim_nz_bounds = self._track_nz_expr(expr, nz_in_syms)
 
-            # Reflect the propagation of non-zero blocks in /symbol/. If /symbol/ had
-            # already been encountered, non-zero bounds get merged together.
-            if not all([r in dim_nz_bounds for r in rank]):
-                return
-            nz_in_expr = tuple(dim_nz_bounds[r] for r in rank)
-            if symbol in nz_in_syms:
-                nz_in_expr = tuple([itspace_merge(flatten(i)) for i in
-                                    zip(nz_in_expr, nz_in_syms[symbol])])
-            nz_in_syms[symbol] = nz_in_expr
-
-            nest = tuple([(l, p) for l, p in (nest or []) if is_perfect_loop(l)])
-            if not nest:
-                # Nothing to be tracked
-                return
             # Note: outer, non-perfect loops are discarded for transformation
             # safety. In fact, splitting non-perfect loop nests inherently
             # breaks the code
-            dim_nz_bounds = dict([(k, v) for k, v in dim_nz_bounds.items()
-                                  if k in [l.dim for l, _ in nest]])
-            nz_info.setdefault(nest, []).append((node, dim_nz_bounds))
+            nest = tuple([(l, p) for l, p in (nest or []) if is_perfect_loop(l)])
+            if not nest:
+                return
+
+            # Track the propagation of non zero-valued blocks. If it is not the
+            # first time that /symbol/ is encountered, info get merged.
+            itspace = self._track_nz_expr(expr, nz_in_syms, nest)
+            if not all([r in itspace for r in rank]):
+                return
+            nz_in_expr = tuple(itspace[r] for r in rank)
+            if symbol in nz_in_syms:
+                nz_in_expr = tuple([ItSpace(mode=1).merge(flatten(i)) for i in
+                                    zip(nz_in_expr, nz_in_syms[symbol])])
+            nz_in_syms[symbol] = nz_in_expr
+
+            # Record loop nest bounds and memory offsets for /node/
+            nz_info.setdefault(nest, []).append((node, itspace))
 
         elif isinstance(node, For):
             new_nest = (nest or []) + [(node, parent)]
@@ -595,7 +605,7 @@ class ZeroRemover(LoopScheduler):
            for i, for j  // Different loop bounds
              Z1[i][j] = Z2[i][j]
 
-        A dictionary described the structure of the new iteration spaces is
+        A dictionary describing the structure of the new iteration spaces is
         returned.
         """
 
@@ -614,26 +624,28 @@ class ZeroRemover(LoopScheduler):
             loops, loops_parents = zip(*nest)
             fissioned_nests = defaultdict(list)
             # Fission the nest to get rid of computation over zero-valued blocks
-            for stmt, stmt_itspace in stmt_itspaces:
-                nz_bounds_list = [i for i in itertools.product(*stmt_itspace.values())]
+            for stmt, itspace in stmt_itspaces:
+                nz_bounds_list = [i for i in itertools.product(*itspace.values())]
                 for nz_bounds in nz_bounds_list:
-                    dim_nz_bounds = tuple(zip(stmt_itspace.keys(), nz_bounds))
+                    dim_nz_bounds = zip(itspace.keys(), nz_bounds)
                     if not dim_nz_bounds:
-                        # If no non_zero bounds, then just reuse the existing nest
+                        # If no non_zero bounds, reuse the existing loop nest
                         dim_nz_bounds = itspace_from_for(loops, mode=1)
-                    itspace, stmt_ofs = itspace_size_ofs(dim_nz_bounds)
-                    copy_stmt = dcopy(stmt)
-                    fissioned_nests[itspace].append((copy_stmt, stmt_ofs))
+                    size, offset = self._create_itspace(stmt, loops,
+                                                        dict(dim_nz_bounds),
+                                                        nz_in_syms)
+                    new_stmt = dcopy(stmt)
+                    fissioned_nests[size].append((new_stmt, dict(offset)))
                     if stmt in self.exprs:
-                        track_exprs[copy_stmt] = self.exprs[stmt]
+                        track_exprs[new_stmt] = self.exprs[stmt]
             # Generate the fissioned loop nests
             # The dictionary is sorted because we must first execute smaller
             # nests, since larger ones may depend on them
-            for itspace, stmt_ofs in sorted(fissioned_nests.items()):
+            for itspace, stmt_offset in sorted(fissioned_nests.items()):
                 nests_info, inner_block = itspace_to_for(itspace, root)
-                for stmt, ofs in stmt_ofs:
-                    ast_update_ofs(stmt, dict(ofs))
-                    self._init_decl_to_zero(stmt, nz_in_syms, dict(ofs), itspace)
+                for stmt, offset in stmt_offset:
+                    ast_update_ofs(stmt, offset)
+                    self._init_decl_to_zero(stmt, nz_in_syms, offset, itspace)
                     inner_block.children.append(stmt)
                     # Update expressions and hoisting-related information
                     if stmt in track_exprs:
@@ -642,7 +654,7 @@ class ZeroRemover(LoopScheduler):
                                                          loops_info=nests_info)
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              loop=nests_info[0][0], place=root)
-                new_nz_info[nests_info[-1][0]] = stmt_ofs
+                new_nz_info[nests_info[-1][0]] = stmt_offset
                 # Append the created loops to the root
                 insert_at_elem(loops_parents[0].children, loops[0], nests_info[0][0])
             loops_parents[0].children.remove(loops[0])

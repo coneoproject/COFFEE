@@ -562,6 +562,27 @@ def itspace_merge(itspaces):
     return tuple(merged_itspaces)
 
 
+def itspace_intersect(itspaces):
+    """Given an iterator of iteration spaces, each iteration space represented
+    as a 2-tuple containing the start and end point, return the intersection
+    of the iteration spaces. For example:
+    ::
+
+        [(1,3)] -> ()
+        [(1,3), (4,6)] -> ()
+        [(1,3), (2,6)] -> (2,3)
+    """
+    if len(itspaces) in [0, 1]:
+        return ()
+    itspaces = [set(range(i[0], i[1]+1)) for i in itspaces]
+    try:
+        itspace = set.intersection(*itspaces)
+        itspace = sorted(list(itspace))
+        return (itspace[0], itspace[-1])
+    except:
+        return ()
+
+
 def itspace_to_for(itspaces, loop_parent):
     """Given an iterator of iteration spaces, each iteration space being
     a 2-tuple containing the start and the end point, return a 2-tuple
