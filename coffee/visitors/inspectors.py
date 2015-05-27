@@ -224,31 +224,27 @@ class FindCoffeeExpressions(Visitor):
     index_access).
 
     By default the top-level call to visit will record a node_parent
-    of None for the visited Node.  To provide one, pass an
-    environment in to the visitor::
+    of None for the visited Node.  To provide one, pass a keyword
+    argument in to the visitor::
 
     .. code-block::
 
-       v.visit(node, {"node_parent": parent})
+       v.visit(node, parent=parent)
 
     """
 
-    default_env = dict(node_parent=None)
-
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_Node(self, o, env):
-        ops, _ = o.operands()
-        new_env = Environment(env, node_parent=o)
-        args = [self.visit(op, env=new_env) for op in ops]
-        ret = OrderedDict()
-        # Merge values from children
-        for a in args:
-            ret.update(a)
+    def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
-    def visit_Writer(self, o, env):
+    def visit_Node(self, o, ret=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, parent=o)
+        return ret
+
+    def visit_Writer(self, o, ret=None, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = OrderedDict()
         for p in o.pragma:
             opts = p.split(" ", 2)
             # Don't care if we don't have three values
@@ -256,31 +252,37 @@ class FindCoffeeExpressions(Visitor):
                 continue
             if opts[1] == "coffee" and opts[2] == "expression":
                 # (parent, loop-nest, rank)
-                parent = env["node_parent"]
-                return {o: (parent, None, o.children[0].rank)}
-        return {}
+                ret[o] = (parent, None, o.children[0].rank)
+                return ret
+        return ret
 
-    def visit_For(self, o, env):
-        args = self.visit_Node(o, env)
+    def visit_For(self, o, ret=None, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = OrderedDict()
+        nval = len(ret)
+
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, parent=o)
+
         # Nothing inside this for loop was annotated (we didn't see a
         # Writer node with #pragma coffee expression)
-        if len(args) == 0:
-            return {}
-        ret = OrderedDict()
-        parent = env["node_parent"]
+        if len(ret) == nval:
+            return ret
         me = (o, parent)
-        for k, v in args.iteritems():
-            p, nest, rank = v
+        # Add nest structure to new items
+        keys = ret.keys()[nval:]
+        for k in keys:
+            p, nest, rank = ret[k]
             if nest is None:
                 # Statement is directly underneath this loop, so the
                 # loop nest structure is just the current loop
-                nest = (me, )
+                nest = [me]
             else:
                 # Inside a nested set of loops, so prepend current
                 # loop info to nest structure
-                nest = list(itertools.chain((me, ), nest))
-            # Merge with updated nest info
-            ret[k] = (p, nest, rank)
+                nest = [me] + nest
+            ret[k] = p, nest, rank
         return ret
 
 
