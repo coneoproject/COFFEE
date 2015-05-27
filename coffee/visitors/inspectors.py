@@ -155,16 +155,17 @@ class MaxLoopDepth(Visitor):
 
     """Return the maximum loop depth in the tree."""
 
-    def visit_object(self, o, env):
+    def visit_object(self, o):
         return 0
 
-    def visit_Node(self, o, env, *args, **kwargs):
-        if len(args) == 0:
+    def visit_Node(self, o):
+        ops, _ = o.operands()
+        if len(ops) == 0:
             return 0
-        return max(args)
+        return max(self.visit(op) for op in ops)
 
-    def visit_For(self, o, env, *args, **kwargs):
-        return 1 + max(args)
+    def visit_For(self, o):
+        return 1 + max(self.visit(op) for op in o.children)
 
 
 class FindLoopNests(Visitor):
