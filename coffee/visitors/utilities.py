@@ -1,5 +1,5 @@
 from __future__ import absolute_import
-from coffee.visitor import Visitor, Environment
+from coffee.visitor import Visitor
 from coffee.base import Sum, Sub, Prod, Div
 from copy import deepcopy
 import numpy as np
@@ -94,7 +94,7 @@ class Evaluate(Visitor):
     :arg decls: dictionary mapping symbol names to known Decl nodes.
     """
 
-    default_env = dict(loop_nest=[])
+    default_args = dict(loop_nest=[])
 
     def __init__(self, decls):
         self.decls = decls
@@ -106,28 +106,30 @@ class Evaluate(Visitor):
         }
         super(Evaluate, self).__init__()
 
-    def visit_object(self, o, env):
+    def visit_object(self, o, *args, **kwargs):
         return {}
 
-    def visit_list(self, o, env):
+    def visit_list(self, o, *args, **kwargs):
         ret = {}
         for entry in o:
-            ret.update(self.visit(entry, env=env))
+            ret.update(self.visit(entry, *args, **kwargs))
         return ret
 
-    def visit_Node(self, o, env):
+    def visit_Node(self, o, *args, **kwargs):
         ret = {}
         for n in o.children:
-            ret.update(self.visit(n, env=env))
+            ret.update(self.visit(n, *args, **kwargs))
         return ret
 
-    def visit_For(self, o, env):
-        new_env = Environment(env, loop_nest=env["loop_nest"] + [o])
-        return self.visit(o.body, env=new_env)
+    def visit_For(self, o, *args, **kwargs):
+        nest = kwargs.pop("loop_nest")
+        kwargs["loop_nest"] = nest + [o]
+        return self.visit(o.body, *args, **kwargs)
 
-    def visit_Writer(self, o, env):
+    def visit_Writer(self, o, *args, **kwargs):
         lvalue = o.children[0]
-        writes = [l for l in env["loop_nest"] if l.dim in lvalue.rank]
+        nest = kwargs["loop_nest"]
+        writes = [l for l in nest if l.dim in lvalue.rank]
         # Evaluate the expression for each point in in the n-dimensional space
         # represented by /writes/
         dims = tuple(l.dim for l in writes)
@@ -135,20 +137,21 @@ class Evaluate(Visitor):
         values = np.zeros(shape)
         for i in itertools.product(*[range(j) for j in shape]):
             point = {d: v for d, v in zip(dims, i)}
-            new_env = Environment(env, point=point)
             # The sum takes into account reductions
-            values[i] = np.sum(self.visit(o.children[1], new_env))
+            values[i] = np.sum(self.visit(o.children[1], point=point, *args, **kwargs))
         return {lvalue: values}
 
-    def visit_BinExpr(self, o, env, *args, **kwargs):
-        if any([a is None for a in args]):
+    def visit_BinExpr(self, o, *args, **kwargs):
+        ops, _ = o.operands()
+        transformed = [self.visit(op, *args, **kwargs) for op in ops]
+        if any([a is None for a in transformed]):
             return
-        return self.mapper[o.__class__](*args)
+        return self.mapper[o.__class__](*transformed)
 
-    def visit_Par(self, o, env):
-        return self.visit(o.child, env)
+    def visit_Par(self, o, *args, **kwargs):
+        return self.visit(o.child, *args, **kwargs)
 
-    def visit_Symbol(self, o, env):
+    def visit_Symbol(self, o, *args, **kwargs):
         try:
             # Any time a symbol is encountered, we expect to know the /point/ of
             # the iteration space which is being evaluated. In particular,
@@ -156,7 +159,7 @@ class Evaluate(Visitor):
             # node. If /point/ is missing, that means the root of the visit does
             # not enclose the whole iteration space, which in turn indicates an
             # error in the use of the visitor.
-            point = env["point"]
+            point = kwargs["point"]
         except KeyError:
             raise RuntimeError("Unknown iteration space point.")
         try:
