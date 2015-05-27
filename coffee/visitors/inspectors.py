@@ -1,5 +1,5 @@
 from __future__ import absolute_import
-from coffee.visitor import Visitor, Environment
+from coffee.visitor import Visitor
 from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol
 from collections import defaultdict, OrderedDict, Counter
 import itertools
@@ -337,80 +337,76 @@ class SymbolDependencies(Visitor):
     empty) loop list the symbol depends on.
     """
 
-    default_env = dict(loop_nest=[], write=False)
+    default_args = dict(loop_nest=[], write=False)
 
-    def visit_Symbol(self, o, env):
-        write = env["write"]
-        nest = env["loop_nest"]
+    def visit_Symbol(self, o, ret=None, *args, **kwargs):
+        write = kwargs["write"]
+        nest = kwargs["loop_nest"]
+        if ret is None:
+            ret = OrderedDict()
         if write:
             # Remember that this symbol /name/ was written,
             # as well as the full current loop nest for the
             # symbol itself
-            return {o: [l for l in nest],
-                    o.symbol: True}
-        # Not being written, only care if the loop indices
-        # of the current nest access the symbol
-        return {o: [l for l in nest if l.dim in o.rank]}
+            ret[o] = [l for l in nest]
+            ret[o.symbol] = True
+        else:
+            # Not being written, only care if the loop indices
+            # of the current nest access the symbol
+            ret[o] = [l for l in nest if l.dim in o.rank]
+        return ret
 
-    def visit_object(self, o, env):
-        return {}
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        return ret
 
-    def visit_Node(self, o, env):
+    def visit_Node(self, o, ret=None, *args, **kwargs):
         ops, _ = o.operands()
-        args = [self.visit(op, env=env) for op in ops]
-        ret = OrderedDict()
-        # Merge values from children
-        for a in args:
-            ret.update(a)
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
     visit_EmptyStatement = visit_object
 
-    def visit_Decl(self, o, env):
+    def visit_Decl(self, o, ret=None, *args, **kwargs):
         # Declaration init could have symbol access
-        args = [self.visit(op, env=env) for op in [o.sym, o.init]]
-        ret = OrderedDict()
-        for a in args:
-            ret.update(a)
+        for op in [o.sym, o.init]:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
     visit_FunCall = visit_Node
 
-    def visit_Invert(self, o, env):
-        return self.visit(o.children[0], env=env)
+    def visit_Invert(self, o, ret=None, *args, **kwargs):
+        return self.visit(o.children[0], ret=ret, *args, **kwargs)
 
-    def visit_Writer(self, o, env):
-        ret = OrderedDict()
-        write_env = Environment(env, write=True)
-        lvalue = self.visit(o.children[0], env=write_env)
-        ret.update(lvalue)
-        for r in o.children[1:]:
-            d = self.visit(r, env=env)
-            ret.update(d)
+    def visit_Writer(self, o, ret=None, *args, **kwargs):
+        write = kwargs.pop("write")
+        ret = self.visit(o.children[0], ret=ret, write=True, *args, **kwargs)
+        for op in o.children[1:]:
+            ret = self.visit(op, ret=ret, write=write, *args, **kwargs)
         return ret
 
-    def visit_For(self, o, env):
-        loop_nest = env["loop_nest"]
-        new_env = Environment(env, loop_nest=loop_nest + [o])
+    def visit_For(self, o, ret=None, *args, **kwargs):
+        if ret is None:
+            ret = OrderedDict()
+        loop_nest = kwargs.pop("loop_nest") + [o]
+        nval = len(ret)
         # Don't care about symbol access in increments, only children
-        args = [self.visit(op, env=new_env) for op in o.children]
-        ret = OrderedDict()
-        for a in args:
-            ret.update(a)
-
+        for op in o.children:
+            ret = self.visit(op, ret=ret, loop_nest=loop_nest, *args, **kwargs)
         # Dependencies for variables that are written in one nest
         # and read in a subsequent one need to respect this.
-        nest = new_env["loop_nest"]
-        for k, v in ret.iteritems():
+        new_keys = set(ret.keys()[nval:])
+        for k in new_keys:
             if type(k) is not Symbol:
                 continue
-            if k.symbol in ret:
+            if k.symbol in new_keys:
+                v = ret[k]
                 # Symbol name was written in some nest
                 # The dependency for this symbol is therefore
                 # whatever nest came from visiting the children
                 # plus the current nest at this point in the tree,
                 # suitably uniquified.
-                new_v = [l for l in nest]
+                new_v = [l for l in loop_nest]
                 new_v.extend([l for l in v if l not in new_v])
                 ret[k] = new_v
 
