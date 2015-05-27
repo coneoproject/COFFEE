@@ -141,7 +141,7 @@ class SSALoopMerger(LoopScheduler):
         for n in self.root.children:
             if isinstance(n, For):
                 # Track structure of iteration spaces
-                loops_infos = FindLoopNests().visit(n, {'node_parent': self.root})
+                loops_infos = FindLoopNests().visit(n, parent=self.root)
                 for li in loops_infos:
                     loops, loops_parents = zip(*li)
                     # Note that only inner loops can be fused, and that they share

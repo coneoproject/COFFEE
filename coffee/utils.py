@@ -37,7 +37,7 @@ import resource
 import operator
 from warnings import warn as warning
 from copy import deepcopy as dcopy
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 
 from base import *
 from coffee.visitors.inspectors import *
@@ -385,26 +385,22 @@ def visit(node, parent=None):
 
     info['max_depth'] = MaxLoopDepth().visit(node)
 
-    info['decls'] = SymbolDeclarations().visit(node, env=SymbolDeclarations.default_env)
+    info['decls'] = SymbolDeclarations().visit(node)
 
-    deps = SymbolDependencies().visit(node, env=SymbolDependencies.default_env)
+    deps = SymbolDependencies().visit(node, **SymbolDependencies.default_args)
     # Prune access mode:
-    ret = OrderedDict()
-    for k, v in deps.iteritems():
+    for k in deps.keys():
         if type(k) is not Symbol:
-            continue
-        ret[k] = v
-    info['symbols_dep'] = ret
+            del deps[k]
+    info['symbols_dep'] = deps
 
-    env = dict(node_parent=parent)
-    info['exprs'] = FindCoffeeExpressions().visit(node, env=env)
+    info['exprs'] = FindCoffeeExpressions().visit(node, parent=parent)
 
-    info['fors'] = FindLoopNests().visit(node, env=env)
+    info['fors'] = FindLoopNests().visit(node, parent=parent)
 
-    info['symbol_refs'] = SymbolReferences().visit(node, env=env)
+    info['symbol_refs'] = SymbolReferences().visit(node, parent=parent)
 
-    env = dict(SymbolModes.default_env.items() + env.items())
-    info['symbols_mode'] = SymbolModes().visit(node, env=env)
+    info['symbols_mode'] = SymbolModes().visit(node, parent=parent)
 
     return info
 
@@ -428,13 +424,13 @@ def explore_operator(node):
 def inner_loops(node):
     """Find inner loops in the subtree rooted in ``node``."""
 
-    return FindInnerLoops().visit(node, env=FindInnerLoops.default_env)
+    return FindInnerLoops().visit(node)
 
 
 def is_perfect_loop(loop):
     """Return True if ``loop`` is part of a perfect loop nest, False otherwise."""
 
-    return CheckPerfectLoop().visit(loop, env=CheckPerfectLoop.default_env)
+    return CheckPerfectLoop().visit(loop)
 
 
 def count(node, mode='symbol', read_only=False):
@@ -490,9 +486,8 @@ def check_type(stmt, decls):
                   the name of a symbol) to Decl nodes
     """
     v = SymbolReferences()
-    env = dict(node_parent=stmt)
-    lhs_symbol = v.visit(stmt.children[0], env=env).keys()[0]
-    rhs_symbols = v.visit(stmt.children[1], env=env).keys()
+    lhs_symbol = v.visit(stmt.children[0], parent=stmt).keys()[0]
+    rhs_symbols = v.visit(stmt.children[1], parent=stmt).keys()
 
     lhs_decl = decls[lhs_symbol]
     rhs_decls = [decls[s] for s in rhs_symbols if s in decls]

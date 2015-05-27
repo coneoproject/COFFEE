@@ -48,6 +48,7 @@ from expression import MetaExpr
 from coffee.visitors import FindInstances
 
 from copy import deepcopy as dcopy
+from collections import defaultdict, OrderedDict
 import itertools
 import operator
 
