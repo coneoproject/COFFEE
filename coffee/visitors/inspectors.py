@@ -19,16 +19,18 @@ class FindInnerLoops(Visitor):
     Returns a list of the inner-most :class:`.For` loops or an empty
     list if none were found."""
 
-    def visit_object(self, o, env):
+    def visit_object(self, o):
         return []
 
-    def visit_Node(self, o, env, *args, **kwargs):
+    def visit_Node(self, o):
         # Concatenate transformed children
+        ops, _ = o.operands()
+        args = [self.visit(op) for op in ops]
         return list(itertools.chain(*args))
 
-    def visit_For(self, o, env):
+    def visit_For(self, o):
         # Check for loops in children
-        children = self.visit(o.children[0], env=env)
+        children = self.visit(o.children[0])
         if children:
             # Yes, return those
             return children
