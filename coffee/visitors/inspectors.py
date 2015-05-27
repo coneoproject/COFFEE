@@ -173,40 +173,46 @@ class FindLoopNests(Visitor):
     """Return a list of lists of loop nests in the tree.
 
     Each list entry describes a loop nest with the outer-most loop
-    first.  Each entry therein is a tuple (loop_node, node_parent).
+    first.  Each entry therein is a tuple (loop_node, parent).
 
-    By default the top-level call to visit will record a node_parent
-    of None for the visited Node.  To provide one, pass an
-    environment in to the visitor::
+    By default the top-level call to visit will record a parent
+    of None for the visited Node.  To provide one, pass a keyword
+    argument in to the visitor::
 
     .. code-block::
 
-       v.visit(node, {"node_parent": parent})
+       v.visit(node, parent=parent)
 
     """
 
-    default_env = dict(node_parent=None)
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        return ret
 
-    def visit_object(self, o, env):
-        return []
-
-    def visit_Node(self, o, env):
+    def visit_Node(self, o, ret=None, parent=None, *args, **kwargs):
         ops, _ = o.operands()
-        new_env = Environment(env, node_parent=o)
-        # Visit children recording this node as the parent
-        return list(itertools.chain(*[self.visit(op, env=new_env) for op in ops]))
+        for op in ops:
+            # Visit children recording this node as the parent
+            ret = self.visit(op, ret=ret, parent=o)
+        return ret
 
-    def visit_For(self, o, env):
-        # Transform operands using generic visit_Node
-        args = self.visit_Node(o, env)
+    def visit_For(self, o, ret=None, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = []
+        ops, _ = o.operands()
+        nval = len(ret)
+        for op in ops:
+            ret = self.visit(op, ret=ret, parent=o)
         # Cons (node, node_parent) onto front of current loop-nest list
-        parent = env["node_parent"]
         me = (o, parent)
-        if len(args) == 0:
-            # Bottom of the nest, just return self
-            return ([me], )
-        # Transform child [a, b] into [(me, a), (me, b)]
-        return [list(itertools.chain((me, ), a)) for a in args]
+        if len(ret) == nval:
+            # Bottom of the nest, add myself to ret
+            ret.append([me])
+            return ret
+        # Transform new children (inside this loop)
+        # [a, b] into [(me, a), (me, b)]
+        for a in ret[nval:]:
+            a.insert(0, me)
+        return ret
 
 
 class FindCoffeeExpressions(Visitor):
