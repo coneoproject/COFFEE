@@ -367,7 +367,7 @@ def ast_make_copy(arr1, arr2, itspace, op):
 ###########################################################
 
 
-def visit(node, parent=None):
+def visit(node, parent=None, info_items=None):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
@@ -376,31 +376,46 @@ def visit(node, parent=None):
     * Symbols (access mode) - a dictionary {symbol (AST node): access mode (WRITE, ...)}
     * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
-    * Maximum depth - an integer representing the depth of the most depth loop nest
 
     :param node: AST root node of the visit
     :param parent: parent node of ``node``
+    :param info_items: An optional list of information to gather,
+        valid values are::
+
+            - "symbols_dep"
+            - "decls"
+            - "exprs"
+            - "fors"
+            - "symbol_refs"
+            - "symbols_mode"
     """
     info = {}
 
-    info['max_depth'] = MaxLoopDepth().visit(node)
+    if info_items is None:
+        info_items = ['decls', 'symbols_dep', 'symbol_refs',
+                      'symbols_mode', 'exprs', 'fors']
+    if 'decls' in info_items:
+        info['decls'] = SymbolDeclarations().visit(node)
 
-    info['decls'] = SymbolDeclarations().visit(node)
+    if 'symbols_dep' in info_items:
+        deps = SymbolDependencies().visit(node, **SymbolDependencies.default_args)
+        # Prune access mode:
+        for k in deps.keys():
+            if type(k) is not Symbol:
+                del deps[k]
+        info['symbols_dep'] = deps
 
-    deps = SymbolDependencies().visit(node, **SymbolDependencies.default_args)
-    # Prune access mode:
-    for k in deps.keys():
-        if type(k) is not Symbol:
-            del deps[k]
-    info['symbols_dep'] = deps
+    if 'exprs' in info_items:
+        info['exprs'] = FindCoffeeExpressions().visit(node, parent=parent)
 
-    info['exprs'] = FindCoffeeExpressions().visit(node, parent=parent)
+    if 'fors' in info_items:
+        info['fors'] = FindLoopNests().visit(node, parent=parent)
 
-    info['fors'] = FindLoopNests().visit(node, parent=parent)
+    if 'symbol_refs' in info_items:
+        info['symbol_refs'] = SymbolReferences().visit(node, parent=parent)
 
-    info['symbol_refs'] = SymbolReferences().visit(node, parent=parent)
-
-    info['symbols_mode'] = SymbolModes().visit(node, parent=parent)
+    if 'symbols_mode' in info_items:
+        info['symbols_mode'] = SymbolModes().visit(node, parent=parent)
 
     return info
 
