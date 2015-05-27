@@ -478,31 +478,31 @@ class SymbolDeclarations(Visitor):
     argument).
     """
 
-    default_env = dict(scope=LOCAL)
+    def __init__(self):
+        super(SymbolDeclarations, self).__init__()
 
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_Node(self, o, env, *args, **kwargs):
-        ret = OrderedDict()
-        for a in args:
-            # WARNING, last sight of symbol wins.
-            ret.update(a)
+    def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
-    def visit_FunDecl(self, o, env):
-        new_env = Environment(env, scope=EXTERNAL)
-        ret = OrderedDict()
+    def visit_Node(self, o, ret=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
+        return ret
+
+    def visit_FunDecl(self, o, ret=None, *args, **kwargs):
         for op in o.args:
-            ret.update(self.visit(op, env=new_env))
+            ret = self.visit(op, ret=ret, scope=EXTERNAL)
         for op in o.children:
-            ret.update(self.visit(op, env=env))
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
-    def visit_Decl(self, o, env):
-        # FIXME: be side-effect free
-        o.scope = env["scope"]
-        return {o.sym.symbol: o}
+    def visit_Decl(self, o, ret=None, scope=LOCAL, *args, **kwargs):
+        if ret is None:
+            ret = OrderedDict()
+        o.scope = scope
+        ret[o.sym.symbol] = o
+        return ret
 
 
 class FindInstances(Visitor):
