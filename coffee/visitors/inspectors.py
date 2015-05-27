@@ -295,43 +295,36 @@ class SymbolReferences(Visitor):
     parent of that node.
 
     By default the top-level call to visit will record a node_parent
-    of None for the visited Node.  To provide one, pass an
-    environment in to the visitor::
+    of None for the visited Node.  To provide one, pass a keyword
+    argument in to the visitor::
 
     .. code-block::
 
-       v.visit(node, {"node_parent": parent})
+       v.visit(node, parent=parent)
 
     """
 
-    default_env = dict(node_parent=None)
+    def visit_Symbol(self, o, ret=None, parent=None):
+        if ret is None:
+            ret = defaultdict(list)
 
-    def visit_Symbol(self, o, env):
         # Map name to (node, parent) tuple
-        parent = env["node_parent"]
-        return {o.symbol: [(o, parent)]}
-
-    def visit_object(self, o, env):
-        # Identity
-        return {}
-
-    def visit_list(self, o, env):
-        ret = defaultdict(list)
-        for entry in o:
-            a = self.visit(entry, env=env)
-            for k, v in a.iteritems():
-                ret[k].extend(v)
+        ret[o.symbol].append((o, parent))
         return ret
 
-    def visit_Node(self, o, env):
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        # Identity
+        return ret
+
+    def visit_list(self, o, ret=None, *args, **kwargs):
+        for entry in o:
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
+        return ret
+
+    def visit_Node(self, o, ret=None, *args, **kwargs):
         ops, _ = o.operands()
-        new_env = Environment(env, node_parent=o)
-        args = [self.visit(op, env=new_env) for op in ops]
-        ret = defaultdict(list)
-        # Merge dicts
-        for a in args:
-            for k, v in a.iteritems():
-                ret[k].extend(v)
+        for op in ops:
+            ret = self.visit(op, ret=ret, parent=o)
         return ret
 
 
