@@ -44,27 +44,23 @@ class CheckPerfectLoop(Visitor):
     Check if a Node is a perfect loop nest.
     """
 
-    default_env = dict(in_loop=False, multiple_statements=False)
-
-    def visit_object(self, o, env):
+    def visit_object(self, o, *args, **kwargs):
         # Unhandled, return False to be safe.
         return False
 
-    def visit_Node(self, o, env):
+    def visit_Node(self, o, in_loop=False, *args, **kwargs):
         # Assume all nodes are in a perfect loop if they're in a loop.
-        return env["in_loop"]
+        return in_loop
 
-    def visit_For(self, o, env):
-        if env["in_loop"] and env["multiple_statements"]:
+    def visit_For(self, o, in_loop=False, multi=False, *args, **kwargs):
+        if in_loop and multi:
             return False
-        new_env = Environment(env, in_loop=True)
-        return self.visit(o.children[0], env=new_env)
+        return self.visit(o.children[0], in_loop=True, multi=multi)
 
-    def visit_Block(self, o, env):
+    def visit_Block(self, o, in_loop=False, multi=False, *args, **kwargs):
         # Does this block contain multiple statements?
-        multi = env["multiple_statements"] or len(o.children) > 1
-        new_env = Environment(env, multiple_statements=multi)
-        return env["in_loop"] and all(self.visit(op, env=new_env) for op in o.children)
+        multi = multi or len(o.children) > 1
+        return in_loop and all(self.visit(op, in_loop=in_loop, multi=multi) for op in o.children)
 
 
 class CountOccurences(Visitor):
