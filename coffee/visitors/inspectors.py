@@ -77,42 +77,41 @@ class CountOccurences(Visitor):
         self.rvalues = only_rvalues
         super(CountOccurences, self).__init__()
 
-    def visit_object(self, o, env):
+    def visit_object(self, o, ret=None, *args, **kwargs):
         # Not a symbol, return identity for summation
-        return {}
+        return ret
 
-    def visit_list(self, o, env):
+    def visit_list(self, o, ret=None, *args, **kwargs):
         # Walk list entries (since some operands methods return lists)
-        ret = Counter()
         for entry in o:
-            ret.update(self.visit(entry, env=env))
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
         return ret
 
-    def visit_Node(self, o, env, *args, **kwargs):
-        # Walk the transformed children and sum up.
-        ret = Counter()
-        for d in args:
-            ret.update(d)
+    def visit_Node(self, o, ret=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
-    def visit_Assign(self, o, env):
-        ret = Counter()
+    def visit_Assign(self, o, ret=None, *args, **kwargs):
         if self.rvalues:
             # Only counting rvalues, so don't walk lvalue
             ops = o.children[1:]
         else:
             ops = o.children
-        args = [self.visit(op, env=env) for op in ops]
-        for d in args:
-            ret.update(d)
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
     visit_Incr = visit_Assign
 
     visit_Decr = visit_Assign
 
-    def visit_Symbol(self, o, env):
-        return {self.key(o): 1}
+    def visit_Symbol(self, o, ret=None, *args, **kwargs):
+        if ret is None:
+            ret = Counter()
+        ret[self.key(o)] += 1
+        return ret
 
 
 class DetermineUnrollFactors(Visitor):
