@@ -4,63 +4,6 @@ import inspect
 __all__ = ["Visitor"]
 
 
-class Environment(object):
-
-    """
-    An environment containing state.
-
-    This is effectively a dictionary that looks up unknown keys in a
-    parent.  It only implements :data:`__getitem__`, and
-    :data:`__setitem__` and exposes the
-    dict directly as :attr:`mapping`.
-
-    Used to implement "stacked" environments in :class:`Visitor`\s.
-
-    :arg parent: The parent environment (pass an empty dict as an
-         empty environment).
-    :kwargs kwargs: values to set in the environment.
-    """
-
-    def __init__(self, parent, **kwargs):
-        super(Environment, self).__init__()
-        self.parent = parent
-        self.mapping = dict(**kwargs)
-
-    def __getitem__(self, key):
-        """Look up an item in this :class:`Environment`.
-
-        :arg key: The item to look up.
-        """
-        try:
-            return self.mapping[key]
-        except KeyError:
-            return self.parent[key]
-
-    def __repr__(self):
-        mappings = ", ".join("%s=%r" % (k, v) for (k, v) in self.mapping.iteritems())
-        return "Environment(parent=%r, %s)" % (self.parent, mappings)
-
-    def __str__(self):
-        dicts = []
-        # Walk up stack, gathering mappings.
-        while True:
-            try:
-                dicts.append(self.mapping)
-            except AttributeError:
-                # Hit top of stack
-                dicts.append(self)
-                break
-            self = self.parent
-        # Build environment from root down to self for printing
-        vals = {}
-        while True:
-            try:
-                vals.update(dicts.pop())
-            except IndexError:
-                break
-        return "Environment: %s" % vals
-
-
 class Visitor(object):
 
     """
