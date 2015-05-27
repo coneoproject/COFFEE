@@ -75,11 +75,11 @@ class Uniquify(Visitor):
 
     visit_Node = Visitor.always_reconstruct
 
-    def visit_object(self, o, env):
+    def visit_object(self, o):
         return deepcopy(o)
 
-    def visit_list(self, o, env):
-        return [self.visit(e, env=env) for e in o]
+    def visit_list(self, o):
+        return [self.visit(e) for e in o]
 
 
 class Evaluate(Visitor):
