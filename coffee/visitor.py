@@ -1,7 +1,7 @@
 from __future__ import absolute_import
 import inspect
 
-__all__ = ["Environment", "Visitor"]
+__all__ = ["Visitor"]
 
 
 class Environment(object):
@@ -72,34 +72,22 @@ class Visitor(object):
     If a specific method for a class :data:`Foo` is not found, the MRO
     of the class is walked in order until a matching method is found.
 
-    Pre- and post-order traversal is implemented in a single
-    :meth:`visit` method, with the argument list for a method handler
-    indicating if it expects transformed children or not.
-
-    The two method signatures are:
+    The method signature is:
 
     .. code-block::
 
-       def visit_Foo(self, o, env):
+       def visit_Foo(self, o, [*args, **kwargs]):
            pass
 
-    for pre-order traversal, in which case the handler should take
-    care to traverse the children if necessary.  And:
+    The handler is responsible for visiting the children (if any) of
+    the node :data:`o`.  :data:`*args` and :data:`**kwargs` may be
+    used to pass information up and down the call stack.  You can also
+    pass named keyword arguments, e.g.:
 
     .. code-block::
 
-       def visit_Foo(self, o, env, *args, **kwargs):
+       def visit_Foo(self, o, parent=None, *args, **kwargs):
            pass
-
-    for post-order traversal, in which case handlers will be called on
-    the children first and passed in through :data:`*args`.
-    :data:`**kwargs` will contain any keyword arguments that were used
-    in the construction of the instance, see
-    :meth:`~.Node.reconstruct` and :meth:`~.Node.operands` for more details.
-
-    In both cases, the instance itself is passed in as :data:`o` and
-    the visitor also receives a :class:`Environment` object in
-    :data:`env` which it may inspect if wished.
     """
     def __init__(self):
         handlers = {}
@@ -112,35 +100,27 @@ class Visitor(object):
                 continue
             # Check the argument specification
             # Valid options are:
-            #    visit_Foo(self, o, env)
-            # or
-            #    visit_Foo(self, o, env, *args, **kwargs)
-            #
-            # The latter indicates that the visit handler expects
-            # the children to have already been visited, the
-            # former indicates that the method will handle it
-            # itself.
+            #    visit_Foo(self, o, [*args, **kwargs])
             argspec = inspect.getargspec(meth)
-            if len(argspec.args) != 3:
-                raise RuntimeError("Visit method signature must be visit_Foo(self, o, env, [*args, **kwargs])")
-            children_first = argspec.varargs is not None
-            if children_first and argspec.keywords is None:
-                raise RuntimeError("Post-order visitor must be visit_Foo(self, o, env, *args, **kwargs)")
-            handlers[name[len(prefix):]] = (meth, children_first)
+            if len(argspec.args) < 2:
+                raise RuntimeError("Visit method signature must be visit_Foo(self, o, [*args, **kwargs])")
+            handlers[name[len(prefix):]] = meth
         self._handlers = handlers
 
     """
-    :attr:`default_env`. Provide the visitor with a default environment.
-    This environment is not used by default in :meth:`visit`, however,
-    a caller may obtain it to pass to :meth:`visit` by accessing
-    :attr:`default_env`.  For example::
+    :attr:`default_args`. A dict of default keyword arguments for the
+    visitor.
+
+    These are not used by default in :meth:`visit`, however,
+    a caller may pass them explicitly to :meth:`visit` by accessing
+    :attr:`default_args`.  For example::
 
     .. code-block::
 
        v = FooVisitor()
-       v.visit(node, env=v.default_env)
+       v.visit(node, **v.default_args)
     """
-    default_env = None
+    default_args = {}
 
     def lookup_method(self, instance):
         """Look up a handler method for a visitee.
@@ -161,40 +141,31 @@ class Visitor(object):
                     return entry
         raise RuntimeError("No handler found for class %s", cls.__name__)
 
-    def visit(self, o, env=None):
+    def visit(self, o, *args, **kwargs):
         """Apply this :class:`Visitor` to an AST.
 
         :arg o: The :class:`Node` to visit.
-        :arg env: An optional :class:`Environment` to pass to the
-             visitor.
+        :arg args: Optional arguments to pass to the visit methods.
+        :arg kwargs: Optional keyword arguments to pass to the visit methods.
         """
-        meth, children_first = self.lookup_method(o)
+        meth = self.lookup_method(o)
+        return meth(o, *args, **kwargs)
 
-        if env is None:
-            # Default to empty environment
-            env = {}
-
-        if children_first:
-            # Visit children then call handler on us
-            ops, kwargs = o.operands()
-            return meth(o, env, *[self.visit(op, env=env) for op in ops], **kwargs)
-        else:
-            # Handler deals with children
-            return meth(o, env)
-
-    def reuse(self, o, env):
+    def reuse(self, o, *args, **kwargs):
         """A visit method to reuse a node, ignoring children."""
         return o
 
-    def maybe_reconstruct(self, o, env, *args, **kwargs):
+    def maybe_reconstruct(self, o, *args, **kwargs):
         """A visit method that reconstructs nodes if their children
         have changed."""
-        oargs, okwargs = o.operands()
-        if all(a is b for a, b in zip(oargs, args)) and \
-           okwargs == kwargs:
+        ops, okwargs = o.operands()
+        new_ops = [self.visit(op, *args, **kwargs) for op in ops]
+        if all(a is b for a, b in zip(ops, new_ops)):
             return o
-        return o.reconstruct(*args, **kwargs)
+        return o.reconstruct(*new_ops, **okwargs)
 
-    def always_reconstruct(self, o, env, *args, **kwargs):
+    def always_reconstruct(self, o, *args, **kwargs):
         """A visit method that always reconstructs nodes."""
-        return o.reconstruct(*args, **kwargs)
+        ops, okwargs = o.operands()
+        new_ops = [self.visit(op, *args, **kwargs) for op in ops]
+        return o.reconstruct(*new_ops, **okwargs)
