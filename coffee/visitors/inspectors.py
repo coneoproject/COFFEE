@@ -126,18 +126,22 @@ class DetermineUnrollFactors(Visitor):
     are given potential unroll factors that result in no loop
     remainders.
     """
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_Node(self, o, env, *args, **kwargs):
-        ret = {}
-        for a in args:
-            ret.update(a)
+    def visit_object(self, o, ret=None):
         return ret
 
-    def visit_For(self, o, env):
-        ret = self.visit(o.children[0], env=env)
-        if len(ret) is 0:
+    def visit_Node(self, o, ret=None):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret)
+        return ret
+
+    def visit_For(self, o, ret=None):
+        if ret is None:
+            ret = {}
+        # Check if children contain any loops
+        nval = len(ret)
+        ret = self.visit(o.children[0], ret=ret)
+        if len(ret) == nval:
             # No child for loops
             # Inner loops are not unrollable
             ret[o.dim] = (1, )
