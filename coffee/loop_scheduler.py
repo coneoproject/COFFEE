@@ -40,7 +40,6 @@ except ImportError:
 from collections import defaultdict
 import itertools
 from copy import deepcopy as dcopy
-from warnings import warn as warning
 
 from base import *
 from utils import *
@@ -377,32 +376,33 @@ class ExpressionFissioner(LoopScheduler):
         return split_stmts
 
 
-class ZeroLoopScheduler(LoopScheduler):
+class ZeroRemover(LoopScheduler):
 
-    """Analyze data dependencies, iteration spaces, and domain-specific
-    information to perform symbolic execution of the code so as to
-    determine how to restructure the loop nests to skip iteration over
-    zero-valued columns.
-    This implies that loops can be fissioned or merged. For example: ::
+    """Analyze data dependencies and iteration spaces to remove arithmetic
+    operations in loops that iterate over zero-valued blocks. Consequently,
+    loop nests can be fissioned and/or merged. For example: ::
 
         for i = 0, N
           A[i] = C[i]*D[i]
           B[i] = E[i]*F[i]
 
-    If the evaluation of A requires iterating over a region of contiguous
-    zero-valued columns in C and D, then A is computed in a separate (smaller)
-    loop nest: ::
+    If the evaluation of A requires iterating over a block of zero (0.0) values,
+    because for instance C and D are block-sparse, then A is evaluated in a
+    different, smaller (i.e., with less iterations) loop nest: ::
 
         for i = 0 < (N-k)
           A[i+k] = C[i+k][i+k]
         for i = 0, N
           B[i] = E[i]*F[i]
+
+    The implementation is based on symbolic execution. Control flow is not
+    admitted.
     """
 
     def __init__(self, exprs, decls, hoisted):
-        """Initialize the ZeroLoopScheduler.
+        """Initialize the ZeroRemover.
 
-        :param exprs: the expressions for which the zero-elimination is performed.
+        :param exprs: the expressions for which zero removal is performed.
         :param decls: lists of declarations visible to ``exprs``.
         :param hoisted: dictionary that tracks hoisted sub-expressions
         """
@@ -411,14 +411,13 @@ class ZeroLoopScheduler(LoopScheduler):
         self.hoisted = hoisted
 
     def _merge_dims_nz_bounds(self, dim_nz_bounds_l, dim_nz_bounds_r):
-        """Given two dictionaries associating iteration variables to ranges
-        of non-zero columns, merge the two dictionaries by combining ranges
-        along the same iteration variables and return the merged dictionary.
+        """Merge two dictionaries associating iteration space variables to
+        ranges of (non) zero-valued blocks; return the merged dictionary.
         For example: ::
 
             dict1 = {'j': [(1,3), (5,6)], 'k': [(5,7)]}
             dict2 = {'j': [(3,4)], 'k': [(1,4)]}
-            dict1 + dict2 -> {'j': [(1,6)], 'k': [(1,7)]}
+            return -> {'j': [(1,6)], 'k': [(1,7)]}
         """
         new_dim_nz_bounds = {}
         for dim, nz_bounds in dim_nz_bounds_l.items():
@@ -470,36 +469,41 @@ class ZeroLoopScheduler(LoopScheduler):
                     self.hoisted[symbol].decl.init = ArrayInit("{0.0}")
 
     def _track_nz_expr(self, node, nz_in_syms):
-        """Return the first and last indices assumed by the iteration variables
-        appearing in ``node`` over regions of non-zero columns. For example,
-        consider the following node, particularly its right-hand side: ::
+        """Return the first and last indices assumed by the iteration space
+        variables appearing in ``node`` over regions of non zero-valued blocks.
+        For example: ::
 
             A[i][j] = B[i]*C[j]
 
-        If B over i is non-zero in the ranges [0, k1] and [k2, k3], while C over
-        j is non-zero in the range [N-k4, N], then return a dictionary: ::
+        If B along `i` is non-zero in ranges [0, k1] and [k2, k3], while C along
+        `j` is non-zero in range [N-k4, N], return the following dictionary: ::
 
             {i: ((0, k1), (k2, k3)), j: ((N-k4, N),)}
 
-        If there are no zero-columns, return {}."""
+        If there are no zero-blocks, return {}."""
         if isinstance(node, Symbol):
             if any([o != (1, 0) for o in node.offset]):
                 raise RuntimeError("Zeros error: offsets not supported: %s" % str(node))
             nz_bounds = nz_in_syms.get(node.symbol)
             return dict(zip(node.rank, nz_bounds)) if nz_bounds else {}
+
         elif isinstance(node, (Par, FunCall)):
             return self._track_nz_expr(node.children[0], nz_in_syms)
-        else:
+
+        elif isinstance(node, (Prod, Div)):
+            # Merge the non-zero bounds
             dim_nz_bounds_l = self._track_nz_expr(node.children[0], nz_in_syms)
             dim_nz_bounds_r = self._track_nz_expr(node.children[1], nz_in_syms)
-            if isinstance(node, (Prod, Div)):
-                # Merge the non-zero bounds of different iteration variables
-                # within the same dictionary
-                return dict(dim_nz_bounds_l.items() + dim_nz_bounds_r.items())
-            elif isinstance(node, Sum):
-                return self._merge_dims_nz_bounds(dim_nz_bounds_l, dim_nz_bounds_r)
-            else:
-                raise RuntimeError("Zeros error: unsupported operation: %s" % str(node))
+            return dict(dim_nz_bounds_l.items() + dim_nz_bounds_r.items())
+
+        elif isinstance(node, (Sum, Sub)):
+            # Take the union of the non-zero bounds
+            dim_nz_bounds_l = self._track_nz_expr(node.children[0], nz_in_syms)
+            dim_nz_bounds_r = self._track_nz_expr(node.children[1], nz_in_syms)
+            return self._merge_dims_nz_bounds(dim_nz_bounds_l, dim_nz_bounds_r)
+
+        else:
+            raise RuntimeError("Zero avoidance: unsupported operation: %s" % str(node))
 
     def _track_nz_blocks(self, node, nz_in_syms, nz_info, nest=None, parent=None):
         """Track the propagation of zero blocks along the computation which is
@@ -566,23 +570,7 @@ class ZeroLoopScheduler(LoopScheduler):
         elif isinstance(node, (If, Switch)):
             raise RuntimeError("Unexpected control flow while tracking zero blocks")
 
-    def _track_nz(self, root):
-        """Track the propagation of non-zero valued blocks in the AST rooted in
-        ``root``. Control flow, in terms of constructs like if-then-else, switch,
-        etc, is forbidden."""
-
-        # The starting point of this pass consists of identifying the location
-        # of non-zero valued blocks in the symbols appearing in /root/. For this,
-        # the declarations of such symbols are examined.
-        nz_in_syms = {s: d.nonzero for s, d in self.decls.items() if d.nonzero}
-
-        # Track propagation of zero blocks by symbolically executing the code
-        nz_info = OrderedDict()
-        self._track_nz_blocks(root, nz_in_syms, nz_info)
-
-        return (nz_in_syms, nz_info)
-
-    def _reschedule_itspace(self, root, nz_in_syms, nz_info):
+    def _reschedule_itspace(self, root):
         """Consider two statements A and B, and their iteration spaces.
         If the two iteration spaces have
 
@@ -607,9 +595,20 @@ class ZeroLoopScheduler(LoopScheduler):
            for i, for j  // Different loop bounds
              Z1[i][j] = Z2[i][j]
 
-        Return the dictionary of the updated expressions.
+        A dictionary described the structure of the new iteration spaces is
+        returned.
         """
 
+        # 1) Identify the initial sparsity pattern of the symbols in /root/
+        nz_in_syms = {s: d.nonzero for s, d in self.decls.items() if d.nonzero}
+        nz_info = OrderedDict()
+
+        # 2) Track propagation of non-zero blocks by symbolic execution. This
+        # has the effect of populating /nz_info/
+        self._track_nz_blocks(root, nz_in_syms, nz_info)
+
+        # 3) At this point we know where non-zero blocks are located, so we have
+        # to create proper loop nests to access them
         track_exprs, new_nz_info = {}, {}
         for nest, stmt_itspaces in nz_info.items():
             loops, loops_parents = zip(*nest)
@@ -648,8 +647,7 @@ class ZeroLoopScheduler(LoopScheduler):
                 insert_at_elem(loops_parents[0].children, loops[0], nests_info[0][0])
             loops_parents[0].children.remove(loops[0])
 
-        nz_info.clear()
-        nz_info.update(new_nz_info)
+        return new_nz_info
 
     def reschedule(self, root):
         """Restructure the loop nests in ``root`` to avoid computation over
@@ -657,6 +655,7 @@ class ZeroLoopScheduler(LoopScheduler):
         starting from ``root``. Control flow, in the form of If, Switch, etc.,
         is forbidden."""
 
+        # Fission the known expressions to increase the impact of zero removal
         elf = ExpressionFissioner(cut=1)
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
@@ -668,12 +667,6 @@ class ZeroLoopScheduler(LoopScheduler):
                 self.exprs.pop(stmt)
                 self.exprs.update(elf.fission(stmt, expr_info, False))
 
-        # Symbolically execute the code starting from root to track the
-        # propagation of zero-valued blocks
-        nz_in_syms, nz_info = self._track_nz(root)
-
-        # At this point, we know the final location of non-zero values, so we can
-        # restructure the iteration spaces to avoid useless computation
-        self._reschedule_itspace(root, nz_in_syms, nz_info)
-
-        return nz_info
+        # Perform symbolic execution, track the propagation of non zero-valued
+        # blocks, restructure the iteration spaces to avoid useless arithmetic ops
+        return self._reschedule_itspace(root)

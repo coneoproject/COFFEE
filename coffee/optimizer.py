@@ -33,7 +33,7 @@
 
 from base import *
 from utils import *
-from loop_scheduler import ExpressionFissioner, ZeroLoopScheduler, SSALoopMerger
+from loop_scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
@@ -188,7 +188,7 @@ class LoopOptimizer(object):
         in statically initialized arrays."""
 
         if any([d.nonzero for d in self.decls.values()]):
-            zls = ZeroLoopScheduler(self.exprs, self.decls, self.hoisted)
+            zls = ZeroRemover(self.exprs, self.decls, self.hoisted)
             self.nz_info = zls.reschedule(self.header)
 
     def precompute(self, mode=0):
