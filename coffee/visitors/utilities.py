@@ -25,17 +25,17 @@ class ReplaceSymbols(Visitor):
         self.copy_result = copy_result
         super(ReplaceSymbols, self).__init__()
 
-    def visit_Symbol(self, o, env):
+    def visit_Symbol(self, o):
         try:
             ret = self.syms[self.key(o)]
             if self.copy_result:
-                ops, kwargs = ret.operands()
-                ret = ret.reconstruct(ops, **kwargs)
+                ops, okwargs = ret.operands()
+                ret = ret.reconstruct(ops, **okwargs)
             return ret
         except KeyError:
             return o
 
-    def visit_object(self, o, env):
+    def visit_object(self, o):
         return o
 
     visit_Node = Visitor.maybe_reconstruct
