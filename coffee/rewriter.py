@@ -274,7 +274,7 @@ class ExpressionRewriter(object):
                   A[j][k] += ...f(B[0]*C[i][0] + B[1]*C[i][1] + ...)...
         """
         # Get all loop nests, then discard the one enclosing the expression
-        nests = [n for n in visit(self.expr_info.loops_parents[0])['fors']]
+        nests = [n for n in visit(self.expr_info.loops_parents[0], info_items=['fors'])['fors']]
         injectable_nests = [n for n in nests if zip(*n)[0] != self.expr_info.loops]
 
         # Full unroll any unrollable, injectable loop
@@ -509,7 +509,7 @@ class ExpressionHoister(object):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
             return
 
-        symbols = visit(self.header)['symbols_dep']
+        symbols = visit(self.header, info_items=['symbols_dep'])['symbols_dep']
         symbols = dict((s, [l.dim for l in dep]) for s, dep in symbols.items())
 
         extracted = True
@@ -774,7 +774,8 @@ class ExpressionExpander(object):
         # Preload and set data structures for expansion
         self.expansions = []
         self.should_expand = should_expand
-        self.info = visit(self.expr_info.outermost_loop)
+        self.info = visit(self.expr_info.outermost_loop, info_items=['symbol_refs',
+                                                                     'symbols_dep'])
 
         # Expand according to the /should_expand/ heuristic
         self._expand(self.stmt.children[1], self.stmt)

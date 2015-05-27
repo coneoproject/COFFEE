@@ -86,7 +86,8 @@ class LoopVectorizer(object):
         # Aliases
         decls = self.loop_opt.decls
         header = self.loop_opt.header
-        info = visit(header)
+        info = visit(header, info_items=['symbols_dep', 'symbols_mode', 'symbol_refs',
+                                         'fors'])
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']

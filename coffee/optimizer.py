@@ -148,7 +148,7 @@ class LoopOptimizer(object):
                          for k, v in d.items())
         for l in self.hoisted.all_loops:
             l_occs = count(l, read_only=True)
-            info = visit(l)
+            info = visit(l, info_items=['symbol_refs', 'symbols_mode'])
             innermost_block = FindInstances(Block).visit(l)[Block][-1]
             to_replace, to_remove = {}, []
             for (symbol, rank), sym_occs in l_occs.items():
@@ -470,7 +470,7 @@ class GPULoopOptimizer(LoopOptimizer):
         analysis is performed; rather, these are the loops that are marked with
         ``pragma coffee itspace``."""
 
-        info = visit(self.loop, self.header)
+        info = visit(self.loop, self.header, info_items=['symbols_dep', 'fors'])
         symbols = info['symbols_dep']
 
         itspace_vrs = set()
