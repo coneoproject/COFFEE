@@ -522,22 +522,19 @@ class FindInstances(Visitor):
         self.with_parent = with_parent
         super(FindInstances, self).__init__()
 
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_list(self, o, env):
-        ret = defaultdict(list)
-        for entry in o:
-            a = self.visit(entry, env=env)
-            for k, v in a.iteritems():
-                ret[k].extend(v)
+    def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
-    def visit_Node(self, o, env):
-        ret = defaultdict(list)
-        new_env = Environment(env, node_parent=o)
+    def visit_list(self, o, ret=None, *args, **kwargs):
+        for entry in o:
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
+        return ret
+
+    def visit_Node(self, o, ret=None, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = defaultdict(list)
         if isinstance(o, self.types):
-            found = (o, env["node_parent"]) if self.with_parent else o
+            found = (o, parent) if self.with_parent else o
             ret[type(o)].append(found)
             # Don't traverse children if stop-on-found
             if self.stop_when_found:
@@ -545,7 +542,5 @@ class FindInstances(Visitor):
         # Not found, or traversing children anyway
         ops, _ = o.operands()
         for op in ops:
-            a = self.visit(op, env=new_env)
-            for k, v in a.iteritems():
-                ret[k].extend(v)
+            ret = self.visit(op, ret=ret, parent=o)
         return ret
