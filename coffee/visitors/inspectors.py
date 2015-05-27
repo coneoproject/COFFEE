@@ -428,49 +428,43 @@ class SymbolModes(Visitor):
 
     By default the top-level call to visit will record a parent class
     of NoneType for Symbols without a parent.  To pass in a parent by
-    hand, provide an environment to the visitor.
+    hand, provide a keyword argument to the visitor::
 
     .. code-block::
 
-       v.visit(symbol, {"node_parent": parent})
+       v.visit(symbol, parent=parent)
 
     """
 
-    default_env = dict(access_mode=READ, node_parent=None)
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        return ret
 
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_Node(self, o, env):
-        new_env = Environment(env, node_parent=o)
-        ret = OrderedDict()
+    def visit_Node(self, o, ret=None, *args, **kwargs):
         ops, _ = o.operands()
         for op in ops:
             # WARNING, if the same Symbol object appears multiple
             # times, the "last" access wins, rather than WRITE winning.
             # This assumes all nodes in the tree are unique instances
-            ret.update(self.visit(op, env=new_env))
+            ret = self.visit(op, ret=ret, parent=o)
         return ret
 
-    def visit_Symbol(self, o, env):
-        mode = env["access_mode"]
-        parent = env["node_parent"]
-        return {o: (mode, parent.__class__)}
+    def visit_Symbol(self, o, ret=None, mode=READ, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = OrderedDict()
+        ret[o] = (mode, parent.__class__)
+        return ret
 
     # Don't do anything with declarations.  If you want lvalues to get
     # a WRITE unless uninitialised, then custom visitor must be
     # written.
     visit_Decl = visit_object
 
-    def visit_Writer(self, o, env):
-        new_env = Environment(env, node_parent=o)
-        write_env = Environment(new_env, access_mode=WRITE)
-        ret = OrderedDict()
+    def visit_Writer(self, o, ret=None, *args, **kwargs):
         # lvalues have access mode WRITE
-        ret.update(self.visit(o.children[0], env=write_env))
+        ret = self.visit(o.children[0], ret=ret, parent=o, mode=WRITE)
         # All others have access mode READ
         for op in o.children[1:]:
-            ret.update(self.visit(op, env=new_env))
+            ret = self.visit(op, ret=ret, parent=o)
         return ret
 
     visit_Invert = visit_Writer
