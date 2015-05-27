@@ -46,27 +46,26 @@ class CheckUniqueness(Visitor):
     """
     Check if all nodes in a tree are unique instances.
     """
-    def visit_object(self, o, env):
-        return set()
+    def visit_object(self, o, seen=None):
+        return seen
 
     # Some lists appear in operands()
-    def visit_list(self, o, env):
-        ret = set()
+    def visit_list(self, o, seen=None):
         # Walk list entrys
         for entry in o:
-            a = self.visit(entry, env=env)
-            if len(ret.intersection(a)) != 0:
-                raise RuntimeError("Tree does not contain unique nodes")
-            ret.update(a)
-        return ret
+            seen = self.visit(entry, seen=seen)
+        return seen
 
-    def visit_Node(self, o, env, *args, **kwargs):
-        ret = set([o])
-        for a in args:
-            if len(ret.intersection(a)) != 0:
-                raise RuntimeError("Tree does not contain unique nodes")
-            ret.update(a)
-        return ret
+    def visit_Node(self, o, seen=None):
+        if seen is None:
+            seen = set()
+        ops, _ = o.operands()
+        for op in ops:
+            seen = self.visit(op, seen=seen)
+        if o in seen:
+            raise RuntimeError("Tree does not contain unique nodes")
+        seen.add(o)
+        return seen
 
 
 class Uniquify(Visitor):
