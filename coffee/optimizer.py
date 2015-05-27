@@ -149,7 +149,8 @@ class LoopOptimizer(object):
         for l in self.hoisted.all_loops:
             l_occs = count(l, read_only=True)
             info = visit(l, info_items=['symbol_refs', 'symbols_mode'])
-            innermost_block = FindInstances(Block).visit(l)[Block][-1]
+            retval = FindInstances.default_retval()
+            innermost_block = FindInstances(Block).visit(l, ret=retval)[Block][-1]
             to_replace, to_remove = {}, []
             for (symbol, rank), sym_occs in l_occs.items():
                 # If the symbol appears once, then it is a potential candidate

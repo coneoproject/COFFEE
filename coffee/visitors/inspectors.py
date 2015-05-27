@@ -65,6 +65,10 @@ class CheckPerfectLoop(Visitor):
 
 class CountOccurences(Visitor):
 
+    @classmethod
+    def default_retval(cls):
+        return Counter()
+
     """Count all occurances of :class:`~.Symbol`\s in an AST.
 
     :arg key: a comparison key for the symbols.
@@ -109,12 +113,17 @@ class CountOccurences(Visitor):
 
     def visit_Symbol(self, o, ret=None, *args, **kwargs):
         if ret is None:
-            ret = Counter()
+            ret = self.default_retval()
         ret[self.key(o)] += 1
         return ret
 
 
 class DetermineUnrollFactors(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return dict()
+
     """
     Determine unroll factors for all For loops in a tree.
 
@@ -137,7 +146,7 @@ class DetermineUnrollFactors(Visitor):
 
     def visit_For(self, o, ret=None):
         if ret is None:
-            ret = {}
+            ret = self.default_retval()
         # Check if children contain any loops
         nval = len(ret)
         ret = self.visit(o.children[0], ret=ret)
@@ -170,6 +179,10 @@ class MaxLoopDepth(Visitor):
 
 class FindLoopNests(Visitor):
 
+    @classmethod
+    def default_retval(cls):
+        return list()
+
     """Return a list of lists of loop nests in the tree.
 
     Each list entry describes a loop nest with the outer-most loop
@@ -197,7 +210,7 @@ class FindLoopNests(Visitor):
 
     def visit_For(self, o, ret=None, parent=None, *args, **kwargs):
         if ret is None:
-            ret = []
+            ret = self.default_retval()
         ops, _ = o.operands()
         nval = len(ret)
         for op in ops:
@@ -216,6 +229,10 @@ class FindLoopNests(Visitor):
 
 
 class FindCoffeeExpressions(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
 
     """
     Search the tree for :class:`~.Writer` statements annotated with
@@ -244,7 +261,7 @@ class FindCoffeeExpressions(Visitor):
 
     def visit_Writer(self, o, ret=None, parent=None, *args, **kwargs):
         if ret is None:
-            ret = OrderedDict()
+            ret = self.default_retval()
         for p in o.pragma:
             opts = p.split(" ", 2)
             # Don't care if we don't have three values
@@ -258,7 +275,7 @@ class FindCoffeeExpressions(Visitor):
 
     def visit_For(self, o, ret=None, parent=None, *args, **kwargs):
         if ret is None:
-            ret = OrderedDict()
+            ret = self.default_retval()
         nval = len(ret)
 
         ops, _ = o.operands()
@@ -288,6 +305,10 @@ class FindCoffeeExpressions(Visitor):
 
 class SymbolReferences(Visitor):
 
+    @classmethod
+    def default_retval(cls):
+        return defaultdict(list)
+
     """
     Visit the tree and return a dict mapping symbol names to tuples of
     (node, node_parent) that reference the symbol with that name.
@@ -306,7 +327,7 @@ class SymbolReferences(Visitor):
 
     def visit_Symbol(self, o, ret=None, parent=None):
         if ret is None:
-            ret = defaultdict(list)
+            ret = self.default_retval()
 
         # Map name to (node, parent) tuple
         ret[o.symbol].append((o, parent))
@@ -330,6 +351,10 @@ class SymbolReferences(Visitor):
 
 class SymbolDependencies(Visitor):
 
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
+
     """
     Visit the tree and return a dict collecting symbol dependencies.
 
@@ -343,7 +368,7 @@ class SymbolDependencies(Visitor):
         write = kwargs["write"]
         nest = kwargs["loop_nest"]
         if ret is None:
-            ret = OrderedDict()
+            ret = self.default_retval()
         if write:
             # Remember that this symbol /name/ was written,
             # as well as the full current loop nest for the
@@ -387,7 +412,7 @@ class SymbolDependencies(Visitor):
 
     def visit_For(self, o, ret=None, *args, **kwargs):
         if ret is None:
-            ret = OrderedDict()
+            ret = self.default_retval()
         loop_nest = kwargs.pop("loop_nest") + [o]
         nval = len(ret)
         # Don't care about symbol access in increments, only children
@@ -414,6 +439,10 @@ class SymbolDependencies(Visitor):
 
 
 class SymbolModes(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
 
     """
     Visit the tree and return a dict mapping Symbols to tuples of
@@ -446,7 +475,7 @@ class SymbolModes(Visitor):
 
     def visit_Symbol(self, o, ret=None, mode=READ, parent=None, *args, **kwargs):
         if ret is None:
-            ret = OrderedDict()
+            ret = self.default_retval()
         ret[o] = (mode, parent.__class__)
         return ret
 
@@ -467,6 +496,10 @@ class SymbolModes(Visitor):
 
 
 class SymbolDeclarations(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
 
     """Return a dict mapping symbol names to a tuple of the declaring
     node.  The node is annotated in place with information about
@@ -495,13 +528,17 @@ class SymbolDeclarations(Visitor):
 
     def visit_Decl(self, o, ret=None, scope=LOCAL, *args, **kwargs):
         if ret is None:
-            ret = OrderedDict()
+            ret = self.default_retval()
         o.scope = scope
         ret[o.sym.symbol] = o
         return ret
 
 
 class FindInstances(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return defaultdict(list)
 
     """
     Visit the tree and return a dict mapping types to a list of
@@ -528,7 +565,7 @@ class FindInstances(Visitor):
 
     def visit_Node(self, o, ret=None, parent=None, *args, **kwargs):
         if ret is None:
-            ret = defaultdict(list)
+            ret = self.default_retval()
         if isinstance(o, self.types):
             found = (o, parent) if self.with_parent else o
             ret[type(o)].append(found)

@@ -122,6 +122,17 @@ class Visitor(object):
     """
     default_args = {}
 
+    @classmethod
+    def default_retval(cls):
+        """A method that returns an object to use to populate return values.
+
+        If your visitor combines values in a tree-walk, it may be
+        useful to provide a object to combine the results into.
+        :meth:`default_retval` may be defined by the visitor to be
+        called to provide an empty object of appropriate type.
+        """
+        return None
+
     def lookup_method(self, instance):
         """Look up a handler method for a visitee.
 
