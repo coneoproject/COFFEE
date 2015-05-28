@@ -144,7 +144,7 @@ class SSALoopMerger(LoopScheduler):
                     loops, loops_parents = zip(*li)
                     # Note that only inner loops can be fused, and that they share
                     # the same parent
-                    key = (itspace_from_for(loops, mode=0), loops_parents[-1])
+                    key = (ItSpace(mode=0).from_for(loops), loops_parents[-1])
                     found_nests[key].append(loops[-1])
 
         all_merged = []
@@ -463,8 +463,7 @@ class ZeroRemover(LoopScheduler):
         in which the first entry represents the size of the iteration space,
         and the second entry represents the offset in memory to access the
         correct values.
-
-        If zero-valued blocks are not present, simply return {}."""
+        """
 
         if isinstance(node, Symbol):
             itspace = {l.dim: [(l.size, 0)] for l, _ in nest}
@@ -507,10 +506,10 @@ class ZeroRemover(LoopScheduler):
                     itspace[r_r] = r_size_ofs
                 l_size_ofs = itspace[r_r]
                 if isinstance(node, (Prod, Div)):
-                    to_intersect = itertools.product(l_ssize_ofs, r_size_ofs)
-                    bounds = [itspace_intersect(b, mode=1) for b in to_intersect]
+                    to_intersect = itertools.product(l_size_ofs, r_size_ofs)
+                    bounds = [ItSpace(mode=1).intersect(b) for b in to_intersect]
                 elif isinstance(node, (Sum, Sub)):
-                    bounds = itspace_merge(l_size_ofs + r_size_ofs, mode=1)
+                    bounds = ItSpace(mode=1).merge(l_size_ofs + r_size_ofs)
                 else:
                     raise RuntimeError("Zero-avoidance: unexpected op %s", str(node))
                 itspace[r_r] = bounds
@@ -630,7 +629,7 @@ class ZeroRemover(LoopScheduler):
                     dim_nz_bounds = zip(itspace.keys(), nz_bounds)
                     if not dim_nz_bounds:
                         # If no non_zero bounds, reuse the existing loop nest
-                        dim_nz_bounds = itspace_from_for(loops, mode=1)
+                        dim_nz_bounds = ItSpace(mode=1).from_for(loops)
                     size, offset = self._create_itspace(stmt, loops,
                                                         dict(dim_nz_bounds),
                                                         nz_in_syms)
@@ -642,7 +641,7 @@ class ZeroRemover(LoopScheduler):
             # The dictionary is sorted because we must first execute smaller
             # nests, since larger ones may depend on them
             for itspace, stmt_offset in sorted(fissioned_nests.items()):
-                nests_info, inner_block = itspace_to_for(itspace, root)
+                nests_info, inner_block = ItSpace(mode=0).to_for(itspace, root)
                 for stmt, offset in stmt_offset:
                     ast_update_ofs(stmt, offset)
                     self._init_decl_to_zero(stmt, nz_in_syms, offset, itspace)

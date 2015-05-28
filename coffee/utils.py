@@ -525,119 +525,122 @@ def check_type(stmt, decls):
 #######################################################################
 
 
-def itspace_size_ofs(itspace):
-    """Given an ``itspace`` in the form ::
+class ItSpace():
 
-        (('dim', (bound_a, bound_b), ...)),
+    """A collection of routines to manipulate iteration spaces."""
 
-    return ::
+    def __init__(self, mode=0):
+        """Initialize an ItSpace object.
 
-        ((('dim', bound_b - bound_a), ...), (('dim', bound_a), ...))"""
-    itspace_info = []
-    for var, bounds in itspace:
-        itspace_info.append(((var, bounds[1] - bounds[0] + 1), (var, bounds[0])))
-    return tuple(zip(*itspace_info))
+        :arg mode: Establish how an interation space is represented.
+        :type mode: integer, either 0 (default) or 1:
+            * 0: an iteration space is a 2-tuple indicating the bounds of the
+                accessed region
+            * 1: an iteration space is a 2-tuple indicating size and offset of
+                the accessed region
+        """
+        assert mode in [0, 1], "Invalid mode for ItSpace()"
+        self.mode = mode
 
+    def _convert_to_mode0(self, itspaces):
+        if self.mode == 0:
+            return itspaces
+        elif self.mode == 1:
+            return [(ofs, ofs+size) for size, ofs in itspaces]
 
-def itspace_merge(itspaces):
-    """Given an iterator of iteration spaces, each iteration space represented
-    as a 2-tuple containing the start and end point, return a tuple of iteration
-    spaces in which contiguous iteration spaces have been merged. For example:
-    ::
+    def _convert_from_mode0(self, itspaces):
+        if self.mode == 0:
+            return itspaces
+        elif self.mode == 1:
+            return [(end-start, start) for start, end in itspaces]
 
-        [(1,3), (4,6)] -> ((1,6),)
-        [(1,3), (5,6)] -> ((1,3), (5,6))
-    """
-    itspaces = sorted(tuple(set(itspaces)))
-    merged_itspaces = []
-    current_start, current_stop = itspaces[0]
-    for start, stop in itspaces:
-        if start - 1 > current_stop:
-            merged_itspaces.append((current_start, current_stop))
-            current_start, current_stop = start, stop
+    def merge(self, itspaces):
+        """Merge contiguous, possibly overlapping iteration spaces.
+        For example (assuming ``self.mode = 0``): ::
+
+            [(1,3), (4,6)] -> ((1,6),)
+            [(1,3), (5,6)] -> ((1,3), (5,6))
+        """
+        itspaces = self._convert_to_mode0(itspaces)
+
+        itspaces = sorted(tuple(set(itspaces)))
+        merged_itspaces = []
+        current_start, current_stop = itspaces[0]
+        for start, stop in itspaces:
+            if start - 1 > current_stop:
+                merged_itspaces.append((current_start, current_stop))
+                current_start, current_stop = start, stop
+            else:
+                # Ranges adjacent or overlapping: merge.
+                current_stop = max(current_stop, stop)
+        merged_itspaces.append((current_start, current_stop))
+
+        itspaces = self._convert_from_mode0(merged_itspaces)
+        return itspaces
+
+    def intersect(self, itspaces):
+        """Compute the intersection of multiple iteration spaces.
+        For example (assuming ``self.mode = 0``): ::
+
+            [(1,3)] -> ()
+            [(1,3), (4,6)] -> ()
+            [(1,3), (2,6)] -> (2,3)
+        """
+        itspaces = self._convert_to_mode0(itspaces)
+
+        if len(itspaces) in [0, 1]:
+            return ()
+        itspaces = [set(range(i[0], i[1]+1)) for i in itspaces]
+        try:
+            itspace = set.intersection(*itspaces)
+            itspace = sorted(list(itspace))
+            itspaces = [(itspace[0], itspace[-1])]
+        except:
+            return ()
+
+        itspace = self._convert_from_mode0(itspaces)[0]
+        return itspace
+
+    def to_for(self, itspaces, loop_parent):
+        """Given an iterator of iteration spaces, each iteration space being
+        a 2-tuple containing the start and the end point, return a 2-tuple
+        ``(loops_info, inner_block)``, in which ``loops_info`` represents the
+        loop nest enclosing ``inner_block``."""
+        itspaces = self._convert_to_mode0(itspaces)
+
+        inner_block = Block([], open_scope=True)
+        loops, loops_parents = [], [loop_parent]
+        loop_body = inner_block
+        for i, itspace in enumerate(reversed(itspaces)):
+            start, stop = itspace
+            loops.insert(0, For(Decl("int", start, Symbol(0)), Less(start, stop),
+                                Incr(start, Symbol(1)), loop_body))
+            loop_body = Block([loops[i-1]], open_scope=True)
+            loops_parents.append(loop_body)
+        # Note that #loops_parents = #loops+1, but by zipping we just cut away the
+        # last entry in loops_parents
+        loops_info = zip(loops, loops_parents)
+
+        return (tuple(loops_info), inner_block)
+
+    def from_for(self, loops):
+        """Given an iterator of for ``loops``, return a tuple that rather contains
+        the iteration space of each loop, i.e. given: ::
+
+            [for1, for2, ...]
+
+        If ``mode == 0``, return: ::
+
+            ((start1, bound1, increment1), (start2, bound2, increment2), ...)
+
+        If ``mode > 0``, return: ::
+
+            ((for1_dim, (start1, topiter1)), (for2_dim, (start2, topiter2):, ...)
+        """
+        if self.mode == 0:
+            return tuple((l.start, l.end, l.increment) for l in loops)
         else:
-            # Ranges adjacent or overlapping: merge.
-            current_stop = max(current_stop, stop)
-    merged_itspaces.append((current_start, current_stop))
-    return tuple(merged_itspaces)
-
-
-def itspace_intersect(itspaces):
-    """Given an iterator of iteration spaces, each iteration space represented
-    as a 2-tuple containing the start and end point, return the intersection
-    of the iteration spaces. For example:
-    ::
-
-        [(1,3)] -> ()
-        [(1,3), (4,6)] -> ()
-        [(1,3), (2,6)] -> (2,3)
-    """
-    if len(itspaces) in [0, 1]:
-        return ()
-    itspaces = [set(range(i[0], i[1]+1)) for i in itspaces]
-    try:
-        itspace = set.intersection(*itspaces)
-        itspace = sorted(list(itspace))
-        return (itspace[0], itspace[-1])
-    except:
-        return ()
-
-
-def itspace_to_for(itspaces, loop_parent):
-    """Given an iterator of iteration spaces, each iteration space being
-    a 2-tuple containing the start and the end point, return a 2-tuple
-    ``(loops_info, inner_block)``, in which ``loops_info`` represents the
-    loop nest enclosing ``inner_block``."""
-    inner_block = Block([], open_scope=True)
-    loops, loops_parents = [], [loop_parent]
-    loop_body = inner_block
-    for i, itspace in enumerate(reversed(itspaces)):
-        start, stop = itspace
-        loops.insert(0, For(Decl("int", start, Symbol(0)), Less(start, stop),
-                            Incr(start, Symbol(1)), loop_body))
-        loop_body = Block([loops[i-1]], open_scope=True)
-        loops_parents.append(loop_body)
-    # Note that #loops_parents = #loops+1, but by zipping we just cut away the
-    # last entry in loops_parents
-    loops_info = zip(loops, loops_parents)
-    return (tuple(loops_info), inner_block)
-
-
-def itspace_from_for(loops, mode=0):
-    """Given an iterator of for ``loops``, return a tuple that rather contains
-    the iteration space of each loop, i.e. given: ::
-
-        [for1, for2, ...]
-
-    If ``mode == 0``, return: ::
-
-        ((start1, bound1, increment1), (start2, bound2, increment2), ...)
-
-    If ``mode > 0``, return: ::
-
-        ((for1_dim, (start1, topiter1)), (for2_dim, (start2, topiter2):, ...)
-    """
-    if mode == 0:
-        return tuple((l.start, l.end, l.increment) for l in loops)
-    else:
-        return tuple((l.dim, (l.start, l.end - 1)) for l in loops)
-
-
-def itspace_copy(loop_a, loop_b=None):
-    """Copy the iteration space of ``loop_a`` into ``loop_b``, while preserving
-    the body. If ``loop_b = None``, a new For node is created and returned."""
-    init = dcopy(loop_a.init)
-    cond = dcopy(loop_a.cond)
-    incr = dcopy(loop_a.incr)
-    pragma = dcopy(loop_a.pragma)
-    if not loop_b:
-        loop_b = For(init, cond, incr, loop_a.body, pragma)
-        return loop_b
-    loop_b.init = init
-    loop_b.cond = cond
-    loop_b.incr = incr
-    loop_b.pragma = pragma
-    return loop_b
+            return tuple((l.dim, (l.start, l.end - 1)) for l in loops)
 
 
 #############################

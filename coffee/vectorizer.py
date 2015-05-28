@@ -160,7 +160,7 @@ class LoopVectorizer(object):
                 ofs = s.offset[-1][1] if s.offset else 0
                 # ... the iteration space
                 s_itspace = [l for l in symbols_dep[s] if l.dim in s.rank]
-                s_itspace = tuple((s, e) for s, e, _ in itspace_from_for(s_itspace))
+                s_itspace = tuple((s, e) for s, e, _ in ItSpace(mode=0).from_for(s_itspace))
                 s_p_itspace = s_itspace[p_dim]
                 # ... combining the last two, the actual dataspace
                 if decl.sym.rank[p_dim] != buf_rank[p_dim] or isinstance(ofs, Symbol) \
@@ -250,7 +250,7 @@ class LoopVectorizer(object):
                     alignable_stmts.append((stmt, dict([(l.dim, start_point)])))
                 read_regions[str(expr)].append((start_point, end_point))
             for rr in read_regions.values():
-                if len(itspace_merge(rr)) < len(rr):
+                if len(ItSpace(mode=0).merge(rr)) < len(rr):
                     # Bound adjustment causes overlapping, so give up
                     adjust = False
                     break
