@@ -242,18 +242,24 @@ def ast_remove(node, to_remove, mode='all'):
         _ast_remove(node, None, -1, to_remove)
 
 
-def ast_update_ofs(node, ofs):
-    """Given a dictionary ``ofs`` s.t. ``{'dim': ofs}``, update the various
-    iteration variables in the symbols rooted in ``node``."""
-    if isinstance(node, Symbol):
-        new_ofs = []
-        old_ofs = ((1, 0) for r in node.rank) if not node.offset else node.offset
-        for r, o in zip(node.rank, old_ofs):
-            new_ofs.append((o[0], ofs[r] if r in ofs else o[1]))
-        node.offset = tuple(new_ofs)
-    else:
-        for n in node.children:
-            ast_update_ofs(n, ofs)
+def ast_update_ofs(node, ofs, **kwargs):
+    """Change the offsets of the iteration space variables of the symbols rooted
+    in ``node``.
+
+    :arg node: root AST node
+    :arg ofs: a dictionary ``{'dim': value}``; `dim`'s offset is changed to `value`
+    :arg kwargs: optional parameters to drive the transformation:
+        * increase: `value` is added to the pre-existing offset, not substituted
+    """
+    increase = kwargs.get('increase', False)
+
+    symbols = FindInstances(Symbol).visit(node)[Symbol]
+    for s in symbols:
+        new_offset = []
+        for r, o in zip(s.rank, s.offset):
+            new_o = o[1] + ofs.get(r, 0) if increase else ofs.get(r, o[1])
+            new_offset.append((o[0], new_o))
+        s.offset = tuple(new_offset)
 
 
 def ast_update_rank(node, new_rank):
