@@ -38,7 +38,7 @@ try:
 except ImportError:
     from ordereddict import OrderedDict
 from collections import defaultdict
-import itertools
+from itertools import product
 from copy import deepcopy as dcopy
 
 from base import *
@@ -176,13 +176,12 @@ class SSALoopMerger(LoopScheduler):
                 _written_syms = flatten([self._accessed_syms(l, 0) for l in
                                          parent.children[bound_left:bound_right]])
                 # Check condition 2
-                for ws, lws in itertools.product(_written_syms, ln_written_syms):
+                for ws, lws in product(_written_syms, ln_written_syms):
                     if self.expr_graph.is_written(ws, lws):
                         is_mergeable = False
                         break
                 # Check condition 3
-                for lws, mirs in itertools.product(ln_written_syms,
-                                                   merging_in_read_syms):
+                for lws, mirs in product(ln_written_syms, merging_in_read_syms):
                     if lws.symbol == mirs.symbol and not lws.rank and not mirs.rank:
                         is_mergeable = False
                         break
@@ -410,42 +409,6 @@ class ZeroRemover(LoopScheduler):
         self.decls = decls
         self.hoisted = hoisted
 
-    def _init_decl_to_zero(self, node, nz_in_syms, ofs, itspace):
-        """Scan each variable ``v`` in ``node``: if non-initialized elements in ``v``
-        are touched as iterating along ``itspace``, initialize ``v`` to 0.0."""
-
-        # Determine the symbols accessed in node and their non-zero regions
-        symbols_nz_regions = []
-        syms = FindInstances(Symbol).visit(node)[Symbol]
-        syms = [s for s in syms if nz_in_syms.get(s.symbol)]
-        for s in syms:
-            nz_regions = dict(zip(s.rank, nz_in_syms[s.symbol]))
-            symbols_nz_regions.append((s.symbol, nz_regions))
-
-        # If iteration space along which they are accessed is bigger than the
-        # non-zero region, hoisted symbols must be initialized to zero
-        for symbol, nz_regions in symbols_nz_regions:
-            if not self.hoisted.get(symbol):
-                continue
-            for dim, size in itspace:
-                dim_nz_regions = nz_regions.get(dim)
-                dim_ofs = ofs.get(dim)
-                if not dim_nz_regions or dim_ofs is None:
-                    # Sym does not iterate along this iteration variable, so skip
-                    # the check
-                    continue
-                iteration_ok = False
-                # Check that the iteration space actually corresponds to one of the
-                # non-zero regions in the symbol currently analyzed
-                for dim_nz_region in dim_nz_regions:
-                    init_nz_reg, end_nz_reg = dim_nz_region
-                    if dim_ofs == init_nz_reg and size == end_nz_reg + 1 - init_nz_reg:
-                        iteration_ok = True
-                        break
-                if not iteration_ok:
-                    # Iterating over a non-initialized region, need to zero it
-                    self.hoisted[symbol].decl.init = ArrayInit("{0.0}")
-
     def _track_nz_expr(self, node, nz_in_syms, nest):
         """For the expression rooted in ``node``, return iteration space and
         offset required to iterate over non zero-valued blocks. For example: ::
@@ -466,7 +429,7 @@ class ZeroRemover(LoopScheduler):
         """
 
         if isinstance(node, Symbol):
-            itspace = {l.dim: [(l.size, 0)] for l, _ in nest}
+            itspace = OrderedDict({l.dim: [(l.size, 0)] for l, _ in nest})
             nz_bounds = nz_in_syms.get(node.symbol, ())
             for r, o, nz_bs in zip(node.rank, node.offset, nz_bounds):
                 if o[0] != 1:
@@ -482,12 +445,9 @@ class ZeroRemover(LoopScheduler):
                 for nz_b in nz_bs:
                     nz_b_size, nz_b_offset = nz_b
                     end = nz_b_size + nz_b_offset
-                    if offset >= end:
-                        # Discard out-of-nz-bounds accesses
-                        continue
                     start = max(offset, nz_b_offset)
                     r_offset = start - offset
-                    r_size = min(offset + loop.size, end) - start
+                    r_size = max(min(offset + loop.size, end) - start, 0)
                     r_size_ofs.append((r_size, r_offset))
                 itspace[r] = r_size_ofs
             return itspace
@@ -506,13 +466,13 @@ class ZeroRemover(LoopScheduler):
                     itspace[r_r] = r_size_ofs
                 l_size_ofs = itspace[r_r]
                 if isinstance(node, (Prod, Div)):
-                    to_intersect = itertools.product(l_size_ofs, r_size_ofs)
-                    bounds = [ItSpace(mode=1).intersect(b) for b in to_intersect]
+                    to_intersect = product(l_size_ofs, r_size_ofs)
+                    size_ofs = [ItSpace(mode=1).intersect(b) for b in to_intersect]
                 elif isinstance(node, (Sum, Sub)):
-                    bounds = ItSpace(mode=1).merge(l_size_ofs + r_size_ofs)
+                    size_ofs = ItSpace(mode=1).merge(l_size_ofs + r_size_ofs)
                 else:
                     raise RuntimeError("Zero-avoidance: unexpected op %s", str(node))
-                itspace[r_r] = bounds
+                itspace[r_r] = size_ofs
             return itspace
 
     def _track_nz_blocks(self, node, nz_in_syms, nz_info, nest=None, parent=None):
@@ -623,39 +583,47 @@ class ZeroRemover(LoopScheduler):
             loops, loops_parents = zip(*nest)
             fissioned_nests = defaultdict(list)
             # Fission the nest to get rid of computation over zero-valued blocks
-            for stmt, itspace in stmt_itspaces:
-                nz_bounds_list = [i for i in itertools.product(*itspace.values())]
-                for nz_bounds in nz_bounds_list:
-                    dim_nz_bounds = zip(itspace.keys(), nz_bounds)
-                    if not dim_nz_bounds:
-                        # If no non_zero bounds, reuse the existing loop nest
-                        dim_nz_bounds = ItSpace(mode=1).from_for(loops)
-                    size, offset = self._create_itspace(stmt, loops,
-                                                        dict(dim_nz_bounds),
-                                                        nz_in_syms)
+            for stmt, itspaces in stmt_itspaces:
+                sym, expr = stmt.children
+                # For each non zero-valued region iterated over...
+                for dim_size_ofs in [zip(itspaces, x) for x in product(*itspaces.values())]:
+                    dim_offset = dict([(d, o) for d, (sz, o) in dim_size_ofs])
+                    dim_size = tuple([((0, sz), d) for d, (sz, o) in dim_size_ofs])
+                    # ...add an offset to /stmt/ to access the correct values
                     new_stmt = dcopy(stmt)
-                    fissioned_nests[size].append((new_stmt, dict(offset)))
+                    ast_update_ofs(new_stmt, dim_offset, increase=True)
+                    # ...add /stmt/ to a new, shorter loop nest
+                    fissioned_nests[dim_size].append((new_stmt, dim_offset))
+                    # ...initialize arrays to 0.0 for correctness
+                    if sym.symbol in self.hoisted:
+                        self.hoisted[sym.symbol].decl.init = ArrayInit("{0.0}")
+                    # ...track fissioned expressions
                     if stmt in self.exprs:
                         track_exprs[new_stmt] = self.exprs[stmt]
             # Generate the fissioned loop nests
-            # The dictionary is sorted because we must first execute smaller
-            # nests, since larger ones may depend on them
-            for itspace, stmt_offset in sorted(fissioned_nests.items()):
-                nests_info, inner_block = ItSpace(mode=0).to_for(itspace, root)
-                for stmt, offset in stmt_offset:
-                    ast_update_ofs(stmt, offset)
-                    self._init_decl_to_zero(stmt, nz_in_syms, offset, itspace)
-                    inner_block.children.append(stmt)
-                    # Update expressions and hoisting-related information
+            # Note: the dictionary is sorted because smaller loop nests should
+            # be executed first, since larger ones depend on them
+            for dim_size, stmt_dim_offsets in sorted(fissioned_nests.items()):
+                if all([sz == (0, 0) for sz, dim in dim_size]):
+                    # Discard empty loop nests
+                    continue
+                # Create the new loop nest
+                new_loops = ItSpace(mode=0).to_for(*zip(*dim_size))
+                for stmt, _ in stmt_dim_offsets:
+                    # Now populate it
+                    new_loops[-1].body.append(stmt)
+                    # Update tracked information
                     if stmt in track_exprs:
+                        new_nest = zip(new_loops, loops_parents)
                         self.exprs[stmt] = copy_metaexpr(track_exprs[stmt],
-                                                         parent=inner_block,
-                                                         loops_info=nests_info)
+                                                         parent=new_loops[-1].body,
+                                                         loops_info=new_nest)
                     self.hoisted.update_stmt(stmt.children[0].symbol,
-                                             loop=nests_info[0][0], place=root)
-                new_nz_info[nests_info[-1][0]] = stmt_offset
+                                             loop=new_loops[0],
+                                             place=loops_parents[0])
+                new_nz_info[new_loops[-1]] = stmt_dim_offsets
                 # Append the created loops to the root
-                insert_at_elem(loops_parents[0].children, loops[0], nests_info[0][0])
+                insert_at_elem(loops_parents[0].children, loops[0], new_loops[0])
             loops_parents[0].children.remove(loops[0])
 
         return new_nz_info

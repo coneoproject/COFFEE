@@ -607,27 +607,18 @@ class ItSpace():
         itspace = self._convert_from_mode0(itspaces)[0]
         return itspace
 
-    def to_for(self, itspaces, loop_parent):
-        """Given an iterator of iteration spaces, each iteration space being
-        a 2-tuple containing the start and the end point, return a 2-tuple
-        ``(loops_info, inner_block)``, in which ``loops_info`` represents the
-        loop nest enclosing ``inner_block``."""
+    def to_for(self, itspaces, dims):
+        """Create ``For`` objects starting from an iteration space."""
         itspaces = self._convert_to_mode0(itspaces)
 
-        inner_block = Block([], open_scope=True)
-        loops, loops_parents = [], [loop_parent]
-        loop_body = inner_block
-        for i, itspace in enumerate(reversed(itspaces)):
-            start, stop = itspace
-            loops.insert(0, For(Decl("int", start, Symbol(0)), Less(start, stop),
-                                Incr(start, Symbol(1)), loop_body))
-            loop_body = Block([loops[i-1]], open_scope=True)
-            loops_parents.append(loop_body)
-        # Note that #loops_parents = #loops+1, but by zipping we just cut away the
-        # last entry in loops_parents
-        loops_info = zip(loops, loops_parents)
+        loops = []
+        body = Block([], open_scope=True)
+        for (start, stop), dim in zip(itspaces, dims):
+            new_for = For(Decl("int", dim, start), Less(dim, stop), Incr(dim, 1), body)
+            loops.insert(0, new_for)
+            body = Block([new_for], open_scope=True)
 
-        return (tuple(loops_info), inner_block)
+        return loops
 
     def from_for(self, loops):
         """Given an iterator of for ``loops``, return a tuple that rather contains

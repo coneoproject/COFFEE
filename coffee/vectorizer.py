@@ -237,10 +237,10 @@ class LoopVectorizer(object):
             alignable_stmts = []
             read_regions = defaultdict(list)
             nz_info_l = self.loop_opt.nz_info.get(l, [])
-            for stmt, ofs in nz_info_l:
+            for stmt, dim_offset in nz_info_l:
                 expr = dcopy(stmt.children[1])
                 ast_update_ofs(expr, dict([(l.dim, 0)]))
-                l_ofs = dict(ofs)[l.dim]
+                l_ofs = dim_offset[l.dim]
                 # The statement can be aligned only if the new start and end
                 # points cover the whole iteration space. Also, the padded
                 # region cannot be exceeded.
