@@ -361,50 +361,6 @@ class CPULoopOptimizer(LoopOptimizer):
                     unrolled_loops.add(loop)
             self.exprs.update(new_exprs)
 
-    def permute(self, transpose=False):
-        """Permute the outermost loop with the innermost loop in the loop nest.
-        This transformation is legal if ``_precompute`` was invoked. Storage layout of
-        all 2-dimensional arrays involved in the element matrix computation is
-        transposed."""
-
-        def transpose_layout(node, transposed, to_transpose):
-            """Transpose the storage layout of symbols in ``node``. If the symbol is
-            in a declaration, then its statically-known size is transposed (e.g.
-            double A[3][4] -> double A[4][3]). Otherwise, its iteration variables
-            are swapped (e.g. A[i][j] -> A[j][i]).
-
-            If ``to_transpose`` is empty, then all symbols encountered in the traversal of
-            ``node`` are transposed. Otherwise, only symbols in ``to_transpose`` are
-            transposed."""
-            if isinstance(node, Symbol):
-                if not to_transpose:
-                    transposed.add(node.symbol)
-                elif node.symbol in to_transpose:
-                    node.rank = (node.rank[1], node.rank[0])
-            elif isinstance(node, Decl):
-                transpose_layout(node.sym, transposed, to_transpose)
-            elif isinstance(node, FlatBlock):
-                return
-            else:
-                for n in node.children:
-                    transpose_layout(n, transposed, to_transpose)
-
-        # Check if the outermost loop is perfect, otherwise avoid permutation
-        if not is_perfect_loop(self.loop):
-            return
-
-        # Get the innermost loop and swap it with the outermost
-        inner_loop = inner_loops(self.loop)[0]
-
-        tmp = dcopy(inner_loop)
-        itspace_copy(self.loop, inner_loop)
-        itspace_copy(tmp, self.loop)
-
-        to_transpose = set()
-        if transpose:
-            transpose_layout(inner_loop, to_transpose, set())
-            transpose_layout(self.header, set(), to_transpose)
-
     def split(self, cut=1):
         """Split expressions into multiple chunks exploiting sum's associativity.
         Each chunk will have ``cut`` summands.
