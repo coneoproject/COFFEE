@@ -291,20 +291,22 @@ class SparseArrayInit(ArrayInit):
         :type precision: integer (defaults to 12)
         :arg nonzero: track a non-zero valued block in the initializer
         :type nonzero: an n-tuple, where n is the rank of the tensor initialized.
-            Each entry is a list of 2-tuple. A 2-tuple reprsents a "panel" of
-            zero-values in the array. For example, consider the following array: ::
+            Each entry is a list of 2-tuple. A 2-tuple represents a "panel" of
+            non zero-values in the array by indicating 1) size of the region and
+            2) offset from the start. For example, consider the following: ::
 
                 A[4][3] = {{0, 0, 0},
+                           {2, 1, 0},
                            {2, 1, 0},
                            {0, 0, 0},
                            {3, 3, 0}}
 
             then, ``nonzero`` takes the following form: ::
 
-                nonzero = ([(1, 2), (3, 4)], [(0, 2)])
+                nonzero = ([(2, 1), (1, 4)], [(2, 0)])
 
-            since there are two non-contiguous rows (rows 1 and 3) and one panel
-            (columns 0 and 1) of non-zero valued data
+            since there are two non-contiguous groups of non zero-valued rows
+            (1-2 and 3) and one group of non zero-valued columns
         """
         super(SparseArrayInit, self).__init__(values, precision)
         self.nonzero = nonzero
