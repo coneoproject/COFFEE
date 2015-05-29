@@ -349,25 +349,22 @@ def ast_make_alias(node1, node2):
 
 
 def ast_make_copy(arr1, arr2, itspace, op):
-    """Create an AST performing a copy from ``arr2`` to ``arr1``.
-    Return also an ``ArrayInit`` object indicating how ``arr1`` should be
-    initialized prior to the copy."""
-    init = ArrayInit("0.0")
-    if op == Assign:
-        init = EmptyStatement()
+    """Create an AST that copies values in ``arr2`` into ``arr1``. Also, return
+    an ``ArrayInit`` object to initialize ``arr1`` before the copy."""
     rank = ()
+    init = ArrayInit("0.0") if not op == Assign else EmptyStatement()
     for i, (start, end) in enumerate(itspace):
         rank += ("i%d" % i,)
+        if isinstance(init, ArrayInit):
+            init.values = "{%s}" % init.values
     arr1, arr2 = dcopy(arr1), dcopy(arr2)
     body = []
     for a1, a2 in zip(arr1, arr2):
         a1.rank, a2.rank = rank, a2.rank[:-len(rank)] + rank
         body.append(op(a1, a2))
-    for i, (start, end) in enumerate(itspace):
-        if isinstance(init, ArrayInit):
-            init.values = "{%s}" % init.values
-        body = c_for(rank[i], end, body, pragma="", init=start)
-    return body, init
+    loops = ItSpace(mode=0).to_for(itspace, rank)
+    loops[-1].body = body
+    return loops[0], init
 
 
 ###########################################################
@@ -612,7 +609,7 @@ class ItSpace():
 
         loops = []
         body = Block([], open_scope=True)
-        for (start, stop), dim in zip(itspaces, dims):
+        for (start, stop), dim in reversed(zip(itspaces, dims)):
             new_for = For(Decl("int", dim, start), Less(dim, stop), Incr(dim, 1), body)
             loops.insert(0, new_for)
             body = Block([new_for], open_scope=True)

@@ -194,7 +194,7 @@ class LoopVectorizer(object):
                 s_refs, b_refs = zip(*binding)
                 if first[0] == READ:
                     copy, init = ast_make_copy(b_refs, s_refs, s_p_itspace, Assign)
-                    header.children.insert(0, copy.children[0])
+                    header.children.insert(0, copy)
                 if last[0] == WRITE:
                     # If extra information (i.e., a pragma) is present telling that
                     # the argument does not need to be incremented because it does
@@ -208,9 +208,9 @@ class LoopVectorizer(object):
                         op = Assign
                     copy, init = ast_make_copy(s_refs, b_refs, s_p_itspace, op)
                     if to_invert:
-                        insert_at_elem(header.children, to_invert, copy.children[0])
+                        insert_at_elem(header.children, to_invert, copy)
                     else:
-                        header.children.append(copy.children[0])
+                        header.children.append(copy)
             # Update the global data structure
             decls[buffer.sym.symbol] = buffer
             buffers.append(buffer)

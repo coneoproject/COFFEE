@@ -429,7 +429,7 @@ class ZeroRemover(LoopScheduler):
         """
 
         if isinstance(node, Symbol):
-            itspace = OrderedDict({l.dim: [(l.size, 0)] for l, _ in nest})
+            itspace = OrderedDict([(l.dim, [(l.size, 0)]) for l, p in nest])
             nz_bounds = nz_in_syms.get(node.symbol, ())
             for r, o, nz_bs in zip(node.rank, node.offset, nz_bounds):
                 if o[0] != 1:
@@ -459,7 +459,7 @@ class ZeroRemover(LoopScheduler):
             itspace_l = self._track_nz_expr(node.left, nz_in_syms, nest)
             itspace_r = self._track_nz_expr(node.right, nz_in_syms, nest)
             # Take the intersection of the iteration spaces
-            itspace = {}
+            itspace = OrderedDict()
             itspace.update(itspace_l)
             for r_r, r_size_ofs in itspace_r.items():
                 if not r_r in itspace:
