@@ -134,6 +134,7 @@ class LoopVectorizer(object):
         #       A[i][j] = _A[i][j]
         #
         # Also, extra care is taken in presence of offsets (e.g. A[i+3][j+3] ...)
+        buffers = []
         for decl in decls.values():
             if not decl.sym.rank:
                 continue
@@ -212,70 +213,62 @@ class LoopVectorizer(object):
                         header.children.append(copy.children[0])
             # Update the global data structure
             decls[buffer.sym.symbol] = buffer
+            buffers.append(buffer)
 
         # 2) Try adjusting the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
         iloops = inner_loops(header)
-        adjusted_loops = []
-        for l in iloops:
+        for l, stmt_dim_offset in self.loop_opt.nz_info.items():
+            if l not in iloops:
+                continue
             adjust = True
-            for stmt in l.body:
-                sym = stmt.children[0]
-                # Cond A- all lvalues must have as fastest varying dimension the
-                # one dictated by the innermost loop
+            read_regions = defaultdict(list)
+            alignable_stmts = []
+            for stmt, dim_offset in stmt_dim_offset:
+                sym, expr = stmt.children
+                # Condition A) all lvalues must have the innermost loop as fastest
+                # varying dimension
                 if not (sym.rank and sym.rank[-1] == l.dim):
                     adjust = False
                     break
-                # Cond B- all lvalues must be paddable; that is, they cannot be
+                # Condition B) all lvalues must be paddable; that is, they cannot be
                 # kernel parameters
                 if sym.symbol in decls and decls[sym.symbol].scope == EXTERNAL:
                     adjust = False
                     break
-            # Cond C- the extra iterations induced by bounds adjustment must not
-            # alter the result. This is the case if they fall either in a padded
-            # region or in a zero-valued region
-            alignable_stmts = []
-            read_regions = defaultdict(list)
-            nz_info_l = self.loop_opt.nz_info.get(l, [])
-            for stmt, dim_offset in nz_info_l:
-                expr = dcopy(stmt.children[1])
-                ast_update_ofs(expr, dict([(l.dim, 0)]))
-                l_ofs = dim_offset[l.dim]
-                # The statement can be aligned only if the new start and end
-                # points cover the whole iteration space. Also, the padded
-                # region cannot be exceeded.
-                start_point = vect_rounddown(l_ofs)
-                end_point = start_point + vect_roundup(l.end)  # == tot iters
-                if end_point >= l_ofs + l.end:
-                    alignable_stmts.append((stmt, dict([(l.dim, start_point)])))
-                read_regions[str(expr)].append((start_point, end_point))
+                # Condition C) extra iterations induced by bounds adjustment must not
+                # alter the result. This is the case if they fall either in a padded
+                # region or in a zero-valued region
+                start = vect_rounddown(dim_offset[l.dim])
+                end = start + vect_roundup(l.end)  # == tot iters
+                if end >= dim_offset[l.dim] + l.end:
+                    alignable_stmts.append((stmt, {l.dim: start}))
+                expr = ast_update_ofs(dcopy(expr), {l.dim: 0})
+                read_regions[str(expr)].append((start, end))
             for rr in read_regions.values():
                 if len(ItSpace(mode=0).merge(rr)) < len(rr):
                     # Bound adjustment causes overlapping, so give up
                     adjust = False
                     break
-            # Conditions checked, if both passed then adjust loop and offsets
+            # Conditions checked, if all passed align loop and add offsets
             if adjust:
                 # Adjust end point
                 l.cond.children[1] = Symbol(vect_roundup(l.end))
                 # Adjust start points
                 for stmt, ofs in alignable_stmts:
-                    ast_update_ofs(stmt, ofs)
-                # If all statements were successfully aligned, then put a
-                # suitable pragma to tell the compiler
-                if len(alignable_stmts) == len(nz_info_l):
-                    adjusted_loops.append(l)
+                    sym, expr = stmt.children
+                    to_adjust = stmt
+                    if decls[sym.symbol] in buffers:
+                        to_adjust = expr
+                    ast_update_ofs(to_adjust, ofs)
+                # If all statements were successfully aligned, then put a pragma
+                # to tell the compiler
+                if len(alignable_stmts) == len(stmt_dim_offset):
+                    if not (l.start % plan.isa["dp_reg"] and l.size % plan.isa["dp_reg"]):
+                        l.pragma.add(plan.compiler["decl_aligned_for"])
                 # Successful bound adjustment allows forcing simdization
                 if plan.compiler.get('force_simdization'):
                     l.pragma.add(plan.compiler['force_simdization'])
-
-        # 3) Adding pragma alignment is safe iff:
-        # A- the start point of the loop is a multiple of the vector length
-        # B- the size of the loop is a multiple of the vector length (note that
-        #    at this point, we have already checked the loop increment is 1)
-        for l in adjusted_loops:
-            if not (l.start % plan.isa["dp_reg"] and l.size % plan.isa["dp_reg"]):
-                l.pragma.add(plan.compiler["decl_aligned_for"])
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar

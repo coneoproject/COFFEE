@@ -590,8 +590,7 @@ class ZeroRemover(LoopScheduler):
                     dim_offset = dict([(d, o) for d, (sz, o) in dim_size_ofs])
                     dim_size = tuple([((0, sz), d) for d, (sz, o) in dim_size_ofs])
                     # ...add an offset to /stmt/ to access the correct values
-                    new_stmt = dcopy(stmt)
-                    ast_update_ofs(new_stmt, dim_offset, increase=True)
+                    new_stmt = ast_update_ofs(dcopy(stmt), dim_offset, increase=True)
                     # ...add /stmt/ to a new, shorter loop nest
                     fissioned_nests[dim_size].append((new_stmt, dim_offset))
                     # ...initialize arrays to 0.0 for correctness

@@ -261,6 +261,8 @@ def ast_update_ofs(node, ofs, **kwargs):
             new_offset.append((o[0], new_o))
         s.offset = tuple(new_offset)
 
+    return node
+
 
 def ast_update_rank(node, new_rank):
     """Given a dictionary ``new_rank`` s.t. ``{'sym': new_dim}``, update the
