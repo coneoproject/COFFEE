@@ -217,35 +217,46 @@ class LoopVectorizer(object):
 
         # 2) Try adjusting the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
-        iloops = inner_loops(header)
-        for l, stmt_dim_offset in self.loop_opt.nz_info.items():
-            if l not in iloops:
-                continue
+        for l in inner_loops(header):
             adjust = True
-            read_regions = defaultdict(list)
-            alignable_stmts = []
-            for stmt, dim_offset in stmt_dim_offset:
+            # Condition A: all lvalues must have the innermost loop as fastest
+            # varying dimension
+            # Condition B: all lvalues must be paddable; that is, they cannot be
+            # kernel parameters
+            for stmt in l.body:
                 sym, expr = stmt.children
-                # Condition A) all lvalues must have the innermost loop as fastest
-                # varying dimension
+                # Check A
                 if not (sym.rank and sym.rank[-1] == l.dim):
                     adjust = False
                     break
-                # Condition B) all lvalues must be paddable; that is, they cannot be
-                # kernel parameters
+                # Check B
                 if sym.symbol in decls and decls[sym.symbol].scope == EXTERNAL:
                     adjust = False
                     break
-                # Condition C) extra iterations induced by bounds adjustment must not
-                # alter the result. This is the case if they fall either in a padded
-                # region or in a zero-valued region
+            # Condition C: all statements using offsets writing to buffers cannot
+            # be aligned
+            # Condition D: extra iterations induced by bounds adjustment must /not/
+            # alter the result. This is the case if:
+            # * they access padded regions, or
+            # * they access zero-valued regions
+            read_regions = defaultdict(list)
+            alignable_stmts = []
+            for stmt, dim_offset in self.loop_opt.nz_info.get(l, []):
+                sym, expr = stmt.children
+                # Check C
+                if decls.get(sym.symbol) in buffers and dim_offset[l.dim] > 0:
+                    adjust = False
+                    break
                 start = vect_rounddown(dim_offset[l.dim])
                 end = start + vect_roundup(l.end)  # == tot iters
                 if end >= dim_offset[l.dim] + l.end:
+                    # Despite lowering the start point, we will still execute the
+                    # iterations we are supposed to execute, so /stmt/ is alignable
                     alignable_stmts.append((stmt, {l.dim: start}))
                 expr = ast_update_ofs(dcopy(expr), {l.dim: 0})
                 read_regions[str(expr)].append((start, end))
             for rr in read_regions.values():
+                # Check D
                 if len(ItSpace(mode=0).merge(rr)) < len(rr):
                     # Bound adjustment causes overlapping, so give up
                     adjust = False
@@ -256,14 +267,10 @@ class LoopVectorizer(object):
                 l.cond.children[1] = Symbol(vect_roundup(l.end))
                 # Adjust start points
                 for stmt, ofs in alignable_stmts:
-                    sym, expr = stmt.children
-                    to_adjust = stmt
-                    if decls[sym.symbol] in buffers:
-                        to_adjust = expr
-                    ast_update_ofs(to_adjust, ofs)
+                    ast_update_ofs(stmt, ofs)
                 # If all statements were successfully aligned, then put a pragma
                 # to tell the compiler
-                if len(alignable_stmts) == len(stmt_dim_offset):
+                if len(alignable_stmts) == len(l.body):
                     if not (l.start % plan.isa["dp_reg"] and l.size % plan.isa["dp_reg"]):
                         l.pragma.add(plan.compiler["decl_aligned_for"])
                 # Successful bound adjustment allows forcing simdization
