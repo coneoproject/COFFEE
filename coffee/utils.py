@@ -620,25 +620,6 @@ class ItSpace():
 
         return loops
 
-    def from_for(self, loops):
-        """Given an iterator of for ``loops``, return a tuple that rather contains
-        the iteration space of each loop, i.e. given: ::
-
-            [for1, for2, ...]
-
-        If ``mode == 0``, return: ::
-
-            ((start1, bound1, increment1), (start2, bound2, increment2), ...)
-
-        If ``mode > 0``, return: ::
-
-            ((for1_dim, (start1, topiter1)), (for2_dim, (start2, topiter2):, ...)
-        """
-        if self.mode == 0:
-            return tuple((l.start, l.end, l.increment) for l in loops)
-        else:
-            return tuple((l.dim, (l.start, l.end - 1)) for l in loops)
-
 
 #############################
 # Generic utility functions #

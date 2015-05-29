@@ -723,7 +723,10 @@ class For(Statement):
 
     @property
     def start(self):
-        return self.init.init.symbol
+        if isinstance(self.init, Decl):
+            return self.init.init.symbol
+        elif isinstance(self.init, Assign):
+            return self.init.children[1]
 
     @property
     def end(self):
@@ -736,6 +739,10 @@ class For(Statement):
     @property
     def increment(self):
         return self.incr.children[1].symbol
+
+    @property
+    def header(self):
+        return (self.start, self.size, self.increment)
 
     @property
     def body(self):

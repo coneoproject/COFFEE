@@ -144,7 +144,7 @@ class SSALoopMerger(LoopScheduler):
                     loops, loops_parents = zip(*li)
                     # Note that only inner loops can be fused, and that they share
                     # the same parent
-                    key = (ItSpace(mode=0).from_for(loops), loops_parents[-1])
+                    key = (tuple(l.header for l in loops), loops_parents[-1])
                     found_nests[key].append(loops[-1])
 
         all_merged = []

@@ -160,7 +160,7 @@ class LoopVectorizer(object):
                 ofs = s.offset[-1][1] if s.offset else 0
                 # ... the iteration space
                 s_itspace = [l for l in symbols_dep[s] if l.dim in s.rank]
-                s_itspace = tuple((s, e) for s, e, _ in ItSpace(mode=0).from_for(s_itspace))
+                s_itspace = tuple((l.start, l.end) for l in s_itspace)
                 s_p_itspace = s_itspace[p_dim]
                 # ... combining the last two, the actual dataspace
                 if decl.sym.rank[p_dim] != buf_rank[p_dim] or isinstance(ofs, Symbol) \
