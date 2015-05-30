@@ -348,25 +348,6 @@ def ast_make_alias(node1, node2):
     return node1
 
 
-def ast_make_copy(arr1, arr2, itspace, op):
-    """Create an AST that copies values in ``arr2`` into ``arr1``. Also, return
-    an ``ArrayInit`` object to initialize ``arr1`` before the copy."""
-    rank = ()
-    init = ArrayInit("0.0") if not op == Assign else EmptyStatement()
-    for i, (start, end) in enumerate(itspace):
-        rank += ("i%d" % i,)
-        if isinstance(init, ArrayInit):
-            init.values = "{%s}" % init.values
-    arr1, arr2 = dcopy(arr1), dcopy(arr2)
-    body = []
-    for a1, a2 in zip(arr1, arr2):
-        a1.rank, a2.rank = rank, a2.rank[:-len(rank)] + rank
-        body.append(op(a1, a2))
-    loops = ItSpace(mode=0).to_for(itspace, rank)
-    loops[-1].body = body
-    return loops[0], init
-
-
 ###########################################################
 # Functions to visit and to query properties of AST nodes #
 ###########################################################
@@ -538,13 +519,13 @@ class ItSpace():
         """Initialize an ItSpace object.
 
         :arg mode: Establish how an interation space is represented.
-        :type mode: integer, either 0 (default) or 1:
-            * 0: an iteration space is a 2-tuple indicating the bounds of the
-                accessed region
-            * 1: an iteration space is a 2-tuple indicating size and offset of
-                the accessed region
+        :type mode: integer, allowed [0 (default), 1, 2]; respectively, an
+            iteration space is represented as:
+                * 0: a 2-tuple indicating the bounds of the accessed region
+                * 1: a 2-tuple indicating size and offset of the accessed region
+                * 2: a For loop object
         """
-        assert mode in [0, 1], "Invalid mode for ItSpace()"
+        assert mode in [0, 1, 2], "Invalid mode for ItSpace()"
         self.mode = mode
 
     def _convert_to_mode0(self, itspaces):
@@ -552,12 +533,16 @@ class ItSpace():
             return itspaces
         elif self.mode == 1:
             return [(ofs, ofs+size) for size, ofs in itspaces]
+        elif self.mode == 2:
+            return [(l.start, l.end) for l in itspaces]
 
     def _convert_from_mode0(self, itspaces):
         if self.mode == 0:
             return itspaces
         elif self.mode == 1:
             return [(end-start, start) for start, end in itspaces]
+        elif self.mode == 2:
+            raise RuntimeError("Cannot convert from mode=0 to mode=2")
 
     def merge(self, itspaces):
         """Merge contiguous, possibly overlapping iteration spaces.
@@ -603,12 +588,17 @@ class ItSpace():
         itspace = self._convert_from_mode0(itspaces)[0]
         return itspace
 
-    def to_for(self, itspaces, dims):
+    def to_for(self, itspaces, dims=None, stmts=None):
         """Create ``For`` objects starting from an iteration space."""
+        if not dims and self.mode == 2:
+            dims = [l.dim for l in itspaces]
+        elif not dims:
+            dims = ['i%d' % i for i, j in enumerate(itspaces)]
+
         itspaces = self._convert_to_mode0(itspaces)
 
         loops = []
-        body = Block([], open_scope=True)
+        body = Block(stmts or [], open_scope=True)
         for (start, stop), dim in reversed(zip(itspaces, dims)):
             new_for = For(Decl("int", dim, start), Less(dim, stop), Incr(dim, 1), body)
             loops.insert(0, new_for)
