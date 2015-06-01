@@ -250,7 +250,7 @@ class LoopVectorizer(object):
         # 2) Round up the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
         for l in inner_loops(header):
-            should_round = True
+            should_round, should_vectorize = True, True
             # Condition A: all lvalues must have the innermost loop as fastest
             # varying dimension
             # Condition B: all lvalues must be paddable; that is, they cannot be
@@ -260,6 +260,7 @@ class LoopVectorizer(object):
                 # Check A
                 if not (sym.rank and sym.rank[-1] == l.dim):
                     should_round = False
+                    should_vectorize = False
                     break
                 # Check B
                 if sym.symbol in decls and decls[sym.symbol].scope == EXTERNAL:
@@ -302,11 +303,12 @@ class LoopVectorizer(object):
                     ast_update_ofs(stmt, offset)
                 # If all statements were successfully aligned, then put a pragma
                 # to tell the compiler
-                if len(alignable_stmts) == len(nz_info_l):
-                    if not (l.start % vector_length and l.size % vector_length):
-                        l.pragma.add(plan.compiler["align_forloop"])
+                if len(alignable_stmts) == len(nz_info_l) and \
+                        l.start % vector_length == 0 and \
+                        l.size % vector_length == 0:
+                    l.pragma.add(plan.compiler["align_forloop"])
             # Enforce vectorization if loop size is a multiple of the vector length
-            if not l.size % vector_length:
+            if should_vectorize and l.size % vector_length == 0:
                 l.pragma.add(plan.compiler['force_simdization'])
 
     def specialize(self, opts, factor=1):
