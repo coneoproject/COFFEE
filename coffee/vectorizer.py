@@ -154,7 +154,7 @@ class LoopVectorizer(object):
                 decl.attr.append(align_attr)
                 continue
             # Examined symbol is a FunDecl argument, so a buffer might be required
-            acc_modes, all_dataspaces, p_info = [], defaultdict(list), defaultdict(list)
+            acc_modes, all_dataspaces, p_info = [], defaultdict(list), OrderedDict()
             # A- Analyze occurrences of the FunDecl argument in the AST
             for s, _ in symbol_refs[decl_name]:
                 if s is decl.sym or not s.rank:
@@ -171,7 +171,7 @@ class LoopVectorizer(object):
                     offset = s.offset[index][1]
                     dataspace[index] = (l.start + offset, l.end + offset)
                 all_dataspaces[loops].append(tuple(dataspace))
-                p_info[(loops, p_offset)].append(s)
+                p_info.setdefault((loops, p_offset), []).append(s)
             # B- Extra care if dataspaces overlap, otherwise code might break
             will_break = False
             for loops, dataspaces in all_dataspaces.items():
@@ -215,7 +215,7 @@ class LoopVectorizer(object):
                 continue
             buf_rank = (buf_rank,) + p_rank
             init = ArrayInit(np.ndarray(shape=(1,)*len(buf_rank), buffer=np.array(0.0)))
-            buffer = Decl(decl.typ, Symbol(buf_name, buf_rank), init)
+            buffer = Decl(decl.typ, Symbol(buf_name, buf_rank), init, attributes=[align_attr])
             buffer.scope = LOCAL
             buffer.sym.rank = tuple(buffer.sym.rank)
             header.children.insert(0, buffer)
