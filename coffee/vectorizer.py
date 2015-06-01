@@ -126,6 +126,9 @@ class LoopVectorizer(object):
         symbol_refs = info['symbol_refs']
         retval = FindInstances.default_retval()
         to_invert = FindInstances(Invert).visit(header, ret=retval)[Invert]
+        # Vectorization aliases
+        vector_length = plan.isa["dp_reg"]
+        align_attr = plan.compiler['align'](plan.isa['alignment'])
 
         # 0) Under some circumstances, do not pad
         # A- Loop increments must be equal to 1, because at the moment the
@@ -148,7 +151,7 @@ class LoopVectorizer(object):
                     # Padding
                     decl.sym.rank = p_rank
                 # Alignment
-                decl.attr.append(plan.compiler['align'](plan.isa['alignment']))
+                decl.attr.append(align_attr)
                 continue
             # Examined symbol is a FunDecl argument, so a buffer might be required
             acc_modes, all_dataspaces, p_info = [], defaultdict(list), defaultdict(list)
@@ -247,7 +250,7 @@ class LoopVectorizer(object):
         # 2) Round up the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
         for l in inner_loops(header):
-            adjust = True
+            should_round = True
             # Condition A: all lvalues must have the innermost loop as fastest
             # varying dimension
             # Condition B: all lvalues must be paddable; that is, they cannot be
@@ -256,25 +259,25 @@ class LoopVectorizer(object):
                 sym, expr = stmt.children
                 # Check A
                 if not (sym.rank and sym.rank[-1] == l.dim):
-                    adjust = False
+                    should_round = False
                     break
                 # Check B
                 if sym.symbol in decls and decls[sym.symbol].scope == EXTERNAL:
-                    adjust = False
+                    should_round = False
                     break
             # Condition C: all statements using offsets writing to buffers cannot
             # be aligned
-            # Condition D: extra iterations induced by bounds adjustment must /not/
-            # alter the result. This is the case if:
+            # Condition D: extra iterations induced by bounds and offset rounding
+            # should /not/ alter the result. This is the case if:
             # * they access padded regions, or
             # * they access zero-valued regions
             read_regions = defaultdict(list)
-            alignable_stmts = []
-            for stmt, dim_offset in self.loop_opt.nz_info.get(l, []):
+            alignable_stmts, nz_info_l = [], self.loop_opt.nz_info.get(l, [])
+            for stmt, dim_offset in nz_info_l:
                 sym, expr = stmt.children
                 # Check C
                 if decls.get(sym.symbol) in buffers and dim_offset[l.dim] > 0:
-                    adjust = False
+                    should_round = False
                     break
                 start = vect_rounddown(dim_offset[l.dim])
                 end = start + vect_roundup(l.end)  # == tot iters
@@ -287,24 +290,24 @@ class LoopVectorizer(object):
             for rr in read_regions.values():
                 # Check D
                 if len(ItSpace(mode=0).merge(rr)) < len(rr):
-                    # Bound adjustment causes overlapping, so give up
-                    adjust = False
+                    # Bounds and offset rounding cause overlap, give up
+                    should_round = False
                     break
             # Conditions checked, if all passed align loop and add offsets
-            if adjust:
-                # Adjust end point
-                l.cond.children[1] = Symbol(vect_roundup(l.end))
-                # Adjust start points
+            if should_round:
+                # Round up end point
+                l.end = vect_roundup(l.end)
+                # Round up/down offsets
                 for stmt, offset in alignable_stmts:
                     ast_update_ofs(stmt, offset)
                 # If all statements were successfully aligned, then put a pragma
                 # to tell the compiler
-                if len(alignable_stmts) == len(l.body):
-                    if not (l.start % plan.isa["dp_reg"] and l.size % plan.isa["dp_reg"]):
+                if len(alignable_stmts) == len(nz_info_l):
+                    if not (l.start % vector_length and l.size % vector_length):
                         l.pragma.add(plan.compiler["decl_aligned_for"])
-                # Successful bound adjustment allows forcing simdization
-                if plan.compiler.get('force_simdization'):
-                    l.pragma.add(plan.compiler['force_simdization'])
+            # Enforce vectorization if loop size is a multiple of the vector length
+            if plan.compiler.get('force_simdization') and not l.size % vector_length:
+                l.pragma.add(plan.compiler['force_simdization'])
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar
@@ -362,13 +365,11 @@ class LoopVectorizer(object):
                 # Adjust bounds and increments of the main, layout and remainder loops
                 domain_outerloop = domain_loops[0]
                 peel_loop = dcopy(domain_loops)
-                bound = domain_outerloop.cond.children[1].symbol
+                bound = domain_outerloop.end
                 bound -= bound % rows_per_it
-                domain_outerloop.cond.children[1] = Symbol(bound)
-                layout.cond.children[1] = Symbol(bound)
+                domain_outerloop.end, layout.end = bound, bound
                 peel_loop[0].init.init = Symbol(bound)
-                peel_loop[0].incr.children[1] = Symbol(1)
-                peel_loop[1].incr.children[1] = Symbol(1)
+                peel_loop[0].increment, peel_loop[1].increment = 1, 1
                 # Append peeling loop after the main loop
                 domain_outerparent = domain_loops_parents[0].children
                 insert_at_elem(domain_outerparent, domain_outerloop, peel_loop[0], 1)

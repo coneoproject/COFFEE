@@ -732,6 +732,10 @@ class For(Statement):
     def end(self):
         return self.cond.children[1].symbol
 
+    @end.setter
+    def end(self, value):
+        self.cond.children[1] = as_symbol(value)
+
     @property
     def size(self):
         return self.cond.children[1].symbol - self.init.init.symbol
@@ -739,6 +743,10 @@ class For(Statement):
     @property
     def increment(self):
         return self.incr.children[1].symbol
+
+    @increment.setter
+    def increment(self, value):
+        self.incr.children[1] = as_symbol(value)
 
     @property
     def header(self):
