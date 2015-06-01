@@ -304,9 +304,9 @@ class LoopVectorizer(object):
                 # to tell the compiler
                 if len(alignable_stmts) == len(nz_info_l):
                     if not (l.start % vector_length and l.size % vector_length):
-                        l.pragma.add(plan.compiler["decl_aligned_for"])
+                        l.pragma.add(plan.compiler["align_forloop"])
             # Enforce vectorization if loop size is a multiple of the vector length
-            if plan.compiler.get('force_simdization') and not l.size % vector_length:
+            if not l.size % vector_length:
                 l.pragma.add(plan.compiler['force_simdization'])
 
     def specialize(self, opts, factor=1):
