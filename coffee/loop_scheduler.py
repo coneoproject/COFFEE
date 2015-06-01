@@ -476,8 +476,7 @@ class ZeroRemover(LoopScheduler):
             return itspace
 
     def _track_nz_blocks(self, node, nz_in_syms, nz_info, nest=None, parent=None):
-        """Track the propagation of zero blocks along the computation which is
-        rooted in ``node``.
+        """Track the propagation of zero-valued blocks in the AST rooted in ``node``
 
         ``nz_in_syms`` contains, for each known identifier, the ranges of
         its non zero-valued blocks. For example, assuming identifier A is an
@@ -540,8 +539,8 @@ class ZeroRemover(LoopScheduler):
             raise RuntimeError("Unexpected control flow while tracking zero blocks")
 
     def _reschedule_itspace(self, root):
-        """Consider two statements A and B, and their iteration spaces.
-        If the two iteration spaces have
+        """Consider two statements A and B, and their iteration space. If the
+        two iteration spaces have
 
         * Same size and same bounds, then put A and B in the same loop nest: ::
 
@@ -606,12 +605,12 @@ class ZeroRemover(LoopScheduler):
                 if all([sz == (0, 0) for sz, dim in dim_size]):
                     # Discard empty loop nests
                     continue
-                # Create the new loop nest
+                # Create the new loop nest ...
                 new_loops = ItSpace(mode=0).to_for(*zip(*dim_size))
                 for stmt, _ in stmt_dim_offsets:
-                    # Now populate it
+                    # ... populate it
                     new_loops[-1].body.append(stmt)
-                    # Update tracked information
+                    # ... and update tracked data
                     if stmt in track_exprs:
                         new_nest = zip(new_loops, loops_parents)
                         self.exprs[stmt] = copy_metaexpr(track_exprs[stmt],
@@ -621,7 +620,7 @@ class ZeroRemover(LoopScheduler):
                                              loop=new_loops[0],
                                              place=loops_parents[0])
                 new_nz_info[new_loops[-1]] = stmt_dim_offsets
-                # Append the created loops to the root
+                # Append the new loops to the root
                 insert_at_elem(loops_parents[0].children, loops[0], new_loops[0])
             loops_parents[0].children.remove(loops[0])
 
@@ -633,15 +632,14 @@ class ZeroRemover(LoopScheduler):
         starting from ``root``. Control flow, in the form of If, Switch, etc.,
         is forbidden."""
 
-        # Fission the known expressions to increase the impact of zero removal
+        # First, split expressions to maximize the impact of the transformation.
+        # This is because different summands may have zero-valued blocks at
+        # different offsets
         elf = ExpressionFissioner(cut=1)
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
                 continue
             elif expr_info.dimension > 1:
-                # Split expressions based on sum's associativity. This exposes more
-                # opportunities for rescheduling loops, since different summands
-                # may have zero-valued blocks at different offsets
                 self.exprs.pop(stmt)
                 self.exprs.update(elf.fission(stmt, expr_info, False))
 

@@ -58,7 +58,7 @@ class LoopOptimizer(object):
         # Track nonzero regions accessed in the loop nest
         self.nz_info = {}
         # Track data dependencies
-        self.expr_graph = ExpressionGraph(self.header)
+        self.expr_graph = ExpressionGraph(header)
         # Track hoisted expressions
         self.hoisted = StmtTracker()
 
@@ -82,19 +82,19 @@ class LoopOptimizer(object):
             * mode == 2: Apply four passes: generalized loop-invariant code motion;
                 expansion of inner-loop dependent expressions; factorization of
                 inner-loop dependent terms; generalized loop-invariant code motion.
-                Barely affects accuracy, improves performance while trying to
+                Factorization may affect accuracy. Improves performance while trying to
                 minimize temporary storage
-            * mode == 3: Apply four passes: generalized loop-invariant code motion
-                of outer-loop dependent expressions; expansion of inner-loop dependent
-                expressions; factorization of inner-loop dependent terms; 'aggressive'
+            * mode == 3: Apply seven passes: injection (or 'inlining') of loops in the
+                expressions. Expansion of inner-loops dependent terms. Factorization of
+                inner-loops dependent terms; generalized loop-invariant code motion of
+                outer-loop dependent terms. Reassociation, followed by 'aggressive'
                 generalized loop-invariant code motion (in which n-rank temporary
-                arrays can be allocated to keep expressions independent of more than
-                one loop). Due to hoisting less expressions, factorization can be
-                more aggressive, so accuracy can be more affected than in modes 0, 1,
-                and 2. This ``mode`` is ideal if one wants to precompute as much
-                expressions as possible outside the whole loop nest. Therefore, it is
-                recommended to execute a ``precompute`` pass after ``rewrite(mode=3)``.
-                This aggressively reduces flops, but also increases temporary storage
+                arrays can be allocated to host expressions independent of more than
+                one loop). The last pass, 'simplify', applies a few transformations,
+                including optimization of associative reductions. This sequence of
+                steps mimics the 'Tensor Contraction representation' of multilinear
+                forms as performed by the 'FEniCS Form Compiler', but makes profoundly
+                different implementation choices (e.g., no aggressive unrolling).
         """
         ExpressionRewriter.reset()
         for stmt, expr_info in self.exprs.items():
@@ -125,14 +125,6 @@ class LoopOptimizer(object):
                     ew.reassociate()
                     ew.licm(hoist_domain_const=True)
                     ew.simplify()
-
-            elif mode == 4:
-                if expr_info.is_tensor:
-                    ew.expand(mode='full')
-                    ew.factorize(mode='immutable')
-                    ew.licm(hoist_out_domain=True)
-                    ew.factorize()
-                    ew.licm()
 
             # 2) Try merging and optimizing the loops created by rewriting
             lm = SSALoopMerger(self.header, ew.expr_graph)
