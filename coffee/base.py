@@ -54,7 +54,7 @@ decl = lambda q, t, s, a: "%s%s %s %s" % (q, t, s, a)
 decl_init = lambda q, t, s, a, e: "%s%s %s %s = %s" % (q, t, s, a, e)
 for_loop = lambda s1, e, s2, s3: "for (%s; %s; %s)\n%s" % (s1, e, s2, s3)
 ternary = lambda e, s1, s2: wrap("%s ? %s : %s" % (e, s1, s2))
-init_array = lambda v, f=str: '{%s}' % ', '.join([f(i) for i in v])
+init_array = lambda v, f: '{%s}' % ', '.join([f(i) for i in v])
 
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
 
@@ -267,7 +267,7 @@ class ArrayInit(Expr):
             # n-dimensional case
             return init_array([self._tabulate_values(arr[0])] +
                               ["\n%s" % self._tabulate_values(arr[i])
-                               for i in range(1, arr.shape[0])])
+                               for i in range(1, arr.shape[0])], str)
 
     def gencode(self, not_scope=True, parent=None):
         if isinstance(self.values, np.ndarray):
