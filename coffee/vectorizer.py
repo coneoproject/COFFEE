@@ -70,14 +70,7 @@ class LoopVectorizer(object):
     def __init__(self, loop_opt):
         self.loop_opt = loop_opt
 
-    def alignment(self):
-        """Align all data structures accessed in the loop nest to the size in
-        bytes of the vector length."""
-        for decl in self.loop_opt.decls.values():
-            if decl.sym.rank and decl.scope != EXTERNAL:
-                decl.attr.append(plan.compiler["align"](plan.isa["alignment"]))
-
-    def padding(self):
+    def pad_and_align(self):
         """Padding consists of three major steps:
 
             * Pad the innermost dimension of all n-dimensional arrays to the nearest
@@ -119,6 +112,9 @@ class LoopVectorizer(object):
 
         Where 'x' corresponds to the number of different offsets used in a given
         iteration space along the innermost dimension.
+
+        Finally, all arrays are decorated with suitable attributes to enforce
+        alignment to (the size in bytes of) the vector length.
         """
         # Aliases
         decls = self.loop_opt.decls
@@ -143,19 +139,21 @@ class LoopVectorizer(object):
 
         # 1) Pad arrays by extending the innermost dimension
         buffers = []
-        for decl in decls.values():
+        for decl_name, decl in decls.items():
             if not decl.sym.rank:
                 continue
             p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
             if decl.scope == LOCAL:
                 if p_rank != decl.sym.rank:
-                    # Do pad
+                    # Padding
                     decl.sym.rank = p_rank
+                # Alignment
+                decl.attr.append(plan.compiler['align'](plan.isa['alignment']))
                 continue
             # Examined symbol is a FunDecl argument, so a buffer might be required
             acc_modes, all_dataspaces, p_info = [], defaultdict(list), defaultdict(list)
             # A- Analyze occurrences of the FunDecl argument in the AST
-            for s, _ in symbol_refs[decl.sym.symbol]:
+            for s, _ in symbol_refs[decl_name]:
                 if s is decl.sym or not s.rank:
                     continue
                 # ... the access mode (READ, WRITE, ...)
@@ -194,7 +192,7 @@ class LoopVectorizer(object):
             if will_break:
                 continue
             # C- Create a padded temporary buffer for efficient vectorization
-            buf_name, buf_rank = '_%s' % decl.sym.symbol, 0
+            buf_name, buf_rank = '_%s' % decl_name, 0
             loops_mapper = defaultdict(list)
             for (loops, p_offset), syms in p_info.items():
                 if not (p_rank != decl.sym.rank or \
