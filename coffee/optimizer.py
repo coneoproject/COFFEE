@@ -127,11 +127,9 @@ class LoopOptimizer(object):
                     ew.simplify()
 
             # 2) Try merging and optimizing the loops created by rewriting
-            lm = SSALoopMerger(self.header, ew.expr_graph)
-            merged_loops = lm.merge()
+            merged_loops = SSALoopMerger(ew.expr_graph).merge(self.header)
             for merged, merged_in in merged_loops:
                 [self.hoisted.update_loop(l, merged_in) for l in merged]
-            lm.simplify()
 
         # 3) Reduce storage by removing temporaries read in only one place
         stmt_occs = dict((k, v)

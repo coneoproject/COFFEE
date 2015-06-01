@@ -59,39 +59,14 @@ class SSALoopMerger(LoopScheduler):
     Statements must be in "soft" SSA form: they can be declared and initialized
     at declaration time, then they can be assigned a value in only one place."""
 
-    def __init__(self, root, expr_graph):
+    def __init__(self, expr_graph):
         """Initialize the SSALoopMerger.
 
         :param expr_graph: the ExpressionGraph tracking all data dependencies
-                           involving identifiers that appear in ``root``.
-        :param root: the node where loop scheduling takes place."""
-        self.root = root
+            involving identifiers that appear in ``header``.
+        """
         self.expr_graph = expr_graph
         self.merged_loops = []
-
-    def _accessed_syms(self, node, mode):
-        """Return a list of symbols that are being accessed in the tree
-        rooted in ``node``. If ``mode == 0``, looks for written to symbols;
-        if ``mode==1`` looks for read symbols."""
-        if isinstance(node, Symbol):
-            return [node]
-        elif isinstance(node, FlatBlock):
-            return []
-        elif isinstance(node, (Assign, Incr, Decr)):
-            if mode == 0:
-                return self._accessed_syms(node.children[0], mode)
-            elif mode == 1:
-                return self._accessed_syms(node.children[1], mode)
-        elif isinstance(node, Decl):
-            if mode == 0 and node.init and not isinstance(node.init, EmptyStatement):
-                return self._accessed_syms(node.sym, mode)
-            else:
-                return []
-        else:
-            accessed_syms = []
-            for n in node.children:
-                accessed_syms.extend(self._accessed_syms(n, mode))
-            return accessed_syms
 
     def _merge_loops(self, root, loop_a, loop_b):
         """Merge the body of ``loop_a`` in ``loop_b`` and eliminate ``loop_a``
@@ -116,90 +91,7 @@ class SSALoopMerger(LoopScheduler):
         root.children.remove(root_loop_a)
         return (loop_b, tuple(dims_a), tuple(dims_b))
 
-    def _update_dims(self, node, dims):
-        """Change the iteration variables in the nodes rooted in ``node``
-        according to the map defined in ``dims``, which is a dictionary
-        from old_iteration_variable to new_iteration_variable. For example,
-        given dims = {'i': 'j'} and a node "A[i] = B[i]", change the node
-        into "A[j] = B[j]"."""
-        if isinstance(node, Symbol):
-            new_rank = []
-            for r in node.rank:
-                new_rank.append(r if r not in dims else dims[r])
-            node.rank = tuple(new_rank)
-        elif not isinstance(node, FlatBlock):
-            for n in node.children:
-                self._update_dims(n, dims)
-
-    def merge(self):
-        """Merge perfect loop nests rooted in ``self.root``."""
-        found_nests = defaultdict(list)
-        # Collect some info visiting the tree rooted in node
-        for n in self.root.children:
-            if isinstance(n, For):
-                # Track structure of iteration spaces
-                retval = FindLoopNests.default_retval()
-                loops_infos = FindLoopNests().visit(n, parent=self.root, ret=retval)
-                for li in loops_infos:
-                    loops, loops_parents = zip(*li)
-                    # Note that only inner loops can be fused, and that they share
-                    # the same parent
-                    key = (tuple(l.header for l in loops), loops_parents[-1])
-                    found_nests[key].append(loops[-1])
-
-        all_merged = []
-        # A perfect loop nest L1 is mergeable in a loop nest L2 if
-        # 1 - their iteration space is identical; implicitly true because the keys,
-        #     in the dictionary, are iteration spaces.
-        # 2 - between the two nests, there are no statements that read from values
-        #     computed in L1. This is checked next.
-        # 3 - there are no read-after-write dependencies between variables written
-        #     in L1 and read in L2. This is checked next.
-        # Here, to simplify the data flow analysis, the last loop in the tree
-        # rooted in node is selected as L2
-        for itspace_parent, loop_nests in found_nests.items():
-            if len(loop_nests) == 1:
-                # At least two loops are necessary for merging to be meaningful
-                continue
-            itspace, parent = itspace_parent
-            mergeable = []
-            merging_in = loop_nests[-1]
-            merging_in_read_syms = self._accessed_syms(merging_in, 1)
-            for ln in loop_nests[:-1]:
-                is_mergeable = True
-                # Get the symbols written to in the loop nest ln
-                ln_written_syms = self._accessed_syms(ln, 0)
-                # Get the symbols written to between loop ln (excluded) and
-                # loop merging_in (included)
-                bound_left = parent.children.index(ln)+1
-                bound_right = parent.children.index(merging_in)
-                _written_syms = flatten([self._accessed_syms(l, 0) for l in
-                                         parent.children[bound_left:bound_right]])
-                # Check condition 2
-                for ws, lws in product(_written_syms, ln_written_syms):
-                    if self.expr_graph.is_written(ws, lws):
-                        is_mergeable = False
-                        break
-                # Check condition 3
-                for lws, mirs in product(ln_written_syms, merging_in_read_syms):
-                    if lws.symbol == mirs.symbol and not lws.rank and not mirs.rank:
-                        is_mergeable = False
-                        break
-                # Track mergeable loops
-                if is_mergeable:
-                    mergeable.append(ln)
-            # If there is at least one mergeable loops, do the merging
-            for l in reversed(mergeable):
-                merged, l_dims, m_dims = self._merge_loops(parent, l, merging_in)
-                self._update_dims(merged, dict(zip(l_dims, m_dims)))
-            # Update the lists of merged loops
-            all_merged.append((mergeable, merging_in))
-            self.merged_loops.append(merging_in)
-
-        # Return the list of merged loops and the resulting loop
-        return all_merged
-
-    def simplify(self):
+    def _simplify(self, merged_loops):
         """Scan the list of merged loops and eliminate sub-expressions that became
         duplicate as now iterating along the same iteration space. For example: ::
 
@@ -238,12 +130,87 @@ class SSALoopMerger(LoopScheduler):
                         replace_expr(n, node, i, dim, hoisted_expr)
 
         hoisted_expr = {}
-        for loop in self.merged_loops:
+        for loop in merged_loops:
             block = loop.body
             for stmt in block:
                 sym, expr = stmt.children
                 replace_expr(expr.children[0], expr, 0, loop.dim, hoisted_expr)
                 hoisted_expr[str(expr)] = sym
+
+    def merge(self, root):
+        """Merge perfect loop nests in ``root``."""
+        found_nests = defaultdict(list)
+        # Collect some info visiting the tree rooted in node
+        for n in root.children:
+            if isinstance(n, For):
+                # Track structure of iteration spaces
+                loops_infos = FindLoopNests().visit(n, {'node_parent': root})
+                for li in loops_infos:
+                    loops, loops_parents = zip(*li)
+                    # Note that only inner loops can be fused, and that they share
+                    # the same parent
+                    key = (tuple(l.header for l in loops), loops_parents[-1])
+                    found_nests[key].append(loops[-1])
+
+        all_merged, merged_loops = [], []
+        # A perfect loop nest L1 is mergeable in a loop nest L2 if
+        # 1 - their iteration space is identical; implicitly true because the keys,
+        #     in the dictionary, are iteration spaces.
+        # 2 - between the two nests, there are no statements that read from values
+        #     computed in L1. This is checked next.
+        # 3 - there are no read-after-write dependencies between variables written
+        #     in L1 and read in L2. This is checked next.
+        # Here, to simplify the data flow analysis, the last loop in the tree
+        # rooted in node is selected as L2
+        for (itspace, parent), loop_nests in found_nests.items():
+            if len(loop_nests) == 1:
+                # At least two loops are necessary for merging to be meaningful
+                continue
+            mergeable = []
+            merging_in = loop_nests[-1]
+            merging_in_reads = SymbolModes().visit(merging_in.body,
+                                                   env=SymbolModes.default_env)
+            merging_in_reads = [s for s, m in merging_in_reads.items() if m[0] == READ]
+            for l in loop_nests[:-1]:
+                is_mergeable = True
+                # Get the symbols written in /l/
+                l_writes = SymbolModes().visit(l.body, env=SymbolModes.default_env)
+                l_writes = [s for s, m in l_writes.items() if m[0] == WRITE]
+                # Get the symbols written between loop /l/ (excluded) and loop
+                # merging_in (included)
+                bound_left = parent.children.index(l)+1
+                bound_right = parent.children.index(merging_in)
+                for n in parent.children[bound_left:bound_right]:
+                    in_writes = SymbolModes().visit(n, env=SymbolModes.default_env)
+                    in_writes = [s for s, m in in_writes.items() if m[0] == WRITE]
+                    # Check condition 2
+                    for iw, lw in product(in_writes, l_writes):
+                        if self.expr_graph.is_written(iw, lw):
+                            is_mergeable = False
+                            break
+                    # Check condition 3
+                    for lw, mir in product(l_writes, merging_in_reads):
+                        if lw.symbol == mir.symbol and not lw.rank and not mir.rank:
+                            is_mergeable = False
+                            break
+                    if not is_mergeable:
+                        break
+                # Track mergeable loops
+                if is_mergeable:
+                    mergeable.append(l)
+            # If there is at least one mergeable loops, do the merging
+            for l in reversed(mergeable):
+                merged, l_dims, m_dims = self._merge_loops(parent, l, merging_in)
+                ast_update_rank(merged, dict(zip(l_dims, m_dims)))
+            # Update the lists of merged loops
+            all_merged.append((mergeable, merging_in))
+            merged_loops.append(merging_in)
+
+        # Reuse temporaries in the merged loops, where possible
+        self._simplify(merged_loops)
+
+        # Return the list of merged loops and the resulting loop
+        return all_merged
 
 
 class ExpressionFissioner(LoopScheduler):

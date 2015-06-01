@@ -264,18 +264,29 @@ def ast_update_ofs(node, ofs, **kwargs):
     return node
 
 
-def ast_update_rank(node, new_rank):
-    """Given a dictionary ``new_rank`` s.t. ``{'sym': new_dim}``, update the
-    ranks of the symbols rooted in ``node`` by adding them the dimension
-    ``new_dim``."""
-    if isinstance(node, FlatBlock):
-        return
-    elif isinstance(node, Symbol):
-        if node.symbol in new_rank:
-            node.rank = new_rank[node.symbol] + node.rank
-    else:
-        for n in node.children:
-            ast_update_rank(n, new_rank)
+def ast_update_rank(node, mapper):
+    """Change the rank of the symbols rooted in ``node`` as prescribed by
+    ``rank``.
+
+    :arg node: Root AST node
+    :arg mapper: Describe how to change the rank of a symbol.
+    :type mapper: a dictionary. Keys can either be Symbols -- in which case
+        values are interpreted as dimensions to be added to the rank -- or
+        actual ranks (strings, integers) -- which means rank dimensions are
+        replaced; for example, if mapper={'i': 'j'} and node='A[i] = B[i]',
+        node will be transformed into 'A[j] = B[j]'
+    """
+
+    symbols = FindInstances(Symbol).visit(node)[Symbol]
+    for s in symbols:
+        if mapper.get(s.symbol):
+            # Add a dimension
+            s.rank = mapper[s.symbol] + s.rank
+        else:
+            # Try to replace dimensions
+            s.rank = tuple([r if r not in mapper else mapper[r] for r in s.rank])
+
+    return node
 
 
 def ast_update_id(symbol, name, id):
