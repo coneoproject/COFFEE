@@ -508,7 +508,7 @@ class OuterProduct():
             # Store in memory
             sym = tensor.symbol
             rank = tensor.rank
-            ofs = ((1, 0), (1, ofs), (1, 0))
+            ofs = tensor.offset[:-2] + ((1, ofs),) + tensor.offset[-1:]
             load = plan.isa["symbol_load"](sym, rank, ofs)
             return plan.isa["store"](Symbol(sym, rank, ofs),
                                      plan.isa["add"](load, out_reg))
@@ -530,13 +530,13 @@ class OuterProduct():
         # Create tensor symbols
         tensor_syms = []
         for i in range(n_regs):
-            ofs = ((1, 0), (1, i), (1, 0))
+            ofs = tensor.offset[:-2] + ((1, i),) + tensor.offset[-1:]
             tensor_syms.append(Symbol(tensor.symbol, tensor.rank, ofs))
 
         # Load LHS values from memory
         if self.mode == 'STORE':
             for i, j in zip(tensor_syms, t_regs):
-                load_sym = plan.isa["symbol_load"](i.symbol, i.rank)
+                load_sym = plan.isa["symbol_load"](i.symbol, i.rank, i.offset)
                 code.append(Decl(plan.isa["decl_var"], j, load_sym))
 
         # In-register restoration of the tensor layout
