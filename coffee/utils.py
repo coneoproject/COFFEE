@@ -257,7 +257,14 @@ def ast_update_ofs(node, ofs, **kwargs):
     for s in symbols:
         new_offset = []
         for r, o in zip(s.rank, s.offset):
-            new_o = o[1] + ofs.get(r, 0) if increase else ofs.get(r, o[1])
+            if increase:
+                val = ofs.get(r, 0)
+                if isinstance(o[1], str) or isinstance(val, str):
+                    new_o = "%s + %s" % (o[1], val)
+                else:
+                    new_o = o[1] + val
+            else:
+                new_o = ofs.get(r, o[1])
             new_offset.append((o[0], new_o))
         s.offset = tuple(new_offset)
 
