@@ -399,8 +399,8 @@ class ZeroRemover(LoopScheduler):
             itspace = OrderedDict([(l.dim, [(l.size, 0)]) for l, p in nest])
             nz_bounds = nz_in_syms.get(node.symbol, ())
             for r, o, nz_bs in zip(node.rank, node.offset, nz_bounds):
-                if o[0] != 1:
-                    # Cannot handle jumps in memory accesses
+                if o[0] != 1 or isinstance(o[1], str):
+                    # Cannot handle jumps nor non-integer offsets
                     continue
                 try:
                     loop = [l for l, p in nest if l.dim == r][0]

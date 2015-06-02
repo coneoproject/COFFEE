@@ -168,8 +168,13 @@ class LoopVectorizer(object):
                 dataspace = [None for r in s.rank]
                 for l in loops:
                     index = s.rank.index(l.dim)
+                    # Assume, initially, the dataspace spans the whole dimension,
+                    # then try to limit it based on available information
+                    l_dataspace = (0, s.rank[index])
                     offset = s.offset[index][1]
-                    dataspace[index] = (l.start + offset, l.end + offset)
+                    if not isinstance(offset, str):
+                        l_dataspace = (l.start + offset, l.end + offset)
+                    dataspace[index] = l_dataspace
                 all_dataspaces[loops].append(tuple(dataspace))
                 p_info.setdefault((loops, p_offset), []).append(s)
             # B- Extra care if dataspaces overlap, otherwise code might break
@@ -199,7 +204,7 @@ class LoopVectorizer(object):
             loops_mapper = defaultdict(list)
             for (loops, p_offset), syms in p_info.items():
                 if not (p_rank != decl.sym.rank or \
-                        isinstance(p_offset, Symbol) or \
+                        isinstance(p_offset, str) or \
                         vect_roundup(p_offset) > p_offset):
                     # Useless to pad in this case
                     continue
