@@ -363,6 +363,14 @@ class GreaterEq(BinExpr):
     op = ">="
 
 
+class And(BinExpr):
+    op = "&&"
+
+
+class Or(BinExpr):
+    op = "||"
+
+
 class FunCall(Expr):
 
     """Function call. """
