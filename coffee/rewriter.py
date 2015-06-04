@@ -375,10 +375,13 @@ class ExpressionRewriter(object):
                         parent.children[parent.children.index(assign)] = Incr(sym, expr)
                         sym.rank = self.expr_info.domain_dims
                         decl.sym.rank = decl.sym.rank[i+1:]
-            # Remove the reduction loop and update the rank of its symbols
+            # Remove the reduction loop
             p.children[p.children.index(l)] = l.body[0]
+            # Update symbols' ranks
             for s in reducible_syms:
                 s.rank = self.expr_info.domain_dims
+            # Update expression metadata
+            self.expr_info._loops_info.remove((l, p))
 
         ###
 
