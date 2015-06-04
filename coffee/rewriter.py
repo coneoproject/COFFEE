@@ -188,6 +188,7 @@ class ExpressionRewriter(object):
                                             expected, with this strategy they are \
                                             grouped together, within the obvious \
                                             limits imposed by the expression itself.
+                     * mode == 'constants': factorize loop-independent terms.
         """
         retval = FindInstances.default_retval()
         symbols = FindInstances(Symbol).visit(self.stmt.children[1], ret=retval)[Symbol]
@@ -205,7 +206,9 @@ class ExpressionRewriter(object):
         elif mode == 'immutable':
             should_factorize = lambda n: \
                 n.symbol in self.decls and self.decls[n.symbol].is_static_const
-        if mode not in ['standard', 'immutable']:
+        elif mode == 'constants':
+            should_factorize = lambda n: not n.rank
+        else:
             warning('Unknown factorization strategy. Skipping.')
             return
 
