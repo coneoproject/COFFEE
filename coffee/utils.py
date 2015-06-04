@@ -562,20 +562,24 @@ class ItSpace():
         elif self.mode == 2:
             raise RuntimeError("Cannot convert from mode=0 to mode=2")
 
-    def merge(self, itspaces):
+    def merge(self, itspaces, within=None):
         """Merge contiguous, possibly overlapping iteration spaces.
         For example (assuming ``self.mode = 0``): ::
 
             [(1,3), (4,6)] -> ((1,6),)
             [(1,3), (5,6)] -> ((1,3), (5,6))
+
+        :arg within: an integer representing the distance between two iteration
+            spaces to be considered adjacent. Defaults to 1.
         """
         itspaces = self._convert_to_mode0(itspaces)
+        within = within or 1
 
         itspaces = sorted(tuple(set(itspaces)))
         merged_itspaces = []
         current_start, current_stop = itspaces[0]
         for start, stop in itspaces:
-            if start - 1 > current_stop:
+            if start - within > current_stop:
                 merged_itspaces.append((current_start, current_stop))
                 current_start, current_stop = start, stop
             else:
