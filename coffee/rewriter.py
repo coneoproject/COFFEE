@@ -384,10 +384,25 @@ class ExpressionRewriter(object):
 
         # Precompute constant expressions
         for hoisted_loop in self.hoisted.all_loops:
-            evals = Evaluate(self.decls).visit(hoisted_loop, **Evaluate.default_args)
+            evals = Evaluate(self.decls).visit(hoisted_loop, env=Evaluate.default_env)
+            # First, find out identical tables
+            mapper = defaultdict(list)
+            for s, values in evals.items():
+                mapper[str(values)].append(s)
+            # Then, map identical tables to a single symbol
+            for values, symbols in mapper.items():
+                to_replace = {s: symbols[0] for s in symbols[1:]}
+                ast_replace(self.stmt, to_replace, copy=True)
+                # Clean up
+                for s in symbols[1:]:
+                    s_decl = self.hoisted[s.symbol].decl
+                    self.header.children.remove(s_decl)
+                    evals.pop(s)
+            # Finally, update declarations with precomputed values
             for s, values in evals.items():
                 self.hoisted[s.symbol].decl.init = values
                 self.hoisted[s.symbol].decl.qual = ['static', 'const']
+            # Clean up
             self.header.children.remove(hoisted_loop)
 
     @staticmethod
