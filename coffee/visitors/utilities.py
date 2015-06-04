@@ -1,9 +1,13 @@
 from __future__ import absolute_import
-from coffee.visitor import Visitor, Environment
-from coffee.base import Sum, Sub, Prod, Div, SparseArrayInit
+
+import itertools
+import operator
 from copy import deepcopy
 import numpy as np
-import itertools
+
+from coffee.visitor import Visitor, Environment
+from coffee.base import Sum, Sub, Prod, Div, SparseArrayInit
+from coffee.utils import ItSpace
 
 
 __all__ = ["ReplaceSymbols", "CheckUniqueness", "Uniquify", "Evaluate",
@@ -105,6 +109,8 @@ class Evaluate(Visitor):
             Prod: np.multiply,
             Div: np.divide
         }
+        from coffee.plan import isa
+        self.min_nzblock = isa['dp_reg']
         super(Evaluate, self).__init__()
 
     def visit_object(self, o, *args, **kwargs):
@@ -129,8 +135,8 @@ class Evaluate(Visitor):
 
     def visit_Writer(self, o, *args, **kwargs):
         lvalue = o.children[0]
-        nest = kwargs["loop_nest"]
-        writes = [l for l in nest if l.dim in lvalue.rank]
+        writes = [l for l in env["loop_nest"] if l.dim in lvalue.rank]
+
         # Evaluate the expression for each point in in the n-dimensional space
         # represented by /writes/
         dims = tuple(l.dim for l in writes)
@@ -142,10 +148,21 @@ class Evaluate(Visitor):
             expr_values, precision = self.visit(o.children[1], new_env)
             # The sum takes into account reductions
             values[i] = np.sum(expr_values)
+
         # Sniff the values to check for the presence of zero-valued blocks
         nonzero = []
-        for nz in values.nonzero():
-            nonzero.append([(max(nz)-min(nz)+1, min(nz))])
+        for nz_per_dim in values.nonzero():
+            unique_nz_per_dim = np.unique(nz_per_dim)
+            ranges = []
+            for k, g in itertools.groupby(enumerate(unique_nz_per_dim), lambda (i, x): i-x):
+                group = map(operator.itemgetter(1), g)
+                # Stored as (size, offset), as expected by SparseArrayInit
+                ranges.append((group[-1]-group[0]+1, group[0]))
+            nonzero.append(ranges)
+        # The minimum size of a non zero-valued block along the innermost dimension
+        # is given by /self.min_nzblock/. This avoids breaking alignment and
+        # vectorization
+        nonzero[-1] = ItSpace(mode=1).merge(nonzero[-1], within=self.min_nzblock)
         return {lvalue: SparseArrayInit(values, precision, tuple(nonzero))}
 
     def visit_BinExpr(self, o, *args, **kwargs):
