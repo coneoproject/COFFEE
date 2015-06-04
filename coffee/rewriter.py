@@ -386,7 +386,7 @@ class ExpressionRewriter(object):
         for hoisted_loop in self.hoisted.all_loops:
             evals = Evaluate(self.decls).visit(hoisted_loop, **Evaluate.default_args)
             for s, values in evals.items():
-                self.hoisted[s.symbol].decl.init = ArrayInit(values)
+                self.hoisted[s.symbol].decl.init = values
                 self.hoisted[s.symbol].decl.qual = ['static', 'const']
             self.header.children.remove(hoisted_loop)
 

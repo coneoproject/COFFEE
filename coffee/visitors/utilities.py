@@ -1,6 +1,6 @@
 from __future__ import absolute_import
-from coffee.visitor import Visitor
-from coffee.base import Sum, Sub, Prod, Div
+from coffee.visitor import Visitor, Environment
+from coffee.base import Sum, Sub, Prod, Div, SparseArrayInit
 from copy import deepcopy
 import numpy as np
 import itertools
@@ -135,19 +135,29 @@ class Evaluate(Visitor):
         # represented by /writes/
         dims = tuple(l.dim for l in writes)
         shape = tuple(l.size for l in writes)
-        values = np.zeros(shape)
+        values, precision = np.zeros(shape), None
         for i in itertools.product(*[range(j) for j in shape]):
             point = {d: v for d, v in zip(dims, i)}
+            new_env = Environment(env, point=point)
+            expr_values, precision = self.visit(o.children[1], new_env)
             # The sum takes into account reductions
-            values[i] = np.sum(self.visit(o.children[1], point=point, *args, **kwargs))
-        return {lvalue: values}
+            values[i] = np.sum(expr_values)
+        # Sniff the values to check for the presence of zero-valued blocks
+        nonzero = []
+        for nz in values.nonzero():
+            nonzero.append([(max(nz)-min(nz)+1, min(nz))])
+        return {lvalue: SparseArrayInit(values, precision, tuple(nonzero))}
 
     def visit_BinExpr(self, o, *args, **kwargs):
         ops, _ = o.operands()
         transformed = [self.visit(op, *args, **kwargs) for op in ops]
         if any([a is None for a in transformed]):
             return
-        return self.mapper[o.__class__](*transformed)
+        values, precisions = zip(*args)
+        # Precisions must match
+        assert precisions.count(precisions[0]) == len(precisions)
+        # Return the result of the binary operation plus forward the precision
+        return self.mapper[o.__class__](*values), precisions[0]
 
     def visit_Par(self, o, *args, **kwargs):
         return self.visit(o.child, *args, **kwargs)
@@ -169,6 +179,7 @@ class Evaluate(Visitor):
             raise RuntimeError("Couldn't find a declaration for symbol %s" % o)
         try:
             values = decl.init.values
+            precision = decl.init.precision
             shape = values.shape
         except AttributeError:
             raise RuntimeError("%s not initialized with a numpy array" % decl)
@@ -187,7 +198,7 @@ class Evaluate(Visitor):
             else:
                 # .../r/ is a reduction dimension
                 values = values.take(range(s), dim)
-        return values
+        return values, precision
 
 
 class EstimateFlops(Visitor):
