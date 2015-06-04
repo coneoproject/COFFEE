@@ -100,10 +100,9 @@ class LoopOptimizer(object):
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
-            # 1) Rewrite the expressions
-            if expr_info.dimension in [0, 1]:
-                if mode in [1, 2, 3]:
-                    ew.licm(hoist_out_domain=True)
+            # 1) Transform the expression applying one or more rewriting passes
+            if expr_info.dimension in [0, 1] and mode in [1, 2]:
+                ew.licm(hoist_out_domain=True)
                 continue
 
             if mode == 1:
@@ -117,14 +116,17 @@ class LoopOptimizer(object):
                     ew.licm()
 
             elif mode == 3:
-                ew.inject()
                 if expr_info.is_tensor:
+                    ew.inject()
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
                     ew.licm(hoist_out_domain=True)
+                    ew.factorize(mode='constants')
                     ew.reassociate()
                     ew.licm(hoist_domain_const=True)
                     ew.simplify()
+                    ew.factorize(mode='immutable')
+                    ew.licm(hoist_out_domain=True)
 
             # 2) Try merging and optimizing the loops created by rewriting
             merged_loops = SSALoopMerger(ew.expr_graph).merge(self.header)
