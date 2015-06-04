@@ -193,19 +193,7 @@ class ASTKernel(object):
             precompute = kwargs.get('precompute')
             dead_ops_elimination = kwargs.get('dead_ops_elimination')
 
-            # Combining certain optimizations is meaningless/forbidden.
-            if unroll and toblas:
-                raise RuntimeError("Cannot unroll and then convert to BLAS")
-            if rewrite == 3 and split:
-                raise RuntimeError("Split forbidden when avoiding zero-columns")
-            if rewrite == 3 and toblas:
-                raise RuntimeError("BLAS forbidden when avoiding zero-columns")
-            if rewrite == 3 and v_type and v_type != VectStrategy.AUTO:
-                raise RuntimeError("Zeros removal only supports auto-vectorization")
-            if unroll and v_type and v_type != VectStrategy.AUTO:
-                raise RuntimeError("Outer-product vectorization needs no unroll")
-
-            info = visit(kernel, info_items=['decls', 'exprs'])
+            info = visit(kernel)
             decls = info['decls']
             # Structure up expressions and related metadata
             nests = defaultdict(OrderedDict)
@@ -218,6 +206,24 @@ class ASTKernel(object):
 
             loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
                          for (loop, header), exprs in nests.items()]
+
+            # Combining certain optimizations is meaningless/forbidden.
+            if unroll and toblas:
+                raise RuntimeError("BLAS forbidden with unrolling")
+            if dead_ops_elimination and split:
+                raise RuntimeError("Split forbidden with zero-valued blocks avoidance")
+            if dead_ops_elimination and toblas:
+                raise RuntimeError("BLAS forbidden with zero-valued blocks avoidance")
+            if dead_ops_elimination and v_type and v_type != VectStrategy.AUTO:
+                raise RuntimeError("SIMDization forbidden with zero-valued blocks avoidance")
+            if unroll and v_type and v_type != VectStrategy.AUTO:
+                raise RuntimeError("SIMDization forbidden with unrolling")
+            if rewrite == 3 and len(info['exprs']) > 1:
+                warning("Rewrite mode=3 forbidden with multiple expressions")
+                warning("Switching to rewrite mode=2")
+                rewrite = 2
+
+            ### Optimization pipeline ###
             for loop_opt in loop_opts:
                 # 0) Expression Rewriting
                 if rewrite:
