@@ -203,8 +203,8 @@ class LoopVectorizer(object):
             buf_name, buf_rank = '_%s' % decl_name, 0
             loops_mapper = defaultdict(list)
             for (loops, p_offset), syms in p_info.items():
-                if not (p_rank != decl.sym.rank or \
-                        isinstance(p_offset, str) or \
+                if not (p_rank != decl.sym.rank or
+                        isinstance(p_offset, str) or
                         vect_roundup(p_offset) > p_offset):
                     # Useless to pad in this case
                     continue
