@@ -203,7 +203,6 @@ class ASTKernel(object):
                     continue
                 metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, domain)
                 nests[nest[0]].update({stmt: metaexpr})
-
             loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
                          for (loop, header), exprs in nests.items()]
 
