@@ -149,15 +149,17 @@ class Evaluate(Visitor):
             values[i] = np.sum(expr_values)
 
         # Sniff the values to check for the presence of zero-valued blocks
-        nonzero = []
-        for nz_per_dim in values.nonzero():
+        nonzero = [[(i, 0)] for i in shape]
+        for i, nz_per_dim in enumerate(values.nonzero()):
+            if not nz_per_dim.size:
+                continue
             unique_nz_per_dim = np.unique(nz_per_dim)
             ranges = []
             for k, g in itertools.groupby(enumerate(unique_nz_per_dim), lambda (i, x): i-x):
                 group = map(operator.itemgetter(1), g)
                 # Stored as (size, offset), as expected by SparseArrayInit
                 ranges.append((group[-1]-group[0]+1, group[0]))
-            nonzero.append(ranges)
+            nonzero[i] = ranges
         # The minimum size of a non zero-valued block along the innermost dimension
         # is given by /self.min_nzblock/. This avoids breaking alignment and
         # vectorization
