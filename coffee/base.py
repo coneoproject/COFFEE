@@ -271,7 +271,7 @@ class ArrayInit(Expr):
 
     def gencode(self, not_scope=True, parent=None):
         if isinstance(self.values, np.ndarray):
-            if len(self.values.shape) == 1 and self.values.shape[0] == 1:
+            if parent and not parent.sym.rank:
                 return self._formatter(self.values[0])
             return self._tabulate_values(self.values)
         return self.values
@@ -533,7 +533,7 @@ class EmptyStatement(Statement):
 
     """Empty statement."""
 
-    def gencode(self):
+    def gencode(self, not_scope=False, parent=None):
         return ""
 
 
@@ -660,7 +660,8 @@ class Decl(Statement):
                         spacer(self.attr)) + semicolon(not_scope)
         else:
             return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                             spacer(self.attr), self.init.gencode()) + semicolon(not_scope)
+                             spacer(self.attr), self.init.gencode(parent=self)) +\
+                semicolon(not_scope)
 
 
 class Block(Statement):
