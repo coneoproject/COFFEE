@@ -278,6 +278,23 @@ class ExpressionRewriter(object):
                 for k
                   A[j][k] += ...f(B[0]*C[i][0] + B[1]*C[i][1] + ...)...
         """
+
+        def injection_recoil(to_unroll, stmts):
+            """Heuristically evaluate the growth in depth of the AST after
+            injection. If above the default threshold, increase the recursion
+            limit such that successive AST visits do not blow up the interpreter
+            """
+            import math, sys
+            niters = sum(l.size for l, p in to_unroll)
+            injected_exprs = len(stmts)
+            # Power is used because a subsequent expansion of injected
+            # expressions leads, in the /worst case/, to an exponential
+            # increase of the number of symbols in the AST
+            if math.pow(niters, injected_exprs) > injection_recoil.ths:
+                sys.setrecursionlimit(3000)
+        injection_recoil.ths = 100
+
+
         # Get all loop nests, then discard the one enclosing the expression
         nests = [n for n in visit(self.expr_info.loops_parents[0], info_items=['fors'])['fors']]
         injectable_nests = [n for n in nests if zip(*n)[0] != self.expr_info.loops]
@@ -311,6 +328,7 @@ class ExpressionRewriter(object):
                     # Clean up
                     p.children.remove(self.decls[sym.symbol])
                     self.decls.pop(sym.symbol)
+                injection_recoil(to_unroll, stmts)
             for l, p in to_unroll:
                 p.children.remove(l)
 
