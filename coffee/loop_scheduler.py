@@ -160,8 +160,7 @@ class SSALoopMerger(LoopScheduler):
         #     computed in L1. This is checked next.
         # 3 - there are no read-after-write dependencies between variables written
         #     in L1 and read in L2. This is checked next.
-        # Here, to simplify the data flow analysis, the last loop in the tree
-        # rooted in node is selected as L2
+        # The last loop in /root/, referred to as /merging_in/, is selected as L2
         for (itspace, parent), loop_nests in found_nests.items():
             if len(loop_nests) == 1:
                 # At least two loops are necessary for merging to be meaningful
@@ -179,7 +178,7 @@ class SSALoopMerger(LoopScheduler):
                 # Get the symbols written between loop /l/ (excluded) and loop
                 # merging_in (included)
                 bound_left = parent.children.index(l)+1
-                bound_right = parent.children.index(merging_in)
+                bound_right = parent.children.index(merging_in)+1
                 for n in parent.children[bound_left:bound_right]:
                     in_writes = SymbolModes().visit(n, ret=SymbolModes.default_retval())
                     in_writes = [s for s, m in in_writes.items() if m[0] == WRITE]
