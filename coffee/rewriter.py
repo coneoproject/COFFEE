@@ -326,8 +326,10 @@ class ExpressionRewriter(object):
                     # Inject the unrolled operation into the expression
                     ast_replace(self.stmt, {sym: expr}, copy=True)
                     # Clean up
-                    p.children.remove(self.decls[sym.symbol])
-                    self.decls.pop(sym.symbol)
+                    if self.decls.get(sym.symbol) in p.children:
+                        p.children.remove(self.decls[sym.symbol])
+                    if sym.symbol in self.decls:
+                        self.decls.pop(sym.symbol)
                 injection_recoil(to_unroll, stmts)
             for l, p in to_unroll:
                 p.children.remove(l)
