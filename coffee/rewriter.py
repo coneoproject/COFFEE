@@ -289,7 +289,7 @@ class ExpressionRewriter(object):
             injected_exprs = len(stmts)
             # Power is used because a subsequent expansion of injected
             # expressions leads, in the /worst case/, to an exponential
-            # increase of the number of symbols in the AST
+            # increase in the number of symbols in the AST
             if math.pow(niters, injected_exprs) > injection_recoil.ths:
                 sys.setrecursionlimit(3000)
         injection_recoil.ths = 100
@@ -368,6 +368,16 @@ class ExpressionRewriter(object):
         reduction_loops = expr_info.out_domain_loops_info
         if any([not is_perfect_loop(l) for l, p in reduction_loops]):
             # Unsafe if not a perfect loop nest
+            return
+        # The following check is because it is unsafe to simplify if non-loop or
+        # non-constant dimensions are present
+        hoisted_stmts = self.hoisted.all_stmts
+        hoisted_syms = [FindInstances(Symbol).visit(h)[Symbol] for h in hoisted_stmts]
+        hoisted_dims = [s.rank for s in flatten(hoisted_syms)]
+        hoisted_dims = set([r for r in flatten(hoisted_dims) if not is_const_dim(r)])
+        if any(d not in expr_info.dims for d in hoisted_dims):
+            # Non-loop dimension or non-constant dimension found, e.g. A[i], with /i/
+            # not being a loop iteration variable
             return
         for i, (l, p) in enumerate(reduction_loops):
             retval = SymbolDependencies.default_retval()

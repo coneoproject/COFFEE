@@ -640,6 +640,10 @@ bind = lambda a, b: [(a, v) for v in b]
 od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
 
 
+def is_const_dim(d):
+    return isinstance(d, int) or (isinstance(d, str) and d.isdigit())
+
+
 def insert_at_elem(_list, elem, new_elem, ofs=0):
     ofs = _list.index(elem) + ofs
     new_elem = [new_elem] if not isinstance(new_elem, list) else new_elem
