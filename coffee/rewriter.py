@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from collections import defaultdict, Counter
+from collections import defaultdict, OrderedDict, Counter
 from copy import deepcopy as dcopy
 import itertools
 
@@ -841,7 +841,7 @@ class ExpressionFactorizer(object):
         self.expr_info = expr_info
 
     def _simplify_sum(self, terms):
-        unique_terms = {}
+        unique_terms = OrderedDict()
         for t in terms:
             unique_terms.setdefault(str(t.generate_ast), list()).append(t)
 
@@ -886,14 +886,15 @@ class ExpressionFactorizer(object):
             # Example: replace (a*b)+(a*b) with 2*(a*b)
             self._simplify_sum(terms)
             # Finally try to factorize some of the operands composing the operation
-            factorized = {}
+            factorized = OrderedDict()
             for t in terms:
                 operand = set([t.operands_ast]) if t.operands else set()
                 factor = set([t.factors_ast]) if t.factors else set()
                 factorized_term = self.Term(operand, factor, node.__class__)
                 _t = factorized.setdefault(str(t.operands_ast), factorized_term)
                 _t.factors |= factor
-            factorized = ast_make_expr(Sum, [t.generate_ast for t in factorized.values()])
+            factorized = [t.generate_ast for t in factorized.values()]
+            factorized = ast_make_expr(Sum, sorted(factorized, key=lambda f: str(f)))
             parent.children[parent.children.index(node)] = factorized
             return self.Term(set([factorized]))
 
