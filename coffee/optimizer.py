@@ -335,51 +335,97 @@ class LoopOptimizer(object):
                 sys.setrecursionlimit(4000)
         injection_recoil.ths = 100
 
-        to_remove = set()
+        # 1) Unroll all injectable expressions
+        analyzed, injectable = [], {}
         for stmt, expr_info in self.exprs.items():
             # Get all loop nests, then discard the one enclosing the expression
             nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
             injectable_nests = [n for n in nests if zip(*n)[0] != expr_info.loops]
 
-            # Full unroll any unrollable, injectable loop
             for nest in injectable_nests:
                 to_unroll = [(l, p) for l, p in nest if l not in expr_info.loops]
+                unroll_cost = reduce(operator.mul, (l.size for l, p in to_unroll))
+
                 nest_writers = FindInstances(Writer).visit(to_unroll[0][0])
-                for op, u_stmts in nest_writers.items():
+                for op, i_stmts in nest_writers.items():
+                    # Check safety of unrolling
                     if op in [Assign, IMul, IDiv]:
-                        # Unroll is unsafe, skip
                         continue
                     assert op in [Incr, Decr]
-                    for u_stmt in u_stmts:
-                        u_sym, u_expr = u_stmt.children
-                        if u_stmt in [l.incr for l, p in to_unroll]:
-                            # Ignore useless u_stmts
+
+                    for i_stmt in i_stmts:
+                        i_sym, i_expr = i_stmt.children
+
+                        # Avoid dangerous injections
+                        if i_stmt in analyzed + [l.incr for l, p in to_unroll]:
                             continue
+                        analyzed.append(i_stmt)
+
+                        # Create unrolled, injectable expressions
                         for l, p in reversed(to_unroll):
-                            inject_expr = [dcopy(u_expr) for i in range(l.size)]
-                            # Update rank of symbols
-                            for i, e in enumerate(inject_expr):
+                            i_expr = [dcopy(i_expr) for i in range(l.size)]
+                            for i, e in enumerate(i_expr):
                                 e_syms = FindInstances(Symbol).visit(e)[Symbol]
                                 for s in e_syms:
                                     s.rank = tuple([r if r != l.dim else i for r in s.rank])
-                            u_expr = ast_make_expr(Sum, inject_expr)
-                        # Inject the unrolled operation into the expression
-                        ast_replace(stmt, {u_sym: u_expr}, copy=True)
-                        # Clean up
-                        if self.decls.get(u_sym.symbol) in p.children:
-                            p.children.remove(self.decls[u_sym.symbol])
-                        if u_sym.symbol in self.decls:
-                            self.decls.pop(u_sym.symbol)
-                    injection_recoil(to_unroll, u_stmts)
-                # Track clean up
-                # Cannot remove immediately because other expressions might need them
-                # for further injections
-                for l, p in to_unroll:
-                    to_remove.add((l, p))
+                            i_expr = ast_make_expr(Sum, i_expr)
 
-        # Clean up
-        for i, p in to_remove:
-            p.children.remove(i)
+                        # Track the unrolled, injectable expressions and their cost
+                        if i_sym.symbol in injectable:
+                            old_i_expr, old_cost = injectable[i_sym.symbol]
+                            new_i_expr = ast_make_expr(Sum, [i_expr, old_i_expr])
+                            new_cost = unroll_cost + old_cost
+                            injectable[i_sym.symbol] = (new_i_expr, new_cost)
+                        else:
+                            injectable[i_sym.symbol] = (i_expr, unroll_cost)
+
+        # 2) Try to inject the unrolled expressions
+        unrolled = True
+        injected = defaultdict(list)
+        for stmt, expr_info in self.exprs.items():
+            sym, expr = stmt.children
+
+            # First, get the sub-expressions that will be affected by injection
+            i_syms = injectable.keys()
+            to_inject = find_expression(expr, Prod, expr_info.domain_dims, i_syms)
+            if not to_inject or any(i not in flatten(to_inject.keys()) for i in i_syms):
+                unrolled = False
+                continue
+
+            for i_syms, target_expr in to_inject.items():
+                # Is injection going to be profitable ?
+                # If the cost exceeds the potential save on flops, due to later
+                # optimizations potentially enabled by injection, skip
+                cost = reduce(operator.mul, [injectable[i][1] for i in i_syms])
+                save = [l.size for l in expr_info.out_domain_loops] or [0]
+                save = reduce(operator.mul, save)
+                if cost > save:
+                    unrolled = False
+                else:
+                    injected[stmt].append(target_expr)
+
+            # Finally, can perform the injection
+            to_replace = {k: v[0] for k, v in injectable.items()}
+            for target_expr in injected[stmt]:
+                ast_replace(target_expr, to_replace, copy=True)
+
+        # 3) Clean up
+        if not unrolled:
+            return injected
+        for stmt, expr_info in self.exprs.items():
+            nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
+            injectable_nests = [n for n in nests if zip(*n)[0] != expr_info.loops]
+            for nest in injectable_nests:
+                unrolled = [(l, p) for l, p in nest if l not in expr_info.loops]
+                for l, p in unrolled:
+                    p.children.remove(l)
+                    for i_sym in injectable.keys():
+                        decl = self.decls.get(i_sym)
+                        if decl and decl in p.children:
+                            p.children.remove(decl)
+                            self.decls.pop(i_sym)
+
+        return injected
 
     @property
     def expr_loops(self):
