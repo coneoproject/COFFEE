@@ -84,23 +84,26 @@ class LoopOptimizer(object):
                 inner-loop dependent terms; generalized loop-invariant code motion.
                 Factorization may affect accuracy. Improves performance while trying to
                 minimize temporary storage
-            * mode == 3: Apply seven passes: injection (or 'inlining') of loops in the
-                expressions. Expansion of inner-loops dependent terms. Factorization of
-                inner-loops dependent terms; generalized loop-invariant code motion of
-                outer-loop dependent terms. Reassociation, followed by 'aggressive'
-                generalized loop-invariant code motion (in which n-rank temporary
-                arrays can be allocated to host expressions independent of more than
-                one loop). The last pass, 'simplify', applies a few transformations,
-                including optimization of associative reductions. This sequence of
-                steps mimics the 'Tensor Contraction representation' of multilinear
-                forms as performed by the 'FEniCS Form Compiler', but makes profoundly
-                different implementation choices (e.g., no aggressive unrolling).
+            * mode == 3: Apply nine passes: Expansion of inner-loops dependent terms.
+                Factorization of inner-loops dependent terms; generalized loop-invariant
+                code motion of outer-loop dependent terms. Factorization of constants.
+                Reassociation, followed by 'aggressive' generalized loop-invariant code
+                motion (in which n-rank temporary arrays can be allocated to host
+                expressions independent of more than one loop). Simplification is the
+                key pass: it tries to remove reduction loops and precompute constant
+                expressions. Finally, two last sweeps of factorization and code motion
+                are applied.
         """
         ExpressionRewriter.reset()
+
+        # 0) Passes preliminar to expression rewriting
+        if mode == 3:
+            self._inject()
+
+        # 1) Expression rewriting, expressed as a sequence of passes
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
-            # 1) Transform the expression applying one or more rewriting passes
             if expr_info.dimension in [0, 1] and mode in [1, 2]:
                 ew.licm(hoist_out_domain=True)
                 continue
@@ -117,7 +120,6 @@ class LoopOptimizer(object):
 
             elif mode == 3:
                 if expr_info.is_tensor:
-                    ew.inject()
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
                     ew.licm(hoist_out_domain=True)
@@ -128,12 +130,12 @@ class LoopOptimizer(object):
                     ew.factorize(mode='immutable')
                     ew.licm(hoist_out_domain=True)
 
-            # 2) Try merging and optimizing the loops created by rewriting
+            # Try merging and optimizing the loops created by rewriting
             merged_loops = SSALoopMerger(ew.expr_graph).merge(self.header)
             for merged, merged_in in merged_loops:
                 [self.hoisted.update_loop(l, merged_in) for l in merged]
 
-        # 3) Reduce storage by removing temporaries read in only one place
+        # 2) Reduce storage by removing temporaries read in only one place
         stmt_occs = dict((k, v)
                          for d in [count(stmt, mode='symbol_id', read_only=True)
                                    for stmt in self.exprs.keys()]
@@ -298,6 +300,86 @@ class LoopOptimizer(object):
         insert_at_elem(self.header.children, self.loop, outer_block)
         # ... scalar-expanding the precomputed symbols
         ast_update_rank(self.loop, precomputed_syms)
+
+    def _inject(self):
+        """Unroll loops outside of the expressions iteration space into the
+        expression itself ("injection"). For example: ::
+
+            for i
+              for r
+                a += B[r]*C[i][r]
+              for j
+                for k
+                  A[j][k] += ...f(a)... // the expression at hand
+
+        gets transformed into:
+
+            for i
+              for j
+                for k
+                  A[j][k] += ...f(B[0]*C[i][0] + B[1]*C[i][1] + ...)...
+        """
+
+        def injection_recoil(to_unroll, stmts):
+            """Heuristically evaluate the growth in depth of the AST after
+            injection. If above the default threshold, increase the recursion
+            limit such that successive AST visits do not blow up the interpreter
+            """
+            import sys
+            niters = sum(l.size for l, p in to_unroll)
+            injected_exprs = len(stmts)
+            # Power is used because a subsequent expansion of injected
+            # expressions leads, in the /worst case/, to an exponential
+            # increase in the number of symbols in the AST
+            if pow(niters, injected_exprs) > injection_recoil.ths:
+                sys.setrecursionlimit(4000)
+        injection_recoil.ths = 100
+
+        to_remove = set()
+        for stmt, expr_info in self.exprs.items():
+            # Get all loop nests, then discard the one enclosing the expression
+            nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
+            injectable_nests = [n for n in nests if zip(*n)[0] != expr_info.loops]
+
+            # Full unroll any unrollable, injectable loop
+            for nest in injectable_nests:
+                to_unroll = [(l, p) for l, p in nest if l not in expr_info.loops]
+                nest_writers = FindInstances(Writer).visit(to_unroll[0][0])
+                for op, u_stmts in nest_writers.items():
+                    if op in [Assign, IMul, IDiv]:
+                        # Unroll is unsafe, skip
+                        continue
+                    assert op in [Incr, Decr]
+                    for u_stmt in u_stmts:
+                        u_sym, u_expr = u_stmt.children
+                        if u_stmt in [l.incr for l, p in to_unroll]:
+                            # Ignore useless u_stmts
+                            continue
+                        for l, p in reversed(to_unroll):
+                            inject_expr = [dcopy(u_expr) for i in range(l.size)]
+                            # Update rank of symbols
+                            for i, e in enumerate(inject_expr):
+                                e_syms = FindInstances(Symbol).visit(e)[Symbol]
+                                for s in e_syms:
+                                    s.rank = tuple([r if r != l.dim else i for r in s.rank])
+                            u_expr = ast_make_expr(Sum, inject_expr)
+                        # Inject the unrolled operation into the expression
+                        ast_replace(stmt, {u_sym: u_expr}, copy=True)
+                        # Clean up
+                        if self.decls.get(u_sym.symbol) in p.children:
+                            p.children.remove(self.decls[u_sym.symbol])
+                        if u_sym.symbol in self.decls:
+                            self.decls.pop(u_sym.symbol)
+                    injection_recoil(to_unroll, u_stmts)
+                # Track clean up
+                # Cannot remove immediately because other expressions might need them
+                # for further injections
+                for l, p in to_unroll:
+                    to_remove.add((l, p))
+
+        # Clean up
+        for i, p in to_remove:
+            p.children.remove(i)
 
     @property
     def expr_loops(self):
