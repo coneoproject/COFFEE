@@ -4,12 +4,10 @@ from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol
 from collections import defaultdict, OrderedDict, Counter
 import itertools
 
-__all__ = ["FindInnerLoops", "CheckPerfectLoop",
-           "CountOccurences", "DetermineUnrollFactors",
-           "MaxLoopDepth", "FindLoopNests",
-           "FindCoffeeExpressions", "SymbolReferences",
-           "SymbolDependencies", "SymbolModes",
-           "SymbolDeclarations", "FindInstances"]
+__all__ = ["FindInnerLoops", "CheckPerfectLoop", "CountOccurences",
+           "DetermineUnrollFactors", "MaxLoopDepth", "FindLoopNests",
+           "FindCoffeeExpressions", "SymbolReferences", "SymbolDependencies",
+           "SymbolModes", "SymbolDeclarations", "FindInstances", "FindExpression"]
 
 
 class FindInnerLoops(Visitor):
@@ -581,4 +579,59 @@ class FindInstances(Visitor):
         ops, _ = o.operands()
         for op in ops:
             ret = self.visit(op, ret=ret, parent=o)
+        return ret
+
+
+class FindExpression(Visitor):
+
+    """
+    Visit the expression tree and return a list of (sub-)expressions matching
+    particular criteria.
+
+    :arg type: establish the expressions' root operator(s) (e.g., Sum, Sub, ...).
+    :arg dims: (optional) a tuple, each entry representing an iteration space
+        dimension. Expressions' symbols must iterate along one of these iteration
+        space dimensions.
+    :arg symbols: (optional) expressions must include at least one of the symbols
+        in this argument.
+    """
+
+    default_env = dict(node_parent=None)
+
+    def __init__(self, type, dims=None, symbols=None):
+        self.type = type
+        self.dims = dims
+        self.symbols = symbols
+        super(FindExpression, self).__init__()
+
+    def visit_object(self, o, env):
+        return {}
+
+    def visit_Expr(self, o, env):
+        ret = {}
+        new_env = Environment(env, node_parent=o)
+        for i in [self.visit(n, env=new_env) for n in o.children]:
+            if all('in_syms' in j for j in [ret, i]):
+                ret['in_syms'].extend(i['in_syms'])
+                i.pop('in_syms')
+            ret.update(i)
+        if all(i in ret for i in ['in_syms', 'in_itspace']) and isinstance(o, self.type):
+            if isinstance(env['node_parent'], self.type):
+                # Postpone expression tracking because the parent has same type
+                # as the node currently being visited
+                pass
+            else:
+                ret[tuple(ret['in_syms'])] = o
+                ret.pop('in_syms')
+                ret.pop('in_itspace')
+        return ret
+
+    visit_FunCall = visit_Expr
+
+    def visit_Symbol(self, o, env):
+        ret = {}
+        if self.symbols is None or o.symbol in self.symbols:
+            ret['in_syms'] = [o.symbol]
+        if self.dims is None or any(r in self.dims for r in o.rank):
+            ret['in_itspace'] = True
         return ret
