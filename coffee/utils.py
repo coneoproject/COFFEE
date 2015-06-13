@@ -33,7 +33,6 @@
 
 """Utility functions for the transformation of ASTs."""
 
-import resource
 import operator
 from warnings import warn as warning
 from copy import deepcopy as dcopy
@@ -41,30 +40,6 @@ from collections import defaultdict
 
 from base import *
 from coffee.visitors.inspectors import *
-
-
-def increase_stack(loop_opts):
-    """"Increase the stack size it the total space occupied by the kernel's local
-    arrays is too big."""
-    # Assume the size of a C type double is 8 bytes
-    double_size = 8
-    # Assume the stack size is 1.7 MB (2 MB is usually the limit)
-    stack_size = 1.7*1024*1024
-
-    size = 0
-    for loop_opt in loop_opts:
-        decls = loop_opt.decls.values()
-        size += sum([reduce(operator.mul, d.sym.rank) for d in decls if d.sym.rank])
-
-    if size*double_size > stack_size:
-        # Increase the stack size if the kernel's stack size seems to outreach
-        # the space available
-        try:
-            resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY,
-                                                       resource.RLIM_INFINITY))
-        except resource.error:
-            warning("Stack may blow up, and could not increase its size.")
-            warning("In case of failure, lower COFFEE's licm level to 1.")
 
 
 def unroll_factors(loops):
