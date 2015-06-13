@@ -389,10 +389,7 @@ class ASTKernel(object):
         # each function (or "kernel") found in the provided AST
         for kernel in kernels:
             # Generate a specific code version
-            loop_opts = _generate_cpu_code(self, kernel, **params)
-
-            # Increase stack size if too much space is used on the stack
-            increase_stack(loop_opts)
+            _generate_cpu_code(self, kernel, **params)
 
             # Post processing of the AST ensures higher-quality code
             postprocess(kernel)

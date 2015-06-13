@@ -31,6 +31,9 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import resource
+import sys
+
 from base import *
 from utils import *
 from loop_scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
@@ -61,6 +64,8 @@ class LoopOptimizer(object):
         self.expr_graph = ExpressionGraph(header)
         # Track hoisted expressions
         self.hoisted = StmtTracker()
+        # Track injected expressions
+        self.injected = {}
 
     def rewrite(self, mode):
         """Rewrite a compute-intensive expression found in the loop nest so as to
@@ -96,11 +101,12 @@ class LoopOptimizer(object):
         """
         ExpressionRewriter.reset()
 
-        # 0) Passes preliminar to expression rewriting
+        # Passes preliminar to expression rewriting
         if mode == 3:
             self._inject()
+            self._recoil()
 
-        # 1) Expression rewriting, expressed as a sequence of passes
+        # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
@@ -135,46 +141,11 @@ class LoopOptimizer(object):
             for merged, merged_in in merged_loops:
                 [self.hoisted.update_loop(l, merged_in) for l in merged]
 
-        # 2) Reduce storage by removing temporaries read in only one place
-        stmt_occs = dict((k, v)
-                         for d in [count(stmt, mode='symbol_id', read_only=True)
-                                   for stmt in self.exprs.keys()]
-                         for k, v in d.items())
-        for l in self.hoisted.all_loops:
-            l_occs = count(l, read_only=True)
-            info = visit(l, info_items=['symbol_refs', 'symbols_mode'])
-            retval = FindInstances.default_retval()
-            innermost_block = FindInstances(Block).visit(l, ret=retval)[Block][-1]
-            to_replace, to_remove = {}, []
-            for (symbol, rank), sym_occs in l_occs.items():
-                # If the symbol appears once, then it is a potential candidate
-                # for removal. It is actually removed if it does't appear in
-                # the expression from which was extracted. Symbols appearing
-                # more than once are removed if they host an expression made
-                # of just one symbol
-                if symbol not in self.hoisted or symbol in stmt_occs:
-                    continue
-                if self.hoisted[symbol].loop is not l:
-                    continue
-                decl = self.hoisted[symbol].decl
-                place = self.hoisted[symbol].place
-                expr = self.hoisted[symbol].stmt.children[1]
-                if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
-                    continue
-                # Delete any replaced hoisted symbol, declaration, and evaluation
-                symbol_refs = info['symbol_refs'][symbol]
-                syms_mode = info['symbols_mode']
-                # Note: only one write is possible
-                write = [(s, p) for s, p in symbol_refs if syms_mode[s][0] == WRITE][0]
-                to_replace[write[0]] = expr
-                to_remove.append(write[1])
-                place.children.remove(decl)
-                self.hoisted.pop(symbol)
-                self.decls.pop(symbol)
-            for stmt in innermost_block.children:
-                ast_replace(stmt.children[1], to_replace, copy=True)
-            for stmt in to_remove:
-                innermost_block.children.remove(stmt)
+        # Handle the effects, at the C-level, of the AST transformation
+        self._recoil()
+
+        # Reduce memory pressure by rearranging operations
+        self._rearrange()
 
     def eliminate_zeros(self):
         """Restructure the iteration spaces nested in this LoopOptimizer to
@@ -301,6 +272,54 @@ class LoopOptimizer(object):
         # ... scalar-expanding the precomputed symbols
         ast_update_rank(self.loop, precomputed_syms)
 
+    def _rearrange(self):
+        """Relieve the memory pressure by removing temporaries read by only
+        one statement."""
+
+        in_stmt = [count(s, mode='symbol_id', read_only=True) for s in self.exprs.keys()]
+        stmt_occs = dict((k, v) for d in in_stmt for k, v in d.items())
+
+        for l in self.hoisted.all_loops:
+            l_occs = count(l, read_only=True)
+            info = visit(l)
+            innermost_block = FindInstances(Block).visit(l)[Block][-1]
+            to_replace, to_remove = {}, []
+
+            for (symbol, rank), sym_occs in l_occs.items():
+                # If the symbol appears once, then it is a potential candidate
+                # for removal. It is actually removed if it does't appear in
+                # the expression from which was extracted. Symbols appearing
+                # more than once are removed if they host an expression made
+                # of just one symbol
+                if symbol not in self.hoisted or symbol in stmt_occs:
+                    continue
+                if self.hoisted[symbol].loop is not l:
+                    continue
+                decl = self.hoisted[symbol].decl
+                place = self.hoisted[symbol].place
+                expr = self.hoisted[symbol].stmt.children[1]
+                if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
+                    continue
+
+                symbol_refs = info['symbol_refs'][symbol]
+                syms_mode = info['symbols_mode']
+                # Note: only one write is possible
+                write = [(s, p) for s, p in symbol_refs if syms_mode[s][0] == WRITE][0]
+                to_replace[write[0]] = expr
+                to_remove.append(write[1])
+                place.children.remove(decl)
+                self.hoisted.pop(symbol)
+                self.decls.pop(symbol)
+
+            # Perform replacement of selected symbols
+            for stmt in innermost_block.children:
+                ast_replace(stmt.children[1], to_replace, copy=True)
+
+            # Clean up
+            for stmt in to_remove:
+                innermost_block.children.remove(stmt)
+
+
     def _inject(self):
         """Unroll loops outside of the expressions iteration space into the
         expression itself ("injection"). For example: ::
@@ -319,21 +338,6 @@ class LoopOptimizer(object):
                 for k
                   A[j][k] += ...f(B[0]*C[i][0] + B[1]*C[i][1] + ...)...
         """
-
-        def injection_recoil(to_unroll, stmts):
-            """Heuristically evaluate the growth in depth of the AST after
-            injection. If above the default threshold, increase the recursion
-            limit such that successive AST visits do not blow up the interpreter
-            """
-            import sys
-            niters = sum(l.size for l, p in to_unroll)
-            injected_exprs = len(stmts)
-            # Power is used because a subsequent expansion of injected
-            # expressions leads, in the /worst case/, to an exponential
-            # increase in the number of symbols in the AST
-            if pow(niters, injected_exprs) > injection_recoil.ths:
-                sys.setrecursionlimit(4000)
-        injection_recoil.ths = 100
 
         # 1) Unroll all injectable expressions
         analyzed, injectable = [], {}
@@ -381,7 +385,7 @@ class LoopOptimizer(object):
 
         # 2) Try to inject the unrolled expressions
         unrolled = True
-        injected = defaultdict(list)
+        self.injected = defaultdict(list)
         for stmt, expr_info in self.exprs.items():
             sym, expr = stmt.children
 
@@ -402,16 +406,16 @@ class LoopOptimizer(object):
                 if cost > save:
                     unrolled = False
                 else:
-                    injected[stmt].append(target_expr)
+                    self.injected[stmt].append((target_expr, cost))
 
             # Finally, can perform the injection
             to_replace = {k: v[0] for k, v in injectable.items()}
-            for target_expr in injected[stmt]:
+            for target_expr, cost in self.injected[stmt]:
                 ast_replace(target_expr, to_replace, copy=True)
 
         # 3) Clean up
         if not unrolled:
-            return injected
+            return
         for stmt, expr_info in self.exprs.items():
             nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
             injectable_nests = [n for n in nests if zip(*n)[0] != expr_info.loops]
@@ -425,7 +429,44 @@ class LoopOptimizer(object):
                             p.children.remove(decl)
                             self.decls.pop(i_sym)
 
-        return injected
+    def _recoil(self):
+        """AST transformation may lead to:
+
+            * allocating too much data on the stack (at the C level)
+            * particularly big ASTs, composed of thousand of nodes
+
+        To work around these problems:
+
+            * increase the stack size it the kernel arrays exceed the stack
+                limit threshold (at the C level)
+            * increase the recursion depth limit (at the Python level) so that
+                visit of huge ASTs do not blow up the interpreter
+        """
+
+        # 1) Stack size
+        # Assume the size of a C type double is 8 bytes
+        c_double_size = 8
+        # Assume the stack size is 1.7 MB (2 MB is usually the limit)
+        stack_size = 1.7*1024*1024
+
+        decls = [d for d in self.decls.values() if d.sym.rank]
+        size = sum([reduce(operator.mul, d.sym.rank) for d in decls])
+
+        if size * c_double_size > stack_size:
+            # Increase the stack size if the kernel's stack size seems to outreach
+            # the space available
+            try:
+                resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY,
+                                                           resource.RLIM_INFINITY))
+            except resource.error:
+                warning("Stack may blow up, and could not increase its size.")
+
+        # 2) Recursion depth limit
+        injection_ths = 2
+        all_injected = flatten(self.injected.values())
+        injection_cost = sum(zip(*all_injected)[1]) if all_injected else 0
+        if injection_cost > injection_ths:
+            sys.setrecursionlimit(4000)
 
     @property
     def expr_loops(self):
