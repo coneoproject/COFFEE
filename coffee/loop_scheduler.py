@@ -140,15 +140,15 @@ class SSALoopMerger(LoopScheduler):
     def merge(self, root):
         """Merge perfect loop nests in ``root``."""
         found_nests = defaultdict(list)
-        # Collect some info visiting the tree rooted in node
+        # Collect iteration spaces visiting the tree rooted in /root/
         for n in root.children:
             if isinstance(n, For):
-                # Track structure of iteration spaces
-                loops_infos = FindLoopNests().visit(n, {'node_parent': root})
+                retval = FindLoopNests.default_retval()
+                loops_infos = FindLoopNests().visit(n, parent=root, ret=retval)
                 for li in loops_infos:
                     loops, loops_parents = zip(*li)
-                    # Note that only inner loops can be fused, and that they share
-                    # the same parent
+                    # Note that only inner loops can be fused, and that they must
+                    # share the same parent node
                     key = (tuple(l.header for l in loops), loops_parents[-1])
                     found_nests[key].append(loops[-1])
 
@@ -156,11 +156,11 @@ class SSALoopMerger(LoopScheduler):
         # A perfect loop nest L1 is mergeable in a loop nest L2 if
         # 1 - their iteration space is identical; implicitly true because the keys,
         #     in the dictionary, are iteration spaces.
-        # 2 - between the two nests, there are no statements that read from values
-        #     computed in L1. This is checked next.
+        # 2 - between the two nests, there are no statements that read/write values
+        #     computed in L1. This is checked later
         # 3 - there are no read-after-write dependencies between variables written
-        #     in L1 and read in L2. This is checked next.
-        # The last loop in /root/, referred to as /merging_in/, is selected as L2
+        #     in L1 and read in L2. This is checked later
+        # In the following, convention is that L2 = /merging_in/, L1 = /l/
         for (itspace, parent), loop_nests in found_nests.items():
             if len(loop_nests) == 1:
                 # At least two loops are necessary for merging to be meaningful
@@ -175,28 +175,30 @@ class SSALoopMerger(LoopScheduler):
                 # Get the symbols written in /l/
                 l_writes = SymbolModes().visit(l.body, ret=SymbolModes.default_retval())
                 l_writes = [s for s, m in l_writes.items() if m[0] == WRITE]
+
+                # Check condition 2
                 # Get the symbols written between loop /l/ (excluded) and loop
-                # merging_in (included)
+                # merging_in (excluded)
                 bound_left = parent.children.index(l)+1
-                bound_right = parent.children.index(merging_in)+1
+                bound_right = parent.children.index(merging_in)
                 for n in parent.children[bound_left:bound_right]:
                     in_writes = SymbolModes().visit(n, ret=SymbolModes.default_retval())
-                    in_writes = [s for s, m in in_writes.items() if m[0] == WRITE]
-                    # Check condition 2
+                    in_writes = [s for s, m in in_writes.items()]
                     for iw, lw in product(in_writes, l_writes):
                         if self.expr_graph.is_written(iw, lw):
                             is_mergeable = False
                             break
-                    # Check condition 3
-                    for lw, mir in product(l_writes, merging_in_reads):
-                        if lw.symbol == mir.symbol and not lw.rank and not mir.rank:
-                            is_mergeable = False
-                            break
-                    if not is_mergeable:
+
+                # Check condition 3
+                for lw, mir in product(l_writes, merging_in_reads):
+                    if lw.symbol == mir.symbol and not lw.rank and not mir.rank:
+                        is_mergeable = False
                         break
+
                 # Track mergeable loops
                 if is_mergeable:
                     mergeable.append(l)
+
             # If there is at least one mergeable loops, do the merging
             for l in reversed(mergeable):
                 merged, l_dims, m_dims = self._merge_loops(parent, l, merging_in)
@@ -205,10 +207,9 @@ class SSALoopMerger(LoopScheduler):
             all_merged.append((mergeable, merging_in))
             merged_loops.append(merging_in)
 
-        # Reuse temporaries in the merged loops, where possible
+        # Reuse temporaries in merged loops
         self._simplify(merged_loops)
 
-        # Return the list of merged loops and the resulting loop
         return all_merged
 
 
