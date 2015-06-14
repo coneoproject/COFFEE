@@ -154,7 +154,8 @@ class ASTKernel(object):
         # The higher, the more precise and costly is autotuning
         autotune_resolution = 100000000
         # Kernel variant when blas transformation is selected
-        blas_config = {'rewrite': 2, 'align_pad': True, 'split': 1, 'precompute': 2}
+        blas_config = {'rewrite': 2, 'align_pad': True, 'split': 1,
+                       'precompute': 'perfect'}
         # Kernel variants tested when autotuning is enabled
         autotune_min = [('rewrite', {'rewrite': 1, 'align_pad': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
@@ -163,11 +164,12 @@ class ASTKernel(object):
         autotune_all = [('base', {}),
                         ('base', {'rewrite': 1, 'align_pad': True}),
                         ('rewrite', {'rewrite': 2, 'align_pad': True}),
-                        ('rewrite', {'rewrite': 2, 'align_pad': True, 'precompute': 1}),
+                        ('rewrite', {'rewrite': 2, 'align_pad': True,
+                                     'precompute': 'noloops'}),
                         ('rewrite_full', {'rewrite': 2, 'align_pad': True,
                                           'dead_ops_elimination': True}),
                         ('rewrite_full', {'rewrite': 2, 'align_pad': True,
-                                          'precompute': 1,
+                                          'precompute': 'noloops',
                                           'dead_ops_elimination': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 4}),
@@ -350,7 +352,7 @@ class ASTKernel(object):
                 'rewrite': 2,
                 'align_pad': True,
                 'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2),
-                'precompute': 1
+                'precompute': 'noloops'
             }
         elif opts.get('O4'):
             params = {
