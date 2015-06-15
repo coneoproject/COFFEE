@@ -33,8 +33,6 @@
 
 """Utility functions for the transformation of ASTs."""
 
-import operator
-from warnings import warn as warning
 from copy import deepcopy as dcopy
 from collections import defaultdict
 

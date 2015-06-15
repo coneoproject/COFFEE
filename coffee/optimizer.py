@@ -31,8 +31,10 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import operator
 import resource
 import sys
+from warnings import warn as warning
 
 from base import *
 from utils import *
@@ -318,7 +320,6 @@ class LoopOptimizer(object):
             # Clean up
             for stmt in to_remove:
                 innermost_block.children.remove(stmt)
-
 
     def _inject(self):
         """Unroll loops outside of the expressions iteration space into the
