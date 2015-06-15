@@ -8,10 +8,11 @@ import numpy as np
 
 from coffee.visitor import Visitor, Environment
 from coffee.base import Sum, Sub, Prod, Div, SparseArrayInit
-from coffee.utils import ItSpace
+from coffee.utils import ItSpace, flatten
 
 
-__all__ = ["ReplaceSymbols", "CheckUniqueness", "Uniquify", "Evaluate"]
+__all__ = ["ReplaceSymbols", "CheckUniqueness", "Uniquify", "Evaluate",
+           "ProjectExpansion"]
 
 
 class ReplaceSymbols(Visitor):
@@ -218,3 +219,57 @@ class Evaluate(Visitor):
                 # .../r/ is a reduction dimension
                 values = values.take(range(s), dim)
         return values, precision
+
+
+class ProjectExpansion(Visitor):
+    """
+    Project the output of expression expansion.
+    The caller should provid a collection of symbols C. The expression tree (nodes
+    that are not of type :class:`~.Expr` are not allowed) is visited and, for
+    each symbol in C, return a list of tuples. Each tuple represents a subset of
+    the symbols in C that will appear in the same term after expansion.
+
+    For example, be C = [A, B], and consider the following input expression: ::
+
+        (A*C + D*E)*(B*C + B*F)
+
+    After expansion, the expression becomes: ::
+
+        A*C*B*C + A*C*B*F + D*E*B*C + D*E*B*F
+
+    In which there are four product terms. In these terms, there are two in which
+    both A and B appear, and there are two in which only B appears. So the visit
+    would return [(A, B), (B,)].
+
+    :arg symbols: the collection of symbols searched for
+    """
+
+    def __init__(self, symbols):
+        self.symbols = symbols
+        super(ProjectExpansion, self).__init__()
+
+    def visit_object(self, o, env):
+        return []
+
+    def visit_Expr(self, o, env):
+        children = []
+        for n in o.children:
+            children.extend(self.visit(n))
+        ret = []
+        for n in children:
+            if n not in ret:
+                ret.append(n)
+        return ret
+
+    def visit_Prod(self, o, env):
+        projection = [self.visit(n) for n in o.children]
+        product = itertools.product(*projection)
+        if not product:
+            return projection
+        ret = []
+        for i in product:
+            ret.append(list(flatten(i)))
+        return ret
+
+    def visit_Symbol(self, o, env):
+        return [[o.symbol]] if o.symbol in self.symbols else [[]]
