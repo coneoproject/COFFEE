@@ -49,6 +49,7 @@ from coffee.visitors import FindInstances
 
 from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict
+from warnings import warn as warning
 import itertools
 import operator
 
