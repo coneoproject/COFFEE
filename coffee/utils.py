@@ -199,12 +199,12 @@ def ast_replace(node, to_replace, copy=False, mode='all'):
 
 
 def ast_remove(node, to_remove, mode='all'):
-    """Remove the AST Node ``to_remove`` from the tree rooted in ``node``.
+    """Remove the AST node ``to_remove`` from the tree rooted in ``node``.
 
     :param mode: either ``all``, in which case ``to_remove`` is turned into a
-                 string (if not a string already) and all of its occurrences are
-                 removed from the AST; or ``symbol``, in which case only (all of)
-                 the references to the provided ``to_remove`` symbol are cut away.
+        string (if not a string already) and all of its occurrences are removed
+        from the AST; or ``symbol``, in which case only (all of) the references
+        to the provided ``to_remove`` node are cut away.
     """
 
     def _is_removable(n, tr):
@@ -236,10 +236,10 @@ def ast_remove(node, to_remove, mode='all'):
         raise ValueError
 
     try:
-        for tr in to_remove:
-            _ast_remove(node, None, -1, tr)
+        if all(_ast_remove(node, None, None, tr) == -1 for tr in to_remove):
+            return -1
     except TypeError:
-        _ast_remove(node, None, -1, to_remove)
+        return _ast_remove(node, None, None, to_remove)
 
 
 def ast_update_ofs(node, ofs, **kwargs):
