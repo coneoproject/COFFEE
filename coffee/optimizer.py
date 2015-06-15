@@ -42,7 +42,7 @@ from loop_scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
-from coffee.visitors import MaxLoopDepth, FindInstances
+from coffee.visitors import MaxLoopDepth, FindInstances, ProjectExpansion
 
 
 class LoopOptimizer(object):
@@ -399,10 +399,12 @@ class LoopOptimizer(object):
 
             for i_syms, target_exprs in to_inject.items():
                 for target_expr in target_exprs:
+                    projection = ProjectExpansion(i_syms).visit(target_expr)
                     # Is injection going to be profitable ?
                     # If the cost exceeds the potential save on flops, due to later
                     # optimizations potentially enabled by injection, skip
-                    cost = reduce(operator.mul, [injectable[i][1] for i in i_syms])
+                    cost = sum([reduce(operator.mul, [injectable[j][1] for j in i])
+                                for i in projection if i])
                     save = [l.size for l in expr_info.out_domain_loops] or [0]
                     save = reduce(operator.mul, save)
                     if cost > save:
@@ -412,8 +414,10 @@ class LoopOptimizer(object):
 
             # Finally, can perform the injection
             to_replace = {k: v[0] for k, v in injectable.items()}
-            for target_expr, cost in self.injected[stmt]:
-                ast_replace(target_expr, to_replace, copy=True)
+            if stmt in self.injected:
+                # Note this check is necessary since we're using a defaultdict
+                for target_expr, cost in self.injected[stmt]:
+                    ast_replace(target_expr, to_replace, copy=True)
 
         # 3) Clean up
         if not unrolled:
