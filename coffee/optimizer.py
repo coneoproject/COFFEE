@@ -563,10 +563,9 @@ class CPULoopOptimizer(LoopOptimizer):
         """
 
         new_exprs = {}
-        elf = ExpressionFissioner(cut)
+        elf = ExpressionFissioner(cut=cut, loops='expr')
         for stmt, expr_info in self.exprs.items():
-            # Split the expression
-            new_exprs.update(elf.fission(stmt, expr_info, True))
+            new_exprs.update(elf.fission(stmt, expr_info))
         self.exprs = new_exprs
 
     def blas(self, library):

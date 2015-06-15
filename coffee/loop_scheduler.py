@@ -215,131 +215,251 @@ class SSALoopMerger(LoopScheduler):
 
 class ExpressionFissioner(LoopScheduler):
 
-    """Analyze data dependencies and iteration spaces, then fission associative
-    operations in expressions.
-    Fissioned expressions are placed in a separate loop nest."""
+    """Split expressions embedded in a loop nest."""
 
-    def __init__(self, cut):
+    def __init__(self, **kwargs):
         """Initialize the ExpressionFissioner.
 
-        :param cut: number of operands requested to fission expressions."""
-        self.cut = cut
+        :arg kwargs:
+            * cut: the number of operands an expression should be fissioned into
+            * match: a list of subexpressions that should be cut from the input
+                expression. ``cut`` is ignored if ``match`` is provided.
+            * loops: a value in ['all', 'expr', 'none']. 'all' means that an
+                expression is split, and its chunks are placed in separate loop
+                nests. 'expr' implies that the chunks share the outer loops of the
+                expression, particularly those not belonging to its domain. 'none'
+                means that all chunks are placed within the original loop nest
+            * perfect: if True, create perfect loop nests. This means that any
+                new loop nest in which a chunk is placed is purged from any extra
+                statement (apart, obviously, from the chunk itself)
+        """
+        self.cut = kwargs.get('cut', -1)
+        self.match = [str(i) for i in kwargs.get('match', [])]
+        self.loops = kwargs.get('loops', 'expr')
+        self.perfect = kwargs.get('perfect', False)
 
-    def _split_sum(self, node, parent, is_left, found, sum_count):
-        """Exploit sum's associativity to cut node when a sum is found.
-        Return ``True`` if a potentially splittable node is found, ``False``
-        otherwise."""
-        if isinstance(node, Symbol):
-            return False
-        elif isinstance(node, Par):
-            return self._split_sum(node.child, (node, 0), is_left, found, sum_count)
-        elif isinstance(node, Prod) and found:
-            return False
-        elif isinstance(node, Prod) and not found:
-            if not self._split_sum(node.left, (node, 0), is_left, found, sum_count):
-                return self._split_sum(node.right, (node, 1), is_left, found, sum_count)
-            return True
-        elif isinstance(node, Sum):
-            sum_count += 1
-            if not found:
-                # Track the first Sum we found while cutting
-                found = parent
-            if sum_count == self.cut:
-                # Perform the cut
-                if is_left:
-                    parent, parent_leaf = parent
-                    parent.children[parent_leaf] = node.left
-                else:
-                    found, found_leaf = found
-                    found.children[found_leaf] = node.right
-                return True
-            else:
-                if not self._split_sum(node.left, (node, 0), is_left, found, sum_count):
-                    return self._split_sum(node.right, (node, 1), is_left, found, sum_count)
-                return True
+        if self.match:
+            self.cutter = self.CutterMatch(self)
+        elif self.cut > 0:
+            self.cutter = self.CutterSum(self)
         else:
-            raise RuntimeError("Split error: found unknown node: %s" % str(node))
+            raise RuntimeError("Must specify a `cut` or a `match`.")
 
-    def _sum_fission(self, stmt_info, copy_loops):
-        """Split an expression after ``cut`` operands. This results in two
-        sub-expressions that are placed in different, although identical
-        loop nests if ``copy_loops`` is true; they are placed in the same
-        original loop nest otherwise. Return the two split expressions as a
-        2-tuple, in which the second element is potentially further splittable."""
+    class Cutter():
 
-        stmt, expr_info = stmt_info
-        expr_parent = expr_info.parent
-        domain_outerloop, domain_outerparent = expr_info.domain_loops_info[0]
+        def __init__(self, expr_fissioner):
+            self.expr_fissioner = expr_fissioner
 
-        # Copy the original expression twice, and then split the two copies, that
-        # we refer to as ``left`` and ``right``, meaning that the left copy will
-        # be transformed in the sub-expression from the origin up to the cut point,
-        # and analoguously for right.
-        # For example, consider the expression a*b + c*d; the cut point is the sum
-        # operator. Therefore, the left part is a*b, whereas the right part is c*d
-        stmt_left = dcopy(stmt)
-        stmt_right = dcopy(stmt)
-        expr_left = Par(stmt_left.children[1])
-        expr_right = Par(stmt_right.children[1])
-        sleft = self._split_sum(expr_left.children[0], (expr_left, 0), True, None, 0)
-        sright = self._split_sum(expr_right.children[0], (expr_right, 0), False, None, 0)
+        def cut(self, node):
+            """
+            Split ``node`` into /two halves/, called /split/ and /remainder/
 
-        if sleft and sright:
-            index = expr_parent.children.index(stmt)
+            For example, consider the expression a*b + c*d; if the expression is cut
+            into chunks containing only one operand (i.e., self.cut=1), then we have
+            precisely two chunks, /split/ = a*b, /remainder/ = c*d
 
-            # Append the left-split expression, reusing existing loop nest
-            expr_parent.children[index] = stmt_left
-            split = (stmt_left, MetaExpr(expr_info.type,
-                                         expr_parent,
-                                         expr_info.loops_info,
-                                         expr_info.domain_dims))
+            If the input expression is a*b + c*d + e*f, and still self.cut=1, then we
+            have two chunks, /split/ = a*b, /remainder/ = c*d + e*f; that is,
+            /remainder/ always contains the subexpression after the fission point
+            """
+            self._success = False
 
-            # Append the right-split (remainder) expression
-            if copy_loops:
-                # Create a new loop nest
-                new_domain_outerloop = dcopy(domain_outerloop)
-                new_domain_innerloop = new_domain_outerloop.body[0]
-                new_domain_innerloop_block = new_domain_innerloop.children[0]
-                new_domain_innerloop_block.children[0] = stmt_right
-                new_domain_outerloop_info = (new_domain_outerloop,
-                                             domain_outerparent)
-                new_domain_innerloop_info = (new_domain_innerloop,
-                                             new_domain_innerloop_block)
-                new_loops_info = expr_info.out_domain_loops_info + \
-                    (new_domain_outerloop_info,) + (new_domain_innerloop_info,)
-                domain_outerparent.children.append(new_domain_outerloop)
+            left = dcopy(node)
+            self._cut(left.children[1], left, 'split')
+
+            right = dcopy(node)
+            self._cut(right.children[1], right, 'remainder')
+
+            return left, right
+
+    class CutterSum(Cutter):
+
+        def _cut(self, node, parent, side, topsum=None, counter=0):
+            if isinstance(node, (Symbol, FunCall)):
+                return False
+
+            elif isinstance(node, (Par, Div)):
+                return self._cut(node.children[0], node, side, topsum, counter)
+
+            elif isinstance(node, Prod):
+                if topsum:
+                    return False
+                if not self._cut(node.left, node, side, topsum, counter):
+                    return self._cut(node.right, node, side, topsum, counter)
+                return True
+
+            elif isinstance(node, (Sum, Sub)):
+                counter += 1
+                topsum = topsum or (parent, parent.children.index(node))
+                if counter == self.expr_fissioner.cut:
+                    if not parent:
+                        return False
+                    self._success = True
+                    if side == 'split':
+                        parent.children[parent.children.index(node)] = node.left
+                    else:
+                        right = Neg(node.right) if isinstance(node, Sub) else node.right
+                        topsum[0].children[topsum[1]] = right
+                    return True
+                else:
+                    if not self._cut(node.left, node, side, topsum, counter):
+                        return self._cut(node.right, node, side, topsum, counter)
+                    return True
+
             else:
-                # Reuse loop nest created in the previous function call
-                expr_parent.children.insert(index, stmt_right)
-                new_domain_innerloop_block = expr_parent
-                new_loops_info = expr_info.loops_info
-            splittable = (stmt_right, MetaExpr(expr_info.type,
-                                               new_domain_innerloop_block,
-                                               new_loops_info,
-                                               expr_info.domain_dims))
-            return (split, splittable)
-        return ((stmt, expr_info), ())
+                raise RuntimeError("Fission error: found unknown node: %s" % str(node))
 
-    def fission(self, stmt, expr_info, copy_loops):
-        """Split an expression containing ``x`` summands into ``x/cut`` chunks.
-        Each chunk is placed in a separate loop nest if ``copy_loops`` is true,
-        in the same loop nest otherwise. In the former case, the split occurs
-        in the largest perfect loop nest wrapping the expression in ``stmt``.
-        Return a dictionary of all of the split chunks, which associates the split
-        statements to meta data (in terms of ``MetaExpr`` objects)
+        def cut(self, node, expr_info):
+            left, right = ExpressionFissioner.Cutter.cut(self, node)
+            if self._success:
+                index = expr_info.parent.children.index(node)
 
-        :param stmt: AST statement containing the expression to be fissioned
-        :param expr_info: ``MetaExpr`` object describing the expression in ``stmt``
-        :param copy_loops: true if the split expressions should be placed in two
-                           separate, adjacent loop nests (iterating, of course,
-                           along the same iteration space); false, otherwise."""
+                # Append /left/ to the original loop nest
+                expr_info.parent.children[index] = left
+                split = (left, copy_metaexpr(expr_info))
 
-        split_stmts = {}
-        splittable_stmt = (stmt, expr_info)
-        while splittable_stmt:
-            split_stmt, splittable_stmt = self._sum_fission(splittable_stmt, copy_loops)
-            split_stmts[split_stmt[0]] = split_stmt[1]
-        return split_stmts
+                # Append /right/ ...
+                if self.expr_fissioner.loops in ['expr', 'all']:
+                    # ... in a new loop nest ...
+                    right_info = self.expr_fissioner._embedexpr(right, expr_info)
+                else:
+                    # ... to the original loop nest
+                    expr_info.parent.children.insert(index, right)
+                    right_info = copy_metaexpr(expr_info)
+                splittable = (right, right_info)
+
+                return (split, splittable)
+            return ((node, expr_info), ())
+
+    class CutterMatch(Cutter):
+
+        def __init__(self, expr_fissioner):
+            ExpressionFissioner.Cutter.__init__(self, expr_fissioner)
+            self.matched = []
+
+        def _cut(self, node, parent, side, topsum=None):
+            if topsum and str(node) in self.expr_fissioner.match:
+                return node
+
+            elif isinstance(node, (Symbol, FunCall)):
+                return None
+
+            elif isinstance(node, Par):
+                return self._cut(node.child, node, side, topsum)
+
+            elif isinstance(node, Div):
+                return self._cut(node.left, node, side)
+
+            elif isinstance(node, Prod):
+                cutting = self._cut(node.left, node, side)
+                return cutting if cutting else self._cut(node.right, node, side)
+
+            elif isinstance(node, (Sum, Sub)):
+                topsum = topsum or (parent, parent.children.index(node))
+                # Find out if one of the two children is cuttable
+                cutting = self._cut(node.left, node, side, topsum)
+                if cutting and side == 'remainder':
+                    # Need to swap
+                    cutting = node.right
+                elif not cutting:
+                    cutting = self._cut(node.right, node, side, topsum)
+                    if cutting and side == 'remainder':
+                        # Need to swap
+                        cutting = node.left
+                if not cutting:
+                    return None
+                # Adjust if a Sub
+                if isinstance(node, Sub) and cutting == node.right:
+                    cutting = Neg(cutting)
+                if side == 'split':
+                    # In a tree of Sum/Subs, only the /top/ Sum/Sub performs the
+                    # actual cut, while the others just propagate upwards the
+                    # notification "a cut point was found"
+                    if parent == topsum[0]:
+                        self._success = True
+                        topsum[0].children[topsum[1]] = cutting
+                        return parent
+                    else:
+                        return cutting
+                else:
+                    parent.children[parent.children.index(node)] = cutting
+                    return None
+
+            else:
+                raise RuntimeError("Fission error: found unknown node: %s" % str(node))
+
+        def cut(self, node, expr_info):
+            left, right = ExpressionFissioner.Cutter.cut(self, node)
+            if self._success:
+                # Append /left/ to a new loop nest
+                split = (left, self.expr_fissioner._embedexpr(left, expr_info))
+                self.matched.append(left)
+
+                # Append /right/ to the original loop nest
+                index = expr_info.parent.children.index(node)
+                expr_info.parent.children[index] = right
+                splittable = (right, copy_metaexpr(expr_info))
+                return (split, splittable)
+            return ((node, expr_info), ())
+
+    def _embedexpr(self, stmt, expr_info):
+        """Build a loop nest for ``stmt`` and return its :class:`MetaExpr` object."""
+        if self.loops == 'none':
+            return copy_metaexpr(expr_info)
+
+        # Handle the domain loops
+        domain_loops = ItSpace(mode=2).to_for(expr_info.domain_loops, stmts=[stmt])
+        domain_outerloop = domain_loops[0]
+
+        # Handle the out-domain loops
+        if self.loops == 'all' and expr_info.out_domain_loops_info:
+            out_domain_loop, out_domain_loop_parent = expr_info.out_domain_loops_info[0]
+            index = out_domain_loop.body.index(expr_info.domain_loops[0])
+            out_domain_loop = dcopy(out_domain_loop)
+            if self.perfect:
+                out_domain_loop.body[:] = [domain_outerloop]
+            else:
+                out_domain_loop.body[index] = domain_outerloop
+            out_domain_loops_info = ((out_domain_loop, out_domain_loop_parent),)
+            domain_outerloop_parent = out_domain_loop.children[0]
+        else:
+            out_domain_loops_info = expr_info.out_domain_loops_info
+            domain_outerloop_parent = expr_info.domain_loops_parents[0]
+
+        # Build new loops info
+        finder, env = FindLoopNests(), {'node_parent': domain_outerloop_parent}
+        loops_info = out_domain_loops_info
+        loops_info += tuple(finder.visit(domain_outerloop, env=env)[0])
+
+        # Append the newly created loop nest
+        if self.loops == 'all':
+            expr_info.outermost_parent.children.append(out_domain_loop)
+        elif self.loops == 'expr':
+            domain_outerloop_parent.children.append(domain_outerloop)
+
+        # Finally, create and return the MetaExpr object
+        parent = loops_info[-1][0].children[0]
+        return copy_metaexpr(expr_info, parent=parent, loops_info=loops_info)
+
+    @property
+    def matched(self):
+        return self.cutter.matched if self.match else []
+
+    def fission(self, stmt, expr_info):
+        """Split, or fission, an expression ``stmt``, whose metadata are provided
+        through ``expr_info``.
+
+        Return a dictionary mapping expression chunks to :class:`MetaExpr` objects.
+
+        :arg stmt: the expression to be fissioned
+        :arg expr_info: ``MetaExpr`` object describing ``stmt``
+        """
+        exprs = {}
+        splittable = (stmt, expr_info)
+        while splittable:
+            split, splittable = self.cutter.cut(*splittable)
+            exprs[split[0]] = split[1]
+        return exprs
 
 
 class ZeroRemover(LoopScheduler):
@@ -602,13 +722,13 @@ class ZeroRemover(LoopScheduler):
         # First, split expressions to maximize the impact of the transformation.
         # This is because different summands may have zero-valued blocks at
         # different offsets
-        elf = ExpressionFissioner(cut=1)
+        elf = ExpressionFissioner(cut=1, loops='none')
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
                 continue
             elif expr_info.dimension > 1:
                 self.exprs.pop(stmt)
-                self.exprs.update(elf.fission(stmt, expr_info, False))
+                self.exprs.update(elf.fission(stmt, expr_info))
 
         # Perform symbolic execution, track the propagation of non zero-valued
         # blocks, restructure the iteration spaces to avoid useless arithmetic ops
