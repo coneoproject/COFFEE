@@ -501,8 +501,10 @@ def find_expression(node, e_type, e_dims=None, e_symbol=None):
     """Wrapper of the FindExpression visitor."""
     finder = FindExpression(e_type, e_dims, e_symbol)
     exprs = finder.visit(node, env=FindExpression.default_env)
-    if 'in_syms' in exprs:
-        exprs.pop('in_syms')
+    if 'matched_syms' in exprs:
+        exprs.pop('matched_syms')
+    if 'inner_syms' in exprs:
+        exprs.pop('inner_syms')
     if 'in_itspace' in exprs:
         exprs.pop('in_itspace')
     return exprs
