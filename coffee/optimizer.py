@@ -397,17 +397,18 @@ class LoopOptimizer(object):
                 unrolled = False
                 continue
 
-            for i_syms, target_expr in to_inject.items():
-                # Is injection going to be profitable ?
-                # If the cost exceeds the potential save on flops, due to later
-                # optimizations potentially enabled by injection, skip
-                cost = reduce(operator.mul, [injectable[i][1] for i in i_syms])
-                save = [l.size for l in expr_info.out_domain_loops] or [0]
-                save = reduce(operator.mul, save)
-                if cost > save:
-                    unrolled = False
-                else:
-                    self.injected[stmt].append((target_expr, cost))
+            for i_syms, target_exprs in to_inject.items():
+                for target_expr in target_exprs:
+                    # Is injection going to be profitable ?
+                    # If the cost exceeds the potential save on flops, due to later
+                    # optimizations potentially enabled by injection, skip
+                    cost = reduce(operator.mul, [injectable[i][1] for i in i_syms])
+                    save = [l.size for l in expr_info.out_domain_loops] or [0]
+                    save = reduce(operator.mul, save)
+                    if cost > save:
+                        unrolled = False
+                    else:
+                        self.injected[stmt].append((target_expr, cost))
 
             # Finally, can perform the injection
             to_replace = {k: v[0] for k, v in injectable.items()}

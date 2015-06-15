@@ -608,22 +608,29 @@ class FindExpression(Visitor):
         return {}
 
     def visit_Expr(self, o, env):
-        ret = {}
+        ret = defaultdict(list)
         new_env = Environment(env, node_parent=o)
         for i in [self.visit(n, env=new_env) for n in o.children]:
-            if all('in_syms' in j for j in [ret, i]):
-                ret['in_syms'].extend(i['in_syms'])
-                i.pop('in_syms')
-            ret.update(i)
-        if all(i in ret for i in ['in_syms', 'in_itspace']) and isinstance(o, self.type):
-            if isinstance(env['node_parent'], self.type):
-                # Postpone expression tracking because the parent has same type
-                # as the node currently being visited
-                pass
+            for k, v in i.items():
+                ret[k].extend([j for j in v if j not in ret[k]])
+        if all(i in ret for i in ['matched_syms', 'in_itspace']):
+            if isinstance(o, self.type):
+                if isinstance(env['node_parent'], self.type):
+                    # Postpone expression tracking because the parent has same type
+                    # as the node currently being visited
+                    pass
+                else:
+                    key = set(ret['matched_syms'])
+                    key |= {j for j in ret['inner_syms']}
+                    key = tuple(sorted(key))
+                    # Pop inner subexpressions, than push the parent one, since
+                    # it represents a larger match
+                    for k, v in ret.items():
+                        if set(k).issubset(key):
+                            ret.pop(k)
+                    ret[key] = [o]
             else:
-                ret[tuple(ret['in_syms'])] = o
-                ret.pop('in_syms')
-                ret.pop('in_itspace')
+                ret.pop('matched_syms')
         return ret
 
     visit_FunCall = visit_Expr
@@ -631,7 +638,8 @@ class FindExpression(Visitor):
     def visit_Symbol(self, o, env):
         ret = {}
         if self.symbols is None or o.symbol in self.symbols:
-            ret['in_syms'] = [o.symbol]
+            ret['matched_syms'] = [o.symbol]
+            ret['inner_syms'] = [o.symbol]
         if self.dims is None or any(r in self.dims for r in o.rank):
-            ret['in_itspace'] = True
+            ret['in_itspace'] = [True]
         return ret
