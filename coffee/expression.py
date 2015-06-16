@@ -45,15 +45,15 @@ class MetaExpr(object):
         :param type: the C type of the expression.
         :param parent: the parent block node in which the expression is embedded.
         :param loops_info: the ordered tuple of (loop, parent) the expression is
-                           enclosed in.
+             enclosed in.
         :param domain: an ``n``-tuple, where ``n`` is the rank of the tensor
-                       evaluated by the expression. The i-th entry corresponds to
-                       the loop dimension along which iteration occurs (For example,
-                       given an output tensor ``A[i][j]``, ``domain=(i, j)``).
+             evaluated by the expression. The i-th entry corresponds to
+             the loop dimension along which iteration occurs (For example,
+             given an output tensor ``A[i][j]``, ``domain=(i, j)``).
         """
         self._type = type
         self._parent = parent
-        self._loops_info = loops_info
+        self._loops_info = list(loops_info)
         self._domain = domain
 
     @property
