@@ -107,6 +107,15 @@ class LoopOptimizer(object):
         if mode == 3:
             self._inject()
             self._recoil()
+            # Split expressions produced by injection
+            for inj_stmt, injected_cost in self.injected.items():
+                injected = zip(*injected_cost)[0]
+                fissioner = ExpressionFissioner(match=injected, loops='all', perfect=True)
+                self.exprs.update(fissioner.fission(inj_stmt, self.exprs.pop(inj_stmt)))
+                # Non-injected expressions should downgrade to a less aggressive mode
+                for stmt, expr_info in self.exprs.items():
+                    if stmt != inj_stmt and stmt not in fissioner.matched:
+                        expr_info.mode = mode - 1
 
         # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
