@@ -126,6 +126,10 @@ class MetaExpr(object):
         return self.loops[0]
 
     @property
+    def outermost_parent(self):
+        return self.loops_parents[0]
+
+    @property
     def dimension(self):
         return len(self.domain_dims) if not self.is_scalar else 0
 
