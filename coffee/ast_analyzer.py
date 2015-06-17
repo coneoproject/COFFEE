@@ -121,11 +121,11 @@ class StmtTracker(OrderedDict):
 
     @property
     def all_stmts(self):
-        return set((stmt_info.stmt for stmt_info in self.values()))
+        return set((stmt_info.stmt for stmt_info in self.values() if stmt_info.stmt))
 
     @property
     def all_places(self):
-        return set((stmt_info.place for stmt_info in self.values()))
+        return set((stmt_info.place for stmt_info in self.values() if stmt_info.place))
 
     @property
     def all_loops(self):
