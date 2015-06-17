@@ -564,8 +564,7 @@ class ExpressionHoister(object):
                     next_loop = expr_outermost_loop
                 else:
                     # As vector, within the outermost loop imposing the dependency
-                    dep_block = expr_dims_loops[dep[0]].children[0]
-                    place = dep_block
+                    place = expr_dims_loops[dep[0]].children[0]
                     wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, len(dep)))
                     next_loop = od_find_next(expr_dims_loops, dep[0])
 
