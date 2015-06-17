@@ -360,11 +360,14 @@ class ExpressionRewriter(object):
                 for s in symbols[1:]:
                     s_decl = self.hoisted[s.symbol].decl
                     self.header.children.remove(s_decl)
+                    self.hoisted.pop(s.symbol)
                     evals.pop(s)
-            # Finally, update declarations with precomputed values
+            # Finally, update the hoisted symbols
             for s, values in evals.items():
-                self.hoisted[s.symbol].decl.init = values
-                self.hoisted[s.symbol].decl.qual = ['static', 'const']
+                hoisted = self.hoisted[s.symbol]
+                hoisted.decl.init = values
+                hoisted.decl.qual = ['static', 'const']
+                self.hoisted.pop(s.symbol)
             # Clean up
             self.header.children.remove(hoisted_loop)
 
