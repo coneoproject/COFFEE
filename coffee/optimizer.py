@@ -520,7 +520,7 @@ class CPULoopOptimizer(LoopOptimizer):
 
         unrolled_loops = set()
         for itspace, uf in loop_uf.items():
-            new_exprs = {}
+            new_exprs = OrderedDict()
             for stmt, expr_info in self.exprs.items():
                 loop = [l for l in expr_info.perfect_loops if l.dim == itspace]
                 if not loop:
@@ -571,7 +571,7 @@ class CPULoopOptimizer(LoopOptimizer):
                 A[i][j] += B[i]*X[j]
         """
 
-        new_exprs = {}
+        new_exprs = OrderedDict()
         elf = ExpressionFissioner(cut=cut, loops='expr')
         for stmt, expr_info in self.exprs.items():
             new_exprs.update(elf.fission(stmt, expr_info))

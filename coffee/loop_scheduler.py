@@ -454,7 +454,7 @@ class ExpressionFissioner(LoopScheduler):
         :arg stmt: the expression to be fissioned
         :arg expr_info: ``MetaExpr`` object describing ``stmt``
         """
-        exprs = {}
+        exprs = OrderedDict()
         splittable = (stmt, expr_info)
         while splittable:
             split, splittable = self.cutter.cut(*splittable)
