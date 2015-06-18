@@ -154,67 +154,62 @@ class LoopVectorizer(object):
                 decl.attr.append(align_attr)
                 continue
             # Examined symbol is a FunDecl argument, so a buffer might be required
-            acc_modes, all_dataspaces, p_info = [], defaultdict(list), OrderedDict()
+            access_modes, dataspaces = [], []
+            p_info = OrderedDict()
             # A- Analyze occurrences of the FunDecl argument in the AST
             for s, _ in symbol_refs[decl_name]:
                 if s is decl.sym or not s.rank:
                     continue
                 # ... the access mode (READ, WRITE, ...)
-                acc_modes.append(symbols_mode[s])
+                access_modes.append(symbols_mode[s])
                 # ... the offset along the innermost dimension
                 p_offset = s.offset[p_dim][1]
                 # ... and the iteration and the data spaces
-                loops = tuple([l for l in symbols_dep[s] if l.dim in s.rank])
+                loops = tuple(l for l in symbols_dep[s] if l.dim in s.rank)
+                itspace = tuple((l.start, l.end) for l in loops)
                 dataspace = [None for r in s.rank]
                 for l in loops:
-                    index = s.rank.index(l.dim)
                     # Assume, initially, the dataspace spans the whole dimension,
                     # then try to limit it based on available information
-                    l_dataspace = (0, s.rank[index])
+                    index = s.rank.index(l.dim)
+                    l_dataspace = (0, decl.sym.rank[index])
                     offset = s.offset[index][1]
                     if not isinstance(offset, str):
                         l_dataspace = (l.start + offset, l.end + offset)
                     dataspace[index] = l_dataspace
-                all_dataspaces[loops].append(tuple(dataspace))
-                p_info.setdefault((loops, p_offset), []).append(s)
-            # B- Extra care if dataspaces overlap, otherwise code might break
+                dataspaces.append(tuple(dataspace))
+                p_info.setdefault((itspace, p_offset), (loops, []))[1].append(s)
+            # B- Check dataspace overlap. Dataspaces ...
+            # ... should either completely overlap (will be mapped to the same buffer)
+            # ... or be disjoint
             will_break = False
-            for loops, dataspaces in all_dataspaces.items():
-                # Within the same iteration space, dataspaces ...
-                # ... can completely overlap (they will be mapped to the same buffer)
-                # ... or should be disjoint
-                for ds1, ds2 in product(dataspaces, dataspaces):
-                    if ds1 is ds2:
-                        continue
-                    for d1, d2 in zip(ds1, ds2):
-                        if ItSpace(mode=0).intersect([d1, d2]) not in [(0, 0), d1]:
-                            will_break = True
-                # Across different iteration spaces, dataspaces should not overlap at all
-                for loops2, dataspaces2 in all_dataspaces.items():
-                    if loops is loops2:
-                        continue
-                    for ds1, ds2 in product(dataspaces, dataspaces2):
-                        for d1, d2 in zip(ds1, ds2):
-                            if ItSpace(mode=0).intersect([d1, d2]) != (0, 0):
-                                will_break = True
+            for ds1, ds2 in product(dataspaces, dataspaces):
+                for d1, d2 in zip(ds1, ds2):
+                    if ItSpace(mode=0).intersect([d1, d2]) not in [(0, 0), d1]:
+                        will_break = True
             if will_break:
                 continue
             # C- Create a padded temporary buffer for efficient vectorization
             buf_name, buf_rank = '_%s' % decl_name, 0
-            loops_mapper = defaultdict(list)
-            for (loops, p_offset), syms in p_info.items():
+            itspace_mapper = OrderedDict()
+            for (itspace, p_offset), (loops, syms) in p_info.items():
                 if not (p_rank != decl.sym.rank or
                         isinstance(p_offset, str) or
                         vect_roundup(p_offset) > p_offset):
                     # Useless to pad in this case
                     continue
+                mapped = set()
                 for s in syms:
                     original_s = dcopy(s)
                     s.symbol = buf_name
                     s.rank = (buf_rank,) + s.rank
                     s.offset = ((1, 0),) + s.offset[:p_dim] + ((1, 0),)
-                    # Map buffer symbol to FunDecl symbol occurrence
-                    loops_mapper[loops].append((original_s, dcopy(s)))
+                    if s.offset not in mapped:
+                        # Map buffer symbol to each FunDecl symbol occurrence
+                        # avoiding duplicate, useless copies
+                        mapping = (original_s, dcopy(s))
+                        itspace_mapper.setdefault(itspace, (loops, []))[1].append(mapping)
+                        mapped.add(s.offset)
                 buf_rank += 1
             if buf_rank == 0:
                 continue
@@ -228,8 +223,8 @@ class LoopVectorizer(object):
             # the temporary buffer. Depending on how the symbol is accessed
             # (read only, read and write, incremented, etc.), different sort
             # of copies are made
-            first, last = acc_modes[0], acc_modes[-1]
-            for loops, mapper in loops_mapper.items():
+            first, last = access_modes[0], access_modes[-1]
+            for itspace, (loops, mapper) in itspace_mapper.items():
                 if first[0] == READ:
                     stmts = [Assign(b, s) for s, b in mapper]
                     copy_back = ItSpace(mode=2).to_for(loops, stmts=stmts)
@@ -240,7 +235,7 @@ class LoopVectorizer(object):
                     # not contain any meaningful values, then we can safely write
                     # to it. This is an optimization to avoid increments when not
                     # necessarily required
-                    could_incr = WRITE in decl.pragma and len(loops_mapper) == 1
+                    could_incr = WRITE in decl.pragma and len(itspace_mapper) == 1
                     op = Assign if could_incr else last[1]
                     stmts = [op(s, b) for s, b in mapper]
                     copy_back = ItSpace(mode=2).to_for(loops, stmts=stmts)
