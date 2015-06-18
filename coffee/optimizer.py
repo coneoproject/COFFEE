@@ -103,6 +103,10 @@ class LoopOptimizer(object):
         """
         ExpressionRewriter.reset()
 
+        # Set a rewrite mode for each expression
+        for stmt, expr_info in self.exprs.items():
+            expr_info.mode = mode
+
         # Passes preliminar to expression rewriting
         if mode == 3:
             self._inject()
@@ -121,21 +125,21 @@ class LoopOptimizer(object):
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
-            if expr_info.dimension in [0, 1] and mode in [1, 2]:
+            if expr_info.dimension in [0, 1] and expr_info.mode in [1, 2]:
                 ew.licm(hoist_out_domain=True)
                 continue
 
-            if mode == 1:
+            if expr_info.mode == 1:
                 ew.licm()
 
-            elif mode == 2:
+            elif expr_info.mode == 2:
                 ew.licm()
                 if expr_info.is_tensor:
                     ew.expand()
                     ew.factorize()
                     ew.licm()
 
-            elif mode == 3:
+            elif expr_info.mode == 3:
                 if expr_info.is_tensor:
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
