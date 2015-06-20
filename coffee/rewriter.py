@@ -578,8 +578,7 @@ class ExpressionHoister(object):
                     symbols[s] = dep
 
                 # 5) Create the body containing invariant statements
-                subexprs = [Par(dcopy(e)) if not isinstance(e, Par) else
-                            dcopy(e) for e in subexprs]
+                subexprs = [dcopy(e) for e in subexprs]
                 inv_stmts = [Assign(s, e) for s, e in zip(dcopy(inv_syms), subexprs)]
 
                 # 6) Track necessary information for AST construction
@@ -664,7 +663,7 @@ class ExpressionExpander(object):
             return {exp: self.cache[cache_key]}
 
         # Aliases
-        hoisted_expr = self.hoisted[exp.symbol].stmt.children[1]
+        hoisted_stmt = self.hoisted[exp.symbol].stmt
         hoisted_decl = self.hoisted[exp.symbol].decl
         hoisted_loop = self.hoisted[exp.symbol].loop
         hoisted_place = self.hoisted[exp.symbol].place
@@ -684,13 +683,13 @@ class ExpressionExpander(object):
 
         # No dependencies, just perform the expansion
         if not self.expr_graph.is_read(exp):
-            hoisted_expr.children[0] = op(Par(hoisted_expr.children[0]), dcopy(grp))
+            hoisted_stmt.children[1] = op(hoisted_stmt.children[1], dcopy(grp))
             self.expr_graph.add_dependency(exp, grp)
             self.cache[cache_key] = exp
             return {exp: exp}
 
         # Create new symbol, expression, and declaration
-        expr = Par(op(dcopy(exp), grp))
+        expr = op(dcopy(exp), grp)
         hoisted_exp = dcopy(exp)
         hoisted_exp.symbol = self._expanded_sym % {'loop_dep': exp.symbol,
                                                    'expr_id': self.expr_id,
