@@ -60,8 +60,8 @@ class LoopOptimizer(object):
         self.decls = decls
         self.exprs = exprs
 
-        # Track nonzero regions accessed in the loop nest
-        self.nz_info = {}
+        # Track nonzero regions accessed in each symbol
+        self.nz_syms = {}
         # Track data dependencies
         self.expr_graph = ExpressionGraph(header)
         # Track hoisted expressions
@@ -169,7 +169,7 @@ class LoopOptimizer(object):
 
         if any([d.nonzero for d in self.decls.values()]):
             zls = ZeroRemover(self.exprs, self.decls, self.hoisted)
-            self.nz_info = zls.reschedule(self.header)
+            self.nz_syms = zls.reschedule(self.header)
 
     def precompute(self, mode='perfect'):
         """Precompute statements out of ``self.loop``. This is achieved through

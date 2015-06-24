@@ -33,7 +33,7 @@
 
 from math import ceil
 from copy import deepcopy as dcopy
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict
 from itertools import product
 
 from base import *
@@ -121,6 +121,7 @@ class LoopVectorizer(object):
         header = self.loop_opt.header
         info = visit(header, info_items=['symbols_dep', 'symbols_mode', 'symbol_refs',
                                          'fors'])
+        nz_syms = self.loop_opt.nz_syms
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']
@@ -245,67 +246,95 @@ class LoopVectorizer(object):
                         header.children.append(copy_back[0])
             # E) Update the global data structures
             decls[buffer.sym.symbol] = buffer
+            nz_syms[buf_name] = tuple([(r, 0)] for r in buf_rank)
             buffers.append(buffer)
 
         # 2) Round up the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
         for l in inner_loops(header):
             should_round, should_vectorize = True, True
-            # Condition A: all lvalues must have the innermost loop as fastest
-            # varying dimension
-            # Condition B: all lvalues must be paddable; that is, they cannot be
-            # kernel parameters
             for stmt in l.body:
                 sym, expr = stmt.children
-                # Check A
-                if not (sym.rank and sym.rank[-1] == l.dim):
+                # Condition A: all lvalues must have the innermost loop as fastest
+                # varying dimension
+                if not (sym.rank and sym.rank[p_dim] == l.dim):
                     should_round = False
                     should_vectorize = False
                     break
-                # Check B
+                # Condition B: all lvalues must be paddable; that is, they cannot be
+                # kernel parameters
                 if sym.symbol in decls and decls[sym.symbol].scope == EXTERNAL:
                     should_round = False
                     break
-            # Condition C: all statements using offsets writing to buffers cannot
-            # be aligned
-            # Condition D: extra iterations induced by bounds and offset rounding
-            # should /not/ alter the result. This is the case if:
-            # * they access padded regions, or
-            # * they access zero-valued regions
-            read_regions = defaultdict(list)
-            alignable_stmts, nz_info_l = [], self.loop_opt.nz_info.get(l, [])
-            for stmt, dim_offset in nz_info_l:
+            lvalues = {}
+            aligned_l = dcopy(l)
+            for stmt in aligned_l.body:
                 sym, expr = stmt.children
-                # Check C
-                if decls.get(sym.symbol) in buffers and dim_offset[l.dim] > 0:
+                # Condition C: statements using offsets to write buffers should
+                # not be aligned
+                if decls.get(sym.symbol) in buffers and sym.offset[p_dim][1] > 0:
                     should_round = False
                     break
-                start = vect_rounddown(dim_offset[l.dim])
-                end = start + vect_roundup(l.end)  # == tot iters
-                if end >= dim_offset[l.dim] + l.end:
-                    # Despite lowering the start point, we will still execute the
-                    # iterations we are supposed to execute, so /stmt/ is alignable
-                    alignable_stmts.append((stmt, {l.dim: start}))
-                expr = ast_update_ofs(dcopy(expr), {l.dim: 0})
-                read_regions[str(expr)].append((start, end))
-            for rr in read_regions.values():
-                # Check D
-                if len(ItSpace(mode=0).merge(rr)) < len(rr):
-                    # Bounds and offset rounding cause overlap, give up
-                    should_round = False
-                    break
-            # Conditions checked, if all passed align loop and add offsets
+                # Condition D: extra iterations induced by bounds and offset rounding
+                # should /not/ alter the result.
+                symbols = FindInstances(Symbol).visit(stmt)[Symbol]
+                symbols = [s for s in symbols if any(r == l.dim for r in s.rank)]
+                for s in symbols:
+                    # First of all, we need to be sure we can inspect the symbol
+                    # declaration
+                    if s.symbol not in decls or \
+                            not isinstance(decls[s.symbol].init, ArrayInit):
+                        should_round = False
+                        break
+                    values = decls[s.symbol].init.values
+                    # Now we check if lowering the start point would be unsafe
+                    # because it would result in /not/ executing iterations
+                    # that should be executed
+                    offset = s.offset[p_dim][1]
+                    start = vect_rounddown(offset)
+                    end = start + vect_roundup(l.end)
+                    if end < offset + l.end:
+                        should_round = False
+                    # It remains to check if the extra iterations would alter the
+                    # result because they would access non-zero entries
+                    extra = range(start, offset) + range(offset + l.end + 1, end + 1)
+                    for i in extra:
+                        if i >= values.shape[p_dim]:
+                            # In the padded region, safe
+                            continue
+                        nz_s = nz_syms.get(s.symbol, ([(0, 0)],))[p_dim]
+                        if any(i in range(j[1], j[0] + j[1]) for j in nz_s):
+                            # The i-th extra iteration does not fall in a zero-valued
+                            # region, so we should not round
+                            should_round = False
+                    # Round down the start point
+                    ast_update_ofs(s, {l.dim: start})
+                    # Track the modified lvalues
+                    if s is sym:
+                        lvalues[s] = (start, offset)
             if should_round:
-                # Round up end point
+                l.body = aligned_l.body
+                # Round up the end point
                 l.end = vect_roundup(l.end)
-                # Round up/down offsets
-                for stmt, offset in alignable_stmts:
-                    ast_update_ofs(stmt, offset)
-                # If all statements were successfully aligned, then put a pragma
-                # to tell the compiler
-                if len(alignable_stmts) == len(nz_info_l) and \
-                        l.start % vector_length == 0 and \
-                        l.size % vector_length == 0:
+                # Note: it was safe to round an lvalue S, but now all subsequent
+                # accesses to the same symbol S might also have to be rounded.
+                # This is the case when the offset used by S' falls in the rounded
+                # region. Note such an S' /cannot/ be an lvalue since the rounding
+                # happens over a zero-valued region.
+                for lvalue, (start, orig_ofs) in lvalues.items():
+                    references = SymbolReferences().visit(header)[lvalue.symbol]
+                    references = [r for r, p in references]
+                    for r in references[references.index(lvalue)+1:]:
+                        r_rank, r_ofs = r.rank[p_dim], r.offset[p_dim][1]
+                        if r_ofs in range(orig_ofs, orig_ofs + l.end):
+                            ast_update_ofs(r, {r_rank: start - r_ofs}, increase=True)
+                    # The corresponding /nz_syms/ info should also be updated
+                    nz_lvalue = list(nz_syms[r.symbol])
+                    for i, (size, offset) in enumerate(nz_syms[r.symbol][p_dim]):
+                        if orig_ofs in range(offset, offset + size):
+                            nz_lvalue[p_dim][i] = (size, offset - (orig_ofs - start))
+                    nz_syms[r.symbol] = tuple(nz_lvalue)
+                if l.start % vector_length == 0 and l.size % vector_length == 0:
                     l.pragma.add(plan.compiler["align_forloop"])
             # Enforce vectorization if loop size is a multiple of the vector length
             if should_vectorize and l.size % vector_length == 0:
