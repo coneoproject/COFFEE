@@ -43,7 +43,7 @@ from copy import deepcopy as dcopy
 
 from base import *
 from utils import *
-from expression import MetaExpr, copy_metaexpr
+from expression import copy_metaexpr
 from coffee.visitors import FindLoopNests
 
 
@@ -496,7 +496,7 @@ class ZeroRemover(LoopScheduler):
         self.decls = decls
         self.hoisted = hoisted
 
-    def _track_nz_expr(self, node, nz_in_syms, nest):
+    def _track_nz_expr(self, node, nz_syms, nest):
         """For the expression rooted in ``node``, return iteration space and
         offset required to iterate over non zero-valued blocks. For example: ::
 
@@ -517,7 +517,7 @@ class ZeroRemover(LoopScheduler):
 
         if isinstance(node, Symbol):
             itspace = OrderedDict([(l.dim, [(l.size, 0)]) for l, p in nest])
-            nz_bounds = nz_in_syms.get(node.symbol, ())
+            nz_bounds = nz_syms.get(node.symbol, ())
             for r, o, nz_bs in zip(node.rank, node.offset, nz_bounds):
                 if o[0] != 1 or isinstance(o[1], str):
                     # Cannot handle jumps nor non-integer offsets
@@ -540,11 +540,11 @@ class ZeroRemover(LoopScheduler):
             return itspace
 
         elif isinstance(node, (Par, FunCall)):
-            return self._track_nz_expr(node.children[0], nz_in_syms, nest)
+            return self._track_nz_expr(node.children[0], nz_syms, nest)
 
         else:
-            itspace_l = self._track_nz_expr(node.left, nz_in_syms, nest)
-            itspace_r = self._track_nz_expr(node.right, nz_in_syms, nest)
+            itspace_l = self._track_nz_expr(node.left, nz_syms, nest)
+            itspace_r = self._track_nz_expr(node.right, nz_syms, nest)
             # Take the intersection of the iteration spaces
             itspace = OrderedDict()
             itspace.update(itspace_l)
@@ -562,15 +562,15 @@ class ZeroRemover(LoopScheduler):
                 itspace[r_r] = size_ofs
             return itspace
 
-    def _track_nz_blocks(self, node, nz_in_syms, nz_info, nest=None, parent=None):
+    def _track_nz_blocks(self, node, nz_syms, nz_info, nest=None, parent=None):
         """Track the propagation of zero-valued blocks in the AST rooted in ``node``
 
-        ``nz_in_syms`` contains, for each known identifier, the ranges of
+        ``nz_syms`` contains, for each known identifier, the ranges of
         its non zero-valued blocks. For example, assuming identifier A is an
         array and has non-zero values in positions [0, k] and [N-k, N], then
-        ``nz_in_syms`` will contain an entry {"A": ((0, k), (N-k, N))}.
+        ``nz_syms`` will contain an entry {"A": ((0, k), (N-k, N))}.
         If A is modified by some statements rooted in ``node``, then
-        ``nz_in_syms["A"]`` will be modified accordingly.
+        ``nz_syms["A"]`` will be modified accordingly.
 
         This method also populates ``nz_info``, which maps loop nests to the
         enclosed symbols' non-zero blocks. For example, given the following
@@ -602,25 +602,25 @@ class ZeroRemover(LoopScheduler):
 
             # Track the propagation of non zero-valued blocks. If it is not the
             # first time that /symbol/ is encountered, info get merged.
-            itspace = self._track_nz_expr(expr, nz_in_syms, nest)
+            itspace = self._track_nz_expr(expr, nz_syms, nest)
             if not all([r in itspace for r in rank]):
                 return
-            nz_in_expr = tuple(itspace[r] for r in rank)
-            if symbol in nz_in_syms:
-                nz_in_expr = tuple([ItSpace(mode=1).merge(flatten(i)) for i in
-                                    zip(nz_in_expr, nz_in_syms[symbol])])
-            nz_in_syms[symbol] = nz_in_expr
+            nz_expr = tuple(itspace[r] for r in rank)
+            if symbol in nz_syms:
+                nz_expr = tuple([ItSpace(mode=1).merge(flatten(i)) for i in
+                                 zip(nz_expr, nz_syms[symbol])])
+            nz_syms[symbol] = nz_expr
 
             # Record loop nest bounds and memory offsets for /node/
             nz_info.setdefault(nest, []).append((node, itspace))
 
         elif isinstance(node, For):
             new_nest = (nest or []) + [(node, parent)]
-            self._track_nz_blocks(node.children[0], nz_in_syms, nz_info, new_nest, node)
+            self._track_nz_blocks(node.children[0], nz_syms, nz_info, new_nest, node)
 
         elif isinstance(node, (Root, Block)):
             for n in node.children:
-                self._track_nz_blocks(n, nz_in_syms, nz_info, nest, node)
+                self._track_nz_blocks(n, nz_syms, nz_info, nest, node)
 
         elif isinstance(node, (If, Switch)):
             raise RuntimeError("Unexpected control flow while tracking zero blocks")
@@ -657,7 +657,7 @@ class ZeroRemover(LoopScheduler):
 
         # 2) Track propagation of non-zero blocks by symbolic execution. This
         # has the effect of populating /nz_info/
-        self._track_nz_blocks(root, nz_in_syms, nz_info)
+        self._track_nz_blocks(root, nz_syms, nz_info)
 
         # 3) At this point we know where non-zero blocks are located, so we have
         # to create proper loop nests to access them
@@ -678,7 +678,7 @@ class ZeroRemover(LoopScheduler):
                     fissioned_nests[dim_size].append((new_stmt, dim_offset))
                     # ...initialize arrays to 0.0 for correctness
                     if sym.symbol in self.hoisted:
-                        self.hoisted[sym.symbol].decl.init = ArrayInit("{0.0}")
+                        self.hoisted[sym.symbol].decl.init = ArrayInit(np.array([0.0]))
                     # ...track fissioned expressions
                     if stmt in self.exprs:
                         track_exprs[new_stmt] = self.exprs[stmt]
@@ -703,12 +703,83 @@ class ZeroRemover(LoopScheduler):
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              loop=new_loops[0],
                                              place=loops_parents[0])
-                new_nz_info[new_loops[-1]] = stmt_dim_offsets
+                new_nz_info[tuple(new_loops)] = stmt_dim_offsets
                 # Append the new loops to the root
                 insert_at_elem(loops_parents[0].children, loops[0], new_loops[0])
             loops_parents[0].children.remove(loops[0])
 
-        return new_nz_info
+        return nz_syms, new_nz_info
+
+    def _shrink(self, root, nz_syms, nz_info):
+        references = SymbolReferences().visit(root, env=SymbolReferences.default_env)
+        dataspaces = defaultdict(list)
+
+        # Calculate the dataspaces
+        for nest, stmt_dim_offsets in nz_info.items():
+            nest = {l.dim: l for l in nest}
+            for stmt, dim_offset in stmt_dim_offsets:
+                symbols = FindInstances(Symbol).visit(stmt)[Symbol]
+                symbols = [s for s in symbols if s.symbol in self.decls and
+                           isinstance(self.decls[s.symbol].init, SparseArrayInit)]
+                for s in symbols:
+                    decl = self.decls[s.symbol]
+                    # Each dataspace is stored as a 2-tuple (size, offset)
+                    dataspace = []
+                    for r, o, d_size in zip(s.rank, s.offset, decl.sym.rank):
+                        size = nest[r].size if r in nest else d_size
+                        dataspace.append((size, o[1]))
+                    dataspaces[s.symbol].append(tuple(dataspace))
+
+        # For each symbol, and for each of its dimension, aggregate the dataspaces
+        # if they are contiguous
+        for symbol, dataspace in dataspaces.items():
+            decl = self.decls[symbol]
+            merged_dataspace = []
+            for regions, size in zip(zip(*dataspace), decl.sym.rank):
+                merged_dataspace.append(ItSpace(mode=1).merge(regions, within=size)[0])
+            dataspaces[symbol] = tuple(merged_dataspace)
+
+        # Now that we know the dataspaces, we should see if they are smaller than
+        # the actual array size
+        for symbol, dataspace in dataspaces.items():
+            decl = self.decls[symbol]
+            sections = [range(d[1], d[1] + d[0]) for d in dataspace]
+            values = decl.init.values[np.ix_(*sections)]
+            if values.shape != decl.init.values.shape:
+                # Set the shrunk values ...
+                decl.init.values = values
+                decl.sym.rank = values.shape
+                # ... changes any relevant offsets
+                s_references = [s[0] for s in references[symbol] if s[0] is not decl.sym]
+                for s in s_references:
+                    offset = []
+                    for i, section in enumerate(sections):
+                        # Is the shrunk array still starting from the old base?
+                        # If not, update the offset of each symbol occurence
+                        if s.offset[i][1] > 0 and section[0] > 0:
+                            offset.append((s.offset[i][0], s.offset[i][1] - section[0]))
+                        else:
+                            offset.append(s.offset[i])
+                    s.offset = tuple(offset)
+                # ... and update the /nz_syms/ dictionary
+                nz_syms[symbol] = tuple([(i, 0)] for i in values.shape)
+
+        # Finally, we can merge tables that became identical after shrinking
+        mapper = defaultdict(list)
+        for symbol, dataspace in dataspaces.items():
+            values = self.decls[symbol].init.values
+            mapper[str(values)].append(symbol)
+        for values, symbols in mapper.items():
+            to_replace = {s: symbols[0] for s in symbols[1:]}
+            for replacing, target in to_replace.items():
+                for s, p in references[replacing]:
+                    s.symbol = target
+                    if isinstance(p, Decl):
+                        root.children.remove(p)
+                # Clean up
+                self.decls.pop(replacing)
+                if replacing in self.hoisted:
+                    self.hoisted.pop(replacing)
 
     def reschedule(self, root):
         """Restructure the loop nests in ``root`` to avoid computation over
@@ -729,4 +800,9 @@ class ZeroRemover(LoopScheduler):
 
         # Perform symbolic execution, track the propagation of non zero-valued
         # blocks, restructure the iteration spaces to avoid useless arithmetic ops
-        return self._reschedule_itspace(root)
+        nz_syms, nz_info = self._reschedule_itspace(root)
+
+        # Shrink sparse arrays by removing zero-valued regions
+        self._shrink(root, nz_syms, nz_info)
+
+        return nz_syms

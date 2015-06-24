@@ -363,7 +363,8 @@ class ASTKernel(object):
         elif opts.get('O4'):
             params = {
                 'rewrite': 3,
-                'align_pad': True
+                'align_pad': True,
+                'dead_ops_elimination': True
             }
         elif opts.get('O3'):
             params = {
