@@ -3,7 +3,7 @@ from __future__ import absolute_import
 import itertools
 import operator
 from copy import deepcopy
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 import numpy as np
 
 from coffee.visitor import Visitor, Environment
@@ -110,8 +110,9 @@ class Evaluate(Visitor):
             Prod: np.multiply,
             Div: np.divide
         }
-        from coffee.plan import isa
-        self.min_nzblock = isa['dp_reg']
+        from coffee.vectorizer import vect_roundup, vect_rounddown
+        self.up = vect_roundup
+        self.down = vect_rounddown
         super(Evaluate, self).__init__()
 
     def visit_object(self, o, *args, **kwargs):
@@ -150,22 +151,42 @@ class Evaluate(Visitor):
             # The sum takes into account reductions
             values[i] = np.sum(expr_values)
 
-        # Sniff the values to check for the presence of zero-valued blocks
+        # Sniff the values to check for the presence of zero-valued blocks: ...
+        # ... set default nonzero patten
         nonzero = [[(i, 0)] for i in shape]
-        for i, nz_per_dim in enumerate(values.nonzero()):
-            if not nz_per_dim.size:
-                continue
-            unique_nz_per_dim = np.unique(nz_per_dim)
+        # ... track nonzeros in each dimension
+        nonzeros_bydim = values.nonzero()
+        mapper = []
+        for nz_dim in nonzeros_bydim:
+            mapper_dim = defaultdict(set)
+            for i, nz in enumerate(nz_dim):
+                point = []
+                # ... handle outer dimensions
+                for j in nonzeros_bydim[:-1]:
+                    if j is not nz_dim:
+                        point.append((j[i],))
+                # ... handle the innermost dimension, which is treated "specially"
+                # to retain data alignment
+                for j in nonzeros_bydim[-1:]:
+                    if j is not nz_dim:
+                        point.append(tuple(range(self.down(j[i]), self.up(j[i]+1))))
+                mapper_dim[nz].add(tuple(point))
+            mapper.append(mapper_dim)
+        for i, dim in enumerate(mapper[:-1]):
+            # Group indices iff contiguous /and/ same codomain
             ranges = []
-            for k, g in itertools.groupby(enumerate(unique_nz_per_dim), lambda (i, x): i-x):
+            grouper = lambda (m, n): (m-n, dim[n])
+            for k, g in itertools.groupby(enumerate(sorted(dim.keys())), grouper):
                 group = map(operator.itemgetter(1), g)
-                # Stored as (size, offset), as expected by SparseArrayInit
                 ranges.append((group[-1]-group[0]+1, group[0]))
-            nonzero[i] = ranges
-        # The minimum size of a non zero-valued block along the innermost dimension
-        # is given by /self.min_nzblock/. This avoids breaking alignment and
-        # vectorization
-        nonzero[-1] = ItSpace(mode=1).merge(nonzero[-1], within=self.min_nzblock)
+            nonzero[i] = ranges or nonzero[i]
+        # Group indices in the innermost dimension iff within vector length size
+        ranges, grouper = [], lambda n: self.down(n)
+        for k, g in itertools.groupby(sorted(mapper[-1].keys()), grouper):
+            group = list(g)
+            ranges.append((group[-1]-group[0]+1, group[0]))
+        nonzero[-1] = ItSpace(mode=1).merge(ranges or nonzero[-1], within=-1)
+
         return {lvalue: SparseArrayInit(values, precision, tuple(nonzero))}
 
     def visit_BinExpr(self, o, *args, **kwargs):

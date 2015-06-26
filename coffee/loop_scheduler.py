@@ -653,9 +653,6 @@ class ZeroRemover(LoopScheduler):
         A dictionary describing the structure of the new iteration spaces is
         returned.
         """
-
-        # 1) Identify the initial sparsity pattern of the symbols in /root/
-        nz_in_syms = {s: d.nonzero for s, d in self.decls.items() if d.nonzero}
         nz_info = OrderedDict()
 
         # 2) Track propagation of non-zero blocks by symbolic execution. This
