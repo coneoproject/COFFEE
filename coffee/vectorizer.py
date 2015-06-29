@@ -246,7 +246,7 @@ class LoopVectorizer(object):
                         header.children.append(copy_back[0])
             # E) Update the global data structures
             decls[buffer.sym.symbol] = buffer
-            nz_syms[buf_name] = tuple([(r, 0)] for r in buf_rank)
+            nz_syms[buf_name] = [tuple((r, 0) for r in buf_rank)]
             buffers.append(buffer)
 
         # 2) Round up the bounds (i.e. /start/ and /end/ points) of innermost
@@ -296,13 +296,13 @@ class LoopVectorizer(object):
                     if end < offset + l.end:
                         should_round = False
                     # It remains to check if the extra iterations would alter the
-                    # result because they would access non-zero entries
+                    # result because they would access non zero-valued entries
                     extra = range(start, offset) + range(offset + l.end + 1, end + 1)
                     for i in extra:
                         if i >= values.shape[p_dim]:
                             # In the padded region, safe
                             continue
-                        nz_s = nz_syms.get(s.symbol, ([(0, 0)],))[p_dim]
+                        nz_s = nz_syms.get(s.symbol, [((0, 0),)])[p_dim]
                         if any(i in range(j[1], j[0] + j[1]) for j in nz_s):
                             # The i-th extra iteration does not fall in a zero-valued
                             # region, so we should not round
@@ -329,11 +329,11 @@ class LoopVectorizer(object):
                         if r_ofs in range(orig_ofs, orig_ofs + l.end):
                             ast_update_ofs(r, {r_rank: start - r_ofs}, increase=True)
                     # The corresponding /nz_syms/ info should also be updated
-                    nz_lvalue = list(nz_syms[r.symbol])
-                    for i, (size, offset) in enumerate(nz_syms[r.symbol][p_dim]):
+                    nz_lvalue = zip(*nz_syms[r.symbol])
+                    for i, (size, offset) in enumerate(nz_lvalue[p_dim]):
                         if orig_ofs in range(offset, offset + size):
-                            nz_lvalue[p_dim][i] = (size, offset - (orig_ofs - start))
-                    nz_syms[r.symbol] = tuple(nz_lvalue)
+                            nz_syms[r.symbol][i] = nz_syms[r.symbol][i][:p_dim] + \
+                                ((size, offset-(orig_ofs-start)),)
                 if l.start % vector_length == 0 and l.size % vector_length == 0:
                     l.pragma.add(plan.compiler["align_forloop"])
             # Enforce vectorization if loop size is a multiple of the vector length
