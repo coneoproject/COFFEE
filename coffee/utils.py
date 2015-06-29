@@ -586,12 +586,13 @@ class ItSpace():
         """
         itspaces = self._convert_to_mode0(itspaces)
 
-        if len(itspaces) in [0, 1]:
+        if len(itspaces) == 0:
             return ()
-        itspaces = [set(range(i[0], i[1])) for i in itspaces]
-        itspace = set.intersection(*itspaces)
-        itspace = sorted(list(itspace)) or [0, -1]
-        itspaces = [(itspace[0], itspace[-1]+1)]
+        elif len(itspaces) > 1:
+            itspaces = [set(range(i[0], i[1])) for i in itspaces]
+            itspace = set.intersection(*itspaces)
+            itspace = sorted(list(itspace)) or [0, -1]
+            itspaces = [(itspace[0], itspace[-1]+1)]
 
         itspace = self._convert_from_mode0(itspaces)[0]
         return itspace
