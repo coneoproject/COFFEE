@@ -306,11 +306,12 @@ class LoopVectorizer(object):
                         if i >= decl.core[p_dim]:
                             # In the padded region, safe
                             continue
-                        nz_s = self.nz_syms.get(s.symbol, [((0, 0),)])[p_dim]
-                        if any(i in range(j[1], j[0] + j[1]) for j in nz_s):
-                            # The i-th extra iteration does not fall in a zero-valued
-                            # region, so we should not round
-                            should_round = False
+                        for j in self.expr_graph.readers(s.symbol) + [s.symbol]:
+                            nz_s = self.nz_syms.get(j, self.decls[j].core)
+                            if any(i in range(k[1], k[0] + k[1]) for k in nz_s[p_dim]):
+                                # The i-th extra iteration does not fall in a zero-valued
+                                # region, so we should not round
+                                should_round = False
                     # Round down the start point
                     ast_update_ofs(s, {l.dim: start})
                     # Track the modified lvalues
