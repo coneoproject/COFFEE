@@ -625,7 +625,7 @@ class ZeroRemover(LoopScheduler):
             itspaces = self._track_nz_expr(expr, nz_syms, nest)
             for i in itspaces:
                 # ... and then through the lvalue (merging overlaps)
-                nz_expr = tuple(dict(i).get(r) for r in sym.rank)
+                nz_expr = tuple(dict(i).get(r) for r in sym.rank if not isinstance(r, int))
                 if any(j is None for j in nz_expr):
                     return
                 nz_node = list(nz_syms.setdefault(sym.symbol, [nz_expr]))
@@ -701,7 +701,7 @@ class ZeroRemover(LoopScheduler):
 
         # 3) At this point we know where non-zero blocks are located, so we have
         # to create proper loop nests to access them
-        track_exprs, new_nz_info = {}, {}
+        new_exprs, new_nz_info = OrderedDict(), OrderedDict()
         for nest, stmt_itspaces in nz_info.items():
             loops, loops_parents = zip(*nest)
             fissioned_nests = defaultdict(list)
@@ -721,7 +721,7 @@ class ZeroRemover(LoopScheduler):
                         self.hoisted[sym.symbol].decl.init = ArrayInit(np.array([0.0]))
                     # ...track fissioned expressions
                     if stmt in self.exprs:
-                        track_exprs[new_stmt] = self.exprs[stmt]
+                        new_exprs[new_stmt] = self.exprs[stmt]
             # Generate the fissioned loop nests
             # Note: the dictionary is sorted because smaller loop nests should
             # be executed first, since larger ones depend on them
@@ -735,11 +735,11 @@ class ZeroRemover(LoopScheduler):
                     # ... populate it
                     new_loops[-1].body.append(stmt)
                     # ... and update tracked data
-                    if stmt in track_exprs:
+                    if stmt in new_exprs:
                         new_nest = zip(new_loops, loops_parents)
-                        self.exprs[stmt] = copy_metaexpr(track_exprs[stmt],
-                                                         parent=new_loops[-1].body,
-                                                         loops_info=new_nest)
+                        new_exprs[stmt] = copy_metaexpr(new_exprs[stmt],
+                                                        parent=new_loops[-1].body,
+                                                        loops_info=new_nest)
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              loop=new_loops[0],
                                              place=loops_parents[0])
@@ -748,6 +748,8 @@ class ZeroRemover(LoopScheduler):
                 insert_at_elem(loops_parents[0].children, loops[0], new_loops[0])
             loops_parents[0].children.remove(loops[0])
 
+        self.exprs.clear()
+        self.exprs.update(new_exprs)
         return nz_syms, new_nz_info
 
     def _shrink(self, root, nz_syms, nz_info):
@@ -821,6 +823,35 @@ class ZeroRemover(LoopScheduler):
                 if replacing in self.hoisted:
                     self.hoisted.pop(replacing)
 
+    def _recombine(self, nz_info):
+        """Recombine expressions writing to the same lvalue."""
+        new_exprs = OrderedDict()
+        ops = {Incr: Sum, Decr: Sub, IMul: Prod}
+
+        for nest, stmt_dim_offsets in nz_info.items():
+            mapper = OrderedDict()
+            for stmt, dim_offsets in stmt_dim_offsets:
+                sym, expr = stmt.children
+                if type(stmt) in ops:
+                    # The /key/ means: I'm in the same loop nest, I'm writing to
+                    # the same symbol, and in particular to the same symbol
+                    # locations, and I'm doing an associative AugmentedAssignment.
+                    key = (str(sym), type(stmt))
+                    mapper.setdefault(key, []).append(stmt)
+
+            for (_, op), stmts in mapper.items():
+                exprs = [i.children[1] for i in stmts]
+                for i in stmts:
+                    nest[-1].body.remove(i)
+                stmt = op(i.children[0], ast_make_expr(ops[op], exprs))
+                nest[-1].body.append(stmt)
+                # Update the tracked expressions, if necessary
+                if all(i in self.exprs for i in stmts):
+                    new_exprs[stmt] = self.exprs[i]
+
+        self.exprs.clear()
+        self.exprs.update(new_exprs)
+
     def reschedule(self, root):
         """Restructure the loop nests in ``root`` to avoid computation over
         zero-valued data spaces. This is achieved through symbolic execution
@@ -834,9 +865,8 @@ class ZeroRemover(LoopScheduler):
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
                 continue
-            elif expr_info.dimension > 1:
-                self.exprs.pop(stmt)
-                self.exprs.update(elf.fission(stmt, expr_info))
+            self.exprs.pop(stmt)
+            self.exprs.update(elf.fission(stmt, expr_info))
 
         # Perform symbolic execution, track the propagation of non zero-valued
         # blocks, restructure the iteration spaces to avoid useless arithmetic ops
@@ -844,5 +874,8 @@ class ZeroRemover(LoopScheduler):
 
         # Shrink sparse arrays by removing zero-valued regions
         self._shrink(root, nz_syms, nz_info)
+
+        # Finally, "inline" the expressions that were originally split
+        self._recombine(nz_info)
 
         return nz_syms
