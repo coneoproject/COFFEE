@@ -647,9 +647,13 @@ class Decl(Statement):
         self.qual = qualifiers or []
         self.attr = attributes or []
         self.init = as_symbol(init) if init is not None else EmptyStatement()
+        self._core = self.sym.rank
 
     def operands(self):
         return [self.typ, self.sym, self.init, self.qual, self.attr], {}
+
+    def pad(self, rank):
+        self.sym.rank = rank
 
     @property
     def lvalue(self):
@@ -673,6 +677,15 @@ class Decl(Statement):
           -> ``(20, 10)``)
         """
         return self.sym.rank or (0,)
+
+    @property
+    def core(self):
+        """Return the size of the declaraed variable without including padding."""
+        return self._core
+
+    @core.setter
+    def core(self, val):
+        self._core = val
 
     @property
     def is_const(self):
