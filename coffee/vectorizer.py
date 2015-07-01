@@ -68,7 +68,11 @@ class VectStrategy():
 class LoopVectorizer(object):
 
     def __init__(self, loop_opt):
-        self.loop_opt = loop_opt
+        self.header = loop_opt.header
+        self.decls = loop_opt.decls
+        self.exprs = loop_opt.exprs
+        self.expr_graph = loop_opt.expr_graph
+        self.nz_syms = loop_opt.nz_syms
 
     def pad_and_align(self):
         """Padding consists of three major steps:
@@ -142,14 +146,14 @@ class LoopVectorizer(object):
         p_dim = -1
 
         # 1) Pad arrays by extending the innermost dimension
-        for decl_name, decl in decls.items():
+        for decl_name, decl in self.decls.items():
             if not decl.sym.rank:
                 continue
             p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
             if decl.scope == LOCAL:
                 if p_rank != decl.sym.rank:
                     # Padding
-                    decl.sym.rank = p_rank
+                    decl.pad(p_rank)
                 # Alignment
                 decl.attr.append(align_attr)
                 continue
@@ -218,7 +222,7 @@ class LoopVectorizer(object):
             buffer = Decl(decl.typ, Symbol(buf_name, buf_rank), init, attributes=[align_attr])
             buffer.scope = BUFFER
             buffer.sym.rank = tuple(buffer.sym.rank)
-            header.children.insert(0, buffer)
+            self.header.children.insert(0, buffer)
             # D- Create and append a loop nest(s) for copying data into/from
             # the temporary buffer. Depending on how the symbol is accessed
             # (read only, read and write, incremented, etc.), different sort
@@ -228,7 +232,7 @@ class LoopVectorizer(object):
                 if first[0] == READ:
                     stmts = [Assign(b, s) for s, b in mapper]
                     copy_back = ItSpace(mode=2).to_for(loops, stmts=stmts)
-                    header.children.insert(0, copy_back[0])
+                    self.header.children.insert(0, copy_back[0])
                 if last[0] == WRITE:
                     # If extra information (a pragma) is present, telling that
                     # the argument does not need to be incremented because it does
@@ -240,19 +244,20 @@ class LoopVectorizer(object):
                     stmts = [op(s, b) for s, b in mapper]
                     copy_back = ItSpace(mode=2).to_for(loops, stmts=stmts)
                     if to_invert:
-                        insert_at_elem(header.children, to_invert[0], copy_back[0])
+                        insert_at_elem(self.header.children, to_invert[0], copy_back[0])
                     else:
-                        header.children.append(copy_back[0])
+                        self.header.children.append(copy_back[0])
             # E) Update the global data structures
-            decls[buf_name] = buffer
-            nz_syms[buf_name] = [tuple((r, 0) for r in buf_rank)]
+            self.decls[buf_name] = buffer
+            self.nz_syms[buf_name] = [tuple((r, 0) for r in buf_rank)]
 
         # 2) Round up the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
-        for l in inner_loops(header):
+        for l in inner_loops(self.header):
             should_round, should_vectorize = True, True
             for stmt in l.body:
                 sym, expr = stmt.children
+                sym_decl = self.decls.get(sym.symbol)
                 # Condition A: all lvalues must have the innermost loop as fastest
                 # varying dimension
                 if not (sym.rank and sym.rank[p_dim] == l.dim):
@@ -261,16 +266,17 @@ class LoopVectorizer(object):
                     break
                 # Condition B: all lvalues must be paddable; that is, they cannot be
                 # kernel parameters
-                if sym.symbol in decls and decls[sym.symbol].scope == EXTERNAL:
+                if sym_decl and sym_decl.scope == EXTERNAL:
                     should_round = False
                     break
             lvalues = {}
             aligned_l = dcopy(l)
             for stmt in aligned_l.body:
                 sym, expr = stmt.children
+                sym_decl = self.decls.get(sym.symbol)
                 # Condition C: statements using offsets to write buffers should
                 # not be aligned
-                if decls[sym.symbol].scope == BUFFER and sym.offset[p_dim][1] > 0:
+                if sym_decl and sym_decl.scope == BUFFER and sym.offset[p_dim][1] > 0:
                     should_round = False
                     break
                 # Condition D: extra iterations induced by bounds and offset rounding
@@ -280,11 +286,11 @@ class LoopVectorizer(object):
                 for s in symbols:
                     # First of all, we need to be sure we can inspect the symbol
                     # declaration
-                    if s.symbol not in decls or \
-                            not isinstance(decls[s.symbol].init, ArrayInit):
+                    decl = self.decls.get(s.symbol)
+                    if not decl or not isinstance(decl.init, ArrayInit):
                         should_round = False
                         break
-                    values = decls[s.symbol].init.values
+                    values = decl.init.values
                     # Now we check if lowering the start point would be unsafe
                     # because it would result in /not/ executing iterations
                     # that should be executed
@@ -297,10 +303,10 @@ class LoopVectorizer(object):
                     # result because they would access non zero-valued entries
                     extra = range(start, offset) + range(offset + l.end + 1, end + 1)
                     for i in extra:
-                        if i >= values.shape[p_dim]:
+                        if i >= decl.core[p_dim]:
                             # In the padded region, safe
                             continue
-                        nz_s = nz_syms.get(s.symbol, [((0, 0),)])[p_dim]
+                        nz_s = self.nz_syms.get(s.symbol, [((0, 0),)])[p_dim]
                         if any(i in range(j[1], j[0] + j[1]) for j in nz_s):
                             # The i-th extra iteration does not fall in a zero-valued
                             # region, so we should not round
@@ -320,17 +326,18 @@ class LoopVectorizer(object):
                 # region. Note such an S' /cannot/ be an lvalue since the rounding
                 # happens over a zero-valued region.
                 for lvalue, (start, orig_ofs) in lvalues.items():
-                    references = SymbolReferences().visit(header)[lvalue.symbol]
+                    references = SymbolReferences().visit(self.header)[lvalue.symbol]
                     references = [r for r, p in references]
                     for r in references[references.index(lvalue)+1:]:
                         r_rank, r_ofs = r.rank[p_dim], r.offset[p_dim][1]
                         if r_ofs in range(orig_ofs, orig_ofs + l.end):
                             ast_update_ofs(r, {r_rank: start - r_ofs}, increase=True)
                     # The corresponding /nz_syms/ info should also be updated
-                    nz_lvalue = zip(*nz_syms[r.symbol])
+                    nz_lvalue = zip(*self.nz_syms[r.symbol])
                     for i, (size, offset) in enumerate(nz_lvalue[p_dim]):
                         if orig_ofs in range(offset, offset + size):
-                            nz_syms[r.symbol][i] = nz_syms[r.symbol][i][:p_dim] + \
+                            self.nz_syms[r.symbol][i] = \
+                                self.nz_syms[r.symbol][i][:p_dim] + \
                                 ((size, offset-(orig_ofs-start)),)
                 if l.start % vector_length == 0 and l.size % vector_length == 0:
                     l.pragma.add(plan.compiler["align_forloop"])
@@ -353,7 +360,7 @@ class LoopVectorizer(object):
         specifying one of the vectorization strategies in :class:`VectStrategy`.
         """
         layout = None
-        for stmt, expr_info in self.loop_opt.exprs.items():
+        for stmt, expr_info in self.exprs.items():
             if expr_info.dimension != 2:
                 continue
             parent = expr_info.parent
@@ -410,7 +417,7 @@ class LoopVectorizer(object):
 
         # Insert the layout code right after the loop nest enclosing the expression
         if layout:
-            insert_at_elem(self.loop_opt.header.children, expr_info.loops[0], layout, 1)
+            insert_at_elem(self.header.children, expr_info.loops[0], layout, 1)
 
 
 class OuterProduct():
