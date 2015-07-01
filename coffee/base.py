@@ -1133,11 +1133,15 @@ IDIV = Access("IDIV")
 
 class Scope(object):
 
-    """An ``EXTERNAL`` scope means the /Decl/ is an argument of a kernel (i.e.,
-    when it appears in the list of declarations of a /FunDecl/ object). Otherwise,
-    a ``LOCAL`` scope indicates the /Decl/ is within the body of a kernel."""
+    """Three /Scope/s are possible:
 
-    _scopes = ["LOCAL", "EXTERNAL"]
+        * ``EXTERNAL``: the /Decl/ is a kernel argument
+        * ``LOCAL``: the /Decl/ lives within the kernel body
+        * ``BUFFER``: the /Decl/ is ``LOCAL``, but it is special in that it maps
+            data from an ``EXTERNAL`` /Decl/
+    """
+
+    _scopes = ["LOCAL", "EXTERNAL", "BUFFER"]
 
     def __init__(self, scope):
         if scope not in Scope._scopes:
@@ -1149,3 +1153,4 @@ class Scope(object):
 
 LOCAL = Scope("LOCAL")
 EXTERNAL = Scope("EXTERNAL")
+BUFFER = Scope("BUFFER")

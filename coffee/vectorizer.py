@@ -142,7 +142,6 @@ class LoopVectorizer(object):
         p_dim = -1
 
         # 1) Pad arrays by extending the innermost dimension
-        buffers = []
         for decl_name, decl in decls.items():
             if not decl.sym.rank:
                 continue
@@ -217,7 +216,7 @@ class LoopVectorizer(object):
             buf_rank = (buf_rank,) + p_rank
             init = ArrayInit(np.ndarray(shape=(1,)*len(buf_rank), buffer=np.array(0.0)))
             buffer = Decl(decl.typ, Symbol(buf_name, buf_rank), init, attributes=[align_attr])
-            buffer.scope = LOCAL
+            buffer.scope = BUFFER
             buffer.sym.rank = tuple(buffer.sym.rank)
             header.children.insert(0, buffer)
             # D- Create and append a loop nest(s) for copying data into/from
@@ -245,9 +244,8 @@ class LoopVectorizer(object):
                     else:
                         header.children.append(copy_back[0])
             # E) Update the global data structures
-            decls[buffer.sym.symbol] = buffer
+            decls[buf_name] = buffer
             nz_syms[buf_name] = [tuple((r, 0) for r in buf_rank)]
-            buffers.append(buffer)
 
         # 2) Round up the bounds (i.e. /start/ and /end/ points) of innermost
         # loops such that memory accesses get aligned to the vector length
@@ -272,7 +270,7 @@ class LoopVectorizer(object):
                 sym, expr = stmt.children
                 # Condition C: statements using offsets to write buffers should
                 # not be aligned
-                if decls.get(sym.symbol) in buffers and sym.offset[p_dim][1] > 0:
+                if decls[sym.symbol].scope == BUFFER and sym.offset[p_dim][1] > 0:
                     should_round = False
                     break
                 # Condition D: extra iterations induced by bounds and offset rounding
