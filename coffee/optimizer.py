@@ -159,8 +159,10 @@ class LoopOptimizer(object):
         # Handle the effects, at the C-level, of the AST transformation
         self._recoil()
 
-        # Reduce memory pressure by rearranging operations
+        # Reduce memory pressure by rearranging operations ...
         self._rearrange()
+        # ... which in turn requires updating the expression graph
+        self.expr_graph = ExpressionGraph(self.header)
 
     def eliminate_zeros(self):
         """Restructure the iteration spaces nested in this LoopOptimizer to
