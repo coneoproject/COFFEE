@@ -246,7 +246,7 @@ class ASTKernel(object):
                     loop_opt.unroll(dict(unroll))
 
                 # 5) Vectorization
-                if initialized and loop_opt.expr_domain_loops[0]:
+                if initialized and flatten(loop_opt.expr_domain_loops):
                     vect = LoopVectorizer(loop_opt)
                     if align_pad and not toblas:
                         # Padding and data alignment
