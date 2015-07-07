@@ -414,6 +414,9 @@ def explore_operator(node):
             else:
                 children.append((n, node))
 
+    while isinstance(node, Par):
+        node = node.child
+
     children = []
     _explore_operator(node, node.__class__, children)
     return children

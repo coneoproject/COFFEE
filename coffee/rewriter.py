@@ -415,10 +415,17 @@ class ExpressionHoister(object):
 
         def __try_hoist(node, dep):
             should_extract = True
+            operands = explore_operator(node)
             if isinstance(node, Symbol):
+                # Do not extract individual symbols
                 should_extract = False
             elif hoist_out_domain:
+                # Do not extract unless independent of the domain loops
                 if not set(dep).issubset(set(self.expr_info.out_domain_dims)):
+                    should_extract = False
+            elif not hoist_domain_const:
+                # Do not extract binary operations
+                if all(isinstance(i, Symbol) for i, _ in operands) and len(operands) <= 2:
                     should_extract = False
             if should_extract:
                 dep_subexprs[dep].append(node)
@@ -454,9 +461,8 @@ class ExpressionHoister(object):
                         return (dep_l, INVARIANT)
                     elif (not dep_l or not dep_r) and not hoist_domain_const:
                         # E.g. A[i,j]*alpha, alpha*A[i,j]
-                        if __try_hoist(left, dep_l) or __try_hoist(right, dep_r):
-                            return (dep_n, HOISTED)
-                        return (dep_n, INVARIANT)
+                        if not (__try_hoist(left, dep_l) or __try_hoist(right, dep_r)):
+                            return (dep_n, INVARIANT)
                     elif not dep_l and hoist_domain_const:
                         # E.g. alpha*A[i,j], not hoistable anymore
                         __try_hoist(right, dep_r)
@@ -465,10 +471,12 @@ class ExpressionHoister(object):
                         __try_hoist(left, dep_l)
                     elif set(dep_l).issubset(set(dep_r)):
                         # E.g. A[i]*B[i,j]
-                        return (dep_r, INVARIANT)
+                        if not __try_hoist(left, dep_l):
+                            return (dep_n, INVARIANT)
                     elif set(dep_r).issubset(set(dep_l)):
                         # E.g. A[i,j]*B[i]
-                        return (dep_l, INVARIANT)
+                        if not __try_hoist(right, dep_r):
+                            return (dep_n, INVARIANT)
                     elif hoist_domain_const:
                         # E.g. A[i]*B[j], hoistable in TMP[i,j]
                         return (dep_n, INVARIANT)
