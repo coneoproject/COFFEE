@@ -35,6 +35,7 @@ import operator
 import resource
 import sys
 from warnings import warn as warning
+from math import factorial as fact
 
 from base import *
 from utils import *
@@ -66,8 +67,6 @@ class LoopOptimizer(object):
         self.expr_graph = ExpressionGraph(header)
         # Track hoisted expressions
         self.hoisted = StmtTracker()
-        # Track injected expressions
-        self.injected = {}
 
     def rewrite(self, mode):
         """Rewrite a compute-intensive expression found in the loop nest so as to
@@ -107,19 +106,11 @@ class LoopOptimizer(object):
         for stmt, expr_info in self.exprs.items():
             expr_info.mode = mode
 
-        # Passes preliminar to expression rewriting
-        if mode == 3:
-            self._inject()
-            self._recoil()
-            # Split expressions produced by injection
-            for inj_stmt, injected_cost in self.injected.items():
-                injected = zip(*injected_cost)[0]
-                fissioner = ExpressionFissioner(match=injected, loops='all', perfect=True)
-                self.exprs.update(fissioner.fission(inj_stmt, self.exprs.pop(inj_stmt)))
-                # Non-injected expressions should downgrade to a less aggressive mode
-                for stmt, expr_info in self.exprs.items():
-                    if stmt != inj_stmt and stmt not in fissioner.matched:
-                        expr_info.mode = mode - 1
+        # Analyze the individual expressions and try to select an optimal rewrite
+        # mode for each of them. A preliminary transformation of the loop nest may
+        # take place in this pass (e.g., injection)
+        if mode == 'auto':
+            self._dissect()
 
         # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
@@ -139,7 +130,7 @@ class LoopOptimizer(object):
                     ew.factorize()
                     ew.licm()
 
-            elif expr_info.mode == 3:
+            elif expr_info.mode == 'auto':
                 if expr_info.is_tensor:
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
@@ -336,9 +327,14 @@ class LoopOptimizer(object):
             for stmt in to_remove:
                 innermost_block.children.remove(stmt)
 
-    def _inject(self):
-        """Unroll loops outside of the expressions iteration space into the
-        expression itself ("injection"). For example: ::
+    def _dissect(self):
+        """Analyze the set of expressions in the LoopOptimizer and infer an
+        optimal rewrite mode for each of them.
+
+        If an expression is embedded in a non-perfect loop nest, then injection
+        may be performed. Injection consists of unrolling any loops outside of
+        the expression's iteration space into the expression itself.
+        For example: ::
 
             for i
               for r
@@ -353,9 +349,17 @@ class LoopOptimizer(object):
               for j
                 for k
                   A[j][k] += ...f(B[0]*C[i][0] + B[1]*C[i][1] + ...)...
+
+        Injection could be necessary to maximize the impact of rewrite mode=3,
+        which tries to pre-evaluate subexpressions whose values are known at
+        code generation time. Injection is essential to factorize such subexprs.
         """
 
-        # 1) Unroll all injectable expressions
+        # 0) Injection may grow too much the AST, need allow deeper visits
+        sys.setrecursionlimit(4000)
+
+        # 1) Find out and unroll injectable loops. For unrolling we create new
+        # expressions; that is, for now, we do not modify the AST in place.
         analyzed, injectable = [], {}
         for stmt, expr_info in self.exprs.items():
             # Get all loop nests, then discard the one enclosing the expression
@@ -376,7 +380,7 @@ class LoopOptimizer(object):
                     for i_stmt in i_stmts:
                         i_sym, i_expr = i_stmt.children
 
-                        # Avoid dangerous injections
+                        # Avoid injecting twice the same loop
                         if i_stmt in analyzed + [l.incr for l, p in to_unroll]:
                             continue
                         analyzed.append(i_stmt)
@@ -399,72 +403,117 @@ class LoopOptimizer(object):
                         else:
                             injectable[i_sym.symbol] = (i_expr, unroll_cost)
 
-        # 2) Try to inject the unrolled expressions
-        unrolled = True
-        self.injected = defaultdict(list)
+        # 2) Will rewrite mode=3 be cheaper than rewrite mode=2?
+        should_unroll = True
+        i_syms, injected = injectable.keys(), defaultdict(list)
         for stmt, expr_info in self.exprs.items():
             sym, expr = stmt.children
 
-            # First, get the sub-expressions that will be affected by injection
-            i_syms = injectable.keys()
-            to_inject = find_expression(expr, Prod, expr_info.domain_dims, i_syms)
-            if not to_inject or any(i not in flatten(to_inject.keys()) for i in i_syms):
-                unrolled = False
+            # Divide /expr/ into subexpressions, each subexpression affected
+            # differently by injection
+            dissected = find_expression(expr, Prod, expr_info.domain_dims, i_syms)
+            if any(i not in flatten(dissected.keys()) for i in i_syms):
+                should_unroll = False
                 continue
+            if not dissected:
+                dissected[()] = [expr]
 
-            for i_syms, target_exprs in to_inject.items():
+            # Apply the profitability model
+            for i_syms, target_exprs in dissected.items():
                 for target_expr in target_exprs:
+
+                    # *** Save ***
+                    # If injection will be performed, outer loops could
+                    # potentially be evaluated at code generation time
+                    save_factor = [l.size for l in expr_info.out_domain_loops] or [1]
+                    save_factor = reduce(operator.mul, save_factor)
+                    # The save factor should be multiplied by the number of terms
+                    # that will /not/ be pre-evaluated. To obtain this number, we
+                    # can exploit the linearity of the expression in the terms
+                    # depending on the domain loops.
+                    syms = FindInstances(Symbol).visit(target_expr)[Symbol]
+                    inner = lambda s: any(r == expr_info.domain_dims[-1] for r in s.rank)
+                    nterms = len(set(s.symbol for s in syms if inner(s)))
+                    save = nterms * save_factor
+
+                    # *** Cost ***
+                    # The number of operations increases by a factor which
+                    # corresponds to the number of possible /combinations with
+                    # repetitions/ in the injected-values set. We consider
+                    # combinations and not dispositions to take into account the
+                    # (future) effect of factorization.
                     projection = ProjectExpansion(i_syms).visit(target_expr)
-                    # Is injection going to be profitable ?
-                    # If the cost exceeds the potential save on flops, due to later
-                    # optimizations potentially enabled by injection, skip
-                    cost = sum([reduce(operator.mul, [injectable[j][1] for j in i])
-                                for i in projection if i])
-                    save = [l.size for l in expr_info.out_domain_loops] or [0]
-                    save = reduce(operator.mul, save)
+                    projection = [i for i in projection if i]
+                    increase_factor = 0
+                    for i in projection:
+                        partial = 1
+                        for j in self.expr_graph.shares(i):
+                            # n=number of unique elements, k=group size
+                            n = injectable[j[0]][1]
+                            k = len(j)
+                            partial *= fact(n + k - 1)/(fact(k)*fact(n - 1))
+                        increase_factor += partial
+                    increase_factor = increase_factor or 1
+                    if increase_factor > save_factor:
+                        # We immediately give up if this holds since it ensures
+                        # that the /cost > save/ (but not that cost <= save either)
+                        should_unroll = False
+                        continue
+                    # The increase factor should be multiplied by the number of
+                    # terms that will be pre-evaluated. To obtain this number,
+                    # we need to project the output of factorization.
+                    fake_stmt = stmt.__class__(stmt.children[0], dcopy(target_expr))
+                    fake_parent = expr_info.parent.children
+                    fake_parent[fake_parent.index(stmt)] = fake_stmt
+                    ew = ExpressionRewriter(fake_stmt, expr_info, self.decls)
+                    ew.expand(mode='full')
+                    ew.factorize(mode='immutable')
+                    ew.factorize(mode='constants')
+                    nterms = ew.licm(look_ahead=True, hoist_domain_const=True)
+                    nterms = len(uniquify(nterms[expr_info.dims])) or 1
+                    fake_parent[fake_parent.index(fake_stmt)] = stmt
+                    cost = nterms * increase_factor
+
+                    # So what's better afterall ?
                     if cost > save:
-                        unrolled = False
+                        should_unroll = False
                     else:
-                        self.injected[stmt].append((target_expr, cost))
+                        # At this point, we can happily inject
+                        to_replace = {k: v[0] for k, v in injectable.items()}
+                        ast_replace(target_expr, to_replace, copy=True)
+                        injected[stmt].append(target_expr)
 
-            # Finally, can perform the injection
-            to_replace = {k: v[0] for k, v in injectable.items()}
-            if stmt in self.injected:
-                # Note this check is necessary since we're using a defaultdict
-                for target_expr, cost in self.injected[stmt]:
-                    ast_replace(target_expr, to_replace, copy=True)
+        # 3) Purge the AST from now useless symbols/expressions
+        if should_unroll:
+            for stmt, expr_info in self.exprs.items():
+                nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
+                injectable_nests = [n for n in nests if zip(*n)[0] != expr_info.loops]
+                for nest in injectable_nests:
+                    unrolled = [(l, p) for l, p in nest if l not in expr_info.loops]
+                    for l, p in unrolled:
+                        p.children.remove(l)
+                        for i_sym in injectable.keys():
+                            decl = self.decls.get(i_sym)
+                            if decl and decl in p.children:
+                                p.children.remove(decl)
+                                self.decls.pop(i_sym)
 
-        # 3) Clean up
-        if not unrolled:
-            return
+        # 4) Split the expressions if injection has been performed
         for stmt, expr_info in self.exprs.items():
-            nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
-            injectable_nests = [n for n in nests if zip(*n)[0] != expr_info.loops]
-            for nest in injectable_nests:
-                unrolled = [(l, p) for l, p in nest if l not in expr_info.loops]
-                for l, p in unrolled:
-                    p.children.remove(l)
-                    for i_sym in injectable.keys():
-                        decl = self.decls.get(i_sym)
-                        if decl and decl in p.children:
-                            p.children.remove(decl)
-                            self.decls.pop(i_sym)
+            expr_info.mode = 2
+            inj_exprs = injected.get(stmt)
+            if not inj_exprs:
+                continue
+            fissioner = ExpressionFissioner(match=inj_exprs, loops='all', perfect=True)
+            new_exprs = fissioner.fission(stmt, self.exprs.pop(stmt))
+            self.exprs.update(new_exprs)
+            for stmt, expr_info in new_exprs.items():
+                expr_info.mode = 'auto' if stmt in fissioner.matched else 2
 
     def _recoil(self):
-        """AST transformation may lead to:
+        """Increase the stack size if the kernel arrays exceed the stack limit
+        threshold (at the C level)."""
 
-            * allocating too much data on the stack (at the C level)
-            * particularly big ASTs, composed of thousand of nodes
-
-        To work around these problems:
-
-            * increase the stack size it the kernel arrays exceed the stack
-                limit threshold (at the C level)
-            * increase the recursion depth limit (at the Python level) so that
-                visit of huge ASTs do not blow up the interpreter
-        """
-
-        # 1) Stack size
         # Assume the size of a C type double is 8 bytes
         c_double_size = 8
         # Assume the stack size is 1.7 MB (2 MB is usually the limit)
@@ -481,13 +530,6 @@ class LoopOptimizer(object):
                                                            resource.RLIM_INFINITY))
             except resource.error:
                 warning("Stack may blow up, and could not increase its size.")
-
-        # 2) Recursion depth limit
-        injection_ths = 2
-        all_injected = flatten(self.injected.values())
-        injection_cost = sum(zip(*all_injected)[1]) if all_injected else 0
-        if injection_cost > injection_ths:
-            sys.setrecursionlimit(4000)
 
     @property
     def expr_loops(self):
