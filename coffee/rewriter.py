@@ -38,6 +38,7 @@ import itertools
 
 from base import *
 from utils import *
+from ast_analyzer import ExpressionGraph, StmtTracker
 from coffee.visitors import *
 
 
@@ -49,7 +50,7 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt, expr_info, decls, header, hoisted, expr_graph):
+    def __init__(self, stmt, expr_info, decls, header=None, hoisted=None, expr_graph=None):
         """Initialize the ExpressionRewriter.
 
         :param stmt: AST statement containing the expression to be rewritten
@@ -62,9 +63,9 @@ class ExpressionRewriter(object):
         self.stmt = stmt
         self.expr_info = expr_info
         self.decls = decls
-        self.header = header
-        self.hoisted = hoisted
-        self.expr_graph = expr_graph
+        self.header = header or Root()
+        self.hoisted = hoisted if hoisted is not None else StmtTracker()
+        self.expr_graph = expr_graph or ExpressionGraph(self.header)
 
         # Expression manipulators used by the Expression Rewriter
         self.expr_hoister = ExpressionHoister(self.stmt,
@@ -77,8 +78,7 @@ class ExpressionRewriter(object):
                                                 self.expr_info,
                                                 self.hoisted,
                                                 self.expr_graph)
-        self.expr_factorizer = ExpressionFactorizer(self.stmt,
-                                                    self.expr_info)
+        self.expr_factorizer = ExpressionFactorizer(self.stmt)
 
     def licm(self, **kwargs):
         """Perform generalized loop-invariant code motion.
@@ -100,10 +100,14 @@ class ExpressionRewriter(object):
                 for hoisting expressions crossing ``n`` loops in the nest.
             * hoist_out_domain: True if only outer-loop invariant terms should
                 be hoisted
+            * look_ahead: True if only a projection of the hoistable subexpressions
+                is needed (i.e., the actual expression is not modified)
         """
+        if kwargs.get('look_ahead'):
+            return self.expr_hoister.extract(**kwargs)
         self.expr_hoister.licm(**kwargs)
 
-    def expand(self, mode='standard'):
+    def expand(self, mode='standard', **kwargs):
         """Expand expressions over other expressions based on different heuristics.
         In the simplest example one can have: ::
 
@@ -165,12 +169,12 @@ class ExpressionRewriter(object):
             return
 
         # Perform the expansion
-        self.expr_expander.expand(should_expand)
+        self.expr_expander.expand(should_expand, kwargs.get('not_aggregate'))
 
         # Update known declarations
         self.decls.update(self.expr_expander.expanded_decls)
 
-    def factorize(self, mode='standard'):
+    def factorize(self, mode='standard', **kwargs):
         """Factorize terms in the expression. For example: ::
 
             A[i]*B[j] + A[i]*C[j]
@@ -408,6 +412,7 @@ class ExpressionHoister(object):
         # Parameters driving the extraction pass
         hoist_domain_const = kwargs.get('hoist_domain_const')
         hoist_out_domain = kwargs.get('hoist_out_domain')
+        look_ahead = kwargs.get('look_ahead')
 
         # Constants used to charaterize sub-expressions:
         INVARIANT = 0  # expression is loop invariant
@@ -420,14 +425,14 @@ class ExpressionHoister(object):
                 # Do not extract individual symbols
                 should_extract = False
             elif hoist_out_domain:
-                # Do not extract unless independent of the domain loops
-                if not set(dep).issubset(set(self.expr_info.out_domain_dims)):
+                # Do not extract unless independent of the expression's dimensions
+                if set(dep) and set(dep).issubset(set(self.expr_info.dims)):
                     should_extract = False
             elif not hoist_domain_const:
                 # Do not extract binary operations
                 if all(isinstance(i, Symbol) for i, _ in operands) and len(operands) <= 2:
                     should_extract = False
-            if should_extract:
+            if should_extract or look_ahead:
                 dep_subexprs[dep].append(node)
             return should_extract
 
@@ -500,6 +505,16 @@ class ExpressionHoister(object):
         hoisting at the bottom of the possibly non-perfect outermost loop
         always is a legal transformation."""
         return all([is_perfect_loop(l) for l in loops[1:]])
+
+    def extract(self, **kwargs):
+        """Return a dictionary of hoistable subexpressions."""
+        if not self._check_loops(self.expr_info.loops):
+            warning("Loop nest unsuitable for generalized licm. Skipping.")
+            return
+
+        symbols = visit(self.expr_info.outermost_parent)['symbols_dep']
+        symbols = dict((s, [l.dim for l in dep]) for s, dep in symbols.items())
+        return self._extract(self.stmt.children[1], symbols, **kwargs)
 
     def licm(self, **kwargs):
         """Perform generalized loop-invariant code motion."""
@@ -631,7 +646,7 @@ class ExpressionExpander(object):
     # Temporary variables template
     _expanded_sym = "%(loop_dep)s_EXP_%(expr_id)d_%(i)d"
 
-    def __init__(self, stmt, expr_info, hoisted, expr_graph):
+    def __init__(self, stmt, expr_info=None, hoisted=None, expr_graph=None):
         self.stmt = stmt
         self.expr_info = expr_info
         self.hoisted = hoisted
@@ -775,20 +790,20 @@ class ExpressionExpander(object):
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
 
-    def expand(self, should_expand):
+    def expand(self, should_expand, not_aggregate=False):
         """Perform the expansion of the expression rooted in ``self.stmt``.
         Symbols for which the lambda function ``should_expand`` returns
         True are expansion candidates."""
         self.expansions = []
         self.should_expand = should_expand
 
-        info = visit(self.expr_info.outermost_loop,
-                     info_items=['symbol_refs', 'symbols_dep'])
-
         # Expand according to the /should_expand/ heuristic
         self._expand(self.stmt.children[1], self.stmt)
 
         # Try to aggregate expanded terms with hoisted expressions (if any)
+        if not_aggregate:
+            return
+        info = visit(self.expr_info.outermost_loop) if self.expr_info else visit(self.stmt)
         for expansion in self.expansions:
             hoisted = self._hoist(expansion, info)
             if hoisted:
@@ -833,9 +848,8 @@ class ExpressionFactorizer(object):
             factors = set(s for s in symbols if not should_factorize(s))
             return ExpressionFactorizer.Term(operands, factors, op)
 
-    def __init__(self, stmt, expr_info):
+    def __init__(self, stmt):
         self.stmt = stmt
-        self.expr_info = expr_info
 
     def _simplify_sum(self, terms):
         unique_terms = OrderedDict()
