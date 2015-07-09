@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from utils import *
+from collections import OrderedDict
 
 
 class MetaExpr(object):

@@ -138,14 +138,15 @@ class ExpressionGraph(object):
         :param node: root of the AST visited to initialize the ExpressionGraph.
         """
         self.deps = nx.DiGraph()
-        writes = FindInstances(Writer).visit(node)
+        writes = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
         for type, nodes in writes.items():
             for n in nodes:
                 self.add_dependency(*n.children)
 
     def add_dependency(self, sym, expr):
         """Add dependency between ``sym`` and symbols appearing in ``expr``."""
-        expr_symbols = FindInstances(Symbol).visit(expr)[Symbol]
+        retval = FindInstances.default_retval()
+        expr_symbols = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
         for es in expr_symbols:
             self.deps.add_edge(sym.symbol, es.symbol)
 
@@ -153,7 +154,8 @@ class ExpressionGraph(object):
         """Return True if any symbols in ``expr`` is read by ``target_sym``,
         False otherwise. If ``target_sym`` is None, Return True if any symbols
         in ``expr`` are read by at least one symbol, False otherwise."""
-        input_syms = FindInstances(Symbol).visit(expr)[Symbol]
+        retval = FindInstances.default_retval()
+        input_syms = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
         for s in input_syms:
             if s.symbol not in self.deps:
                 continue
@@ -168,7 +170,8 @@ class ExpressionGraph(object):
         """Return True if any symbols in ``expr`` is written by ``target_sym``,
         False otherwise. If ``target_sym`` is None, Return True if any symbols
         in ``expr`` are written by at least one symbol, False otherwise."""
-        input_syms = FindInstances(Symbol).visit(expr)[Symbol]
+        retval = FindInstances.default_retval()
+        input_syms = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
         for s in input_syms:
             if s.symbol not in self.deps:
                 continue

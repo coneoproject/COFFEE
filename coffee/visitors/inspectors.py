@@ -1,5 +1,5 @@
 from __future__ import absolute_import
-from coffee.visitor import Visitor, Environment
+from coffee.visitor import Visitor
 from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol
 from collections import defaultdict, OrderedDict, Counter
 import itertools
@@ -19,16 +19,18 @@ class FindInnerLoops(Visitor):
     Returns a list of the inner-most :class:`.For` loops or an empty
     list if none were found."""
 
-    def visit_object(self, o, env):
+    def visit_object(self, o):
         return []
 
-    def visit_Node(self, o, env, *args, **kwargs):
+    def visit_Node(self, o):
         # Concatenate transformed children
+        ops, _ = o.operands()
+        args = [self.visit(op) for op in ops]
         return list(itertools.chain(*args))
 
-    def visit_For(self, o, env):
+    def visit_For(self, o):
         # Check for loops in children
-        children = self.visit(o.children[0], env=env)
+        children = self.visit(o.children[0])
         if children:
             # Yes, return those
             return children
@@ -42,30 +44,30 @@ class CheckPerfectLoop(Visitor):
     Check if a Node is a perfect loop nest.
     """
 
-    default_env = dict(in_loop=False, multiple_statements=False)
-
-    def visit_object(self, o, env):
+    def visit_object(self, o, *args, **kwargs):
         # Unhandled, return False to be safe.
         return False
 
-    def visit_Node(self, o, env):
+    def visit_Node(self, o, in_loop=False, *args, **kwargs):
         # Assume all nodes are in a perfect loop if they're in a loop.
-        return env["in_loop"]
+        return in_loop
 
-    def visit_For(self, o, env):
-        if env["in_loop"] and env["multiple_statements"]:
+    def visit_For(self, o, in_loop=False, multi=False, *args, **kwargs):
+        if in_loop and multi:
             return False
-        new_env = Environment(env, in_loop=True)
-        return self.visit(o.children[0], env=new_env)
+        return self.visit(o.children[0], in_loop=True, multi=multi)
 
-    def visit_Block(self, o, env):
+    def visit_Block(self, o, in_loop=False, multi=False, *args, **kwargs):
         # Does this block contain multiple statements?
-        multi = env["multiple_statements"] or len(o.children) > 1
-        new_env = Environment(env, multiple_statements=multi)
-        return env["in_loop"] and all(self.visit(op, env=new_env) for op in o.children)
+        multi = multi or len(o.children) > 1
+        return in_loop and all(self.visit(op, in_loop=in_loop, multi=multi) for op in o.children)
 
 
 class CountOccurences(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return Counter()
 
     """Count all occurances of :class:`~.Symbol`\s in an AST.
 
@@ -79,45 +81,49 @@ class CountOccurences(Visitor):
         self.rvalues = only_rvalues
         super(CountOccurences, self).__init__()
 
-    def visit_object(self, o, env):
+    def visit_object(self, o, ret=None, *args, **kwargs):
         # Not a symbol, return identity for summation
-        return {}
+        return ret
 
-    def visit_list(self, o, env):
+    def visit_list(self, o, ret=None, *args, **kwargs):
         # Walk list entries (since some operands methods return lists)
-        ret = Counter()
         for entry in o:
-            ret.update(self.visit(entry, env=env))
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
         return ret
 
-    def visit_Node(self, o, env, *args, **kwargs):
-        # Walk the transformed children and sum up.
-        ret = Counter()
-        for d in args:
-            ret.update(d)
+    def visit_Node(self, o, ret=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
-    def visit_Assign(self, o, env):
-        ret = Counter()
+    def visit_Assign(self, o, ret=None, *args, **kwargs):
         if self.rvalues:
             # Only counting rvalues, so don't walk lvalue
             ops = o.children[1:]
         else:
             ops = o.children
-        args = [self.visit(op, env=env) for op in ops]
-        for d in args:
-            ret.update(d)
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
     visit_Incr = visit_Assign
 
     visit_Decr = visit_Assign
 
-    def visit_Symbol(self, o, env):
-        return {self.key(o): 1}
+    def visit_Symbol(self, o, ret=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
+        ret[self.key(o)] += 1
+        return ret
 
 
 class DetermineUnrollFactors(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return dict()
+
     """
     Determine unroll factors for all For loops in a tree.
 
@@ -129,18 +135,22 @@ class DetermineUnrollFactors(Visitor):
     are given potential unroll factors that result in no loop
     remainders.
     """
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_Node(self, o, env, *args, **kwargs):
-        ret = {}
-        for a in args:
-            ret.update(a)
+    def visit_object(self, o, ret=None):
         return ret
 
-    def visit_For(self, o, env):
-        ret = self.visit(o.children[0], env=env)
-        if len(ret) is 0:
+    def visit_Node(self, o, ret=None):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret)
+        return ret
+
+    def visit_For(self, o, ret=None):
+        if ret is None:
+            ret = self.default_retval()
+        # Check if children contain any loops
+        nval = len(ret)
+        ret = self.visit(o.children[0], ret=ret)
+        if len(ret) == nval:
             # No child for loops
             # Inner loops are not unrollable
             ret[o.dim] = (1, )
@@ -154,60 +164,75 @@ class MaxLoopDepth(Visitor):
 
     """Return the maximum loop depth in the tree."""
 
-    def visit_object(self, o, env):
+    def visit_object(self, o):
         return 0
 
-    def visit_Node(self, o, env, *args, **kwargs):
-        if len(args) == 0:
+    def visit_Node(self, o):
+        ops, _ = o.operands()
+        if len(ops) == 0:
             return 0
-        return max(args)
+        return max(self.visit(op) for op in ops)
 
-    def visit_For(self, o, env, *args, **kwargs):
-        return 1 + max(args)
+    def visit_For(self, o):
+        return 1 + max(self.visit(op) for op in o.children)
 
 
 class FindLoopNests(Visitor):
 
+    @classmethod
+    def default_retval(cls):
+        return list()
+
     """Return a list of lists of loop nests in the tree.
 
     Each list entry describes a loop nest with the outer-most loop
-    first.  Each entry therein is a tuple (loop_node, node_parent).
+    first.  Each entry therein is a tuple (loop_node, parent).
 
-    By default the top-level call to visit will record a node_parent
-    of None for the visited Node.  To provide one, pass an
-    environment in to the visitor::
+    By default the top-level call to visit will record a parent
+    of None for the visited Node.  To provide one, pass a keyword
+    argument in to the visitor::
 
     .. code-block::
 
-       v.visit(node, {"node_parent": parent})
+       v.visit(node, parent=parent)
 
     """
 
-    default_env = dict(node_parent=None)
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        return ret
 
-    def visit_object(self, o, env):
-        return []
-
-    def visit_Node(self, o, env):
+    def visit_Node(self, o, ret=None, parent=None, *args, **kwargs):
         ops, _ = o.operands()
-        new_env = Environment(env, node_parent=o)
-        # Visit children recording this node as the parent
-        return list(itertools.chain(*[self.visit(op, env=new_env) for op in ops]))
+        for op in ops:
+            # Visit children recording this node as the parent
+            ret = self.visit(op, ret=ret, parent=o)
+        return ret
 
-    def visit_For(self, o, env):
-        # Transform operands using generic visit_Node
-        args = self.visit_Node(o, env)
+    def visit_For(self, o, ret=None, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
+        ops, _ = o.operands()
+        nval = len(ret)
+        for op in ops:
+            ret = self.visit(op, ret=ret, parent=o)
         # Cons (node, node_parent) onto front of current loop-nest list
-        parent = env["node_parent"]
         me = (o, parent)
-        if len(args) == 0:
-            # Bottom of the nest, just return self
-            return ([me], )
-        # Transform child [a, b] into [(me, a), (me, b)]
-        return [list(itertools.chain((me, ), a)) for a in args]
+        if len(ret) == nval:
+            # Bottom of the nest, add myself to ret
+            ret.append([me])
+            return ret
+        # Transform new children (inside this loop)
+        # [a, b] into [(me, a), (me, b)]
+        for a in ret[nval:]:
+            a.insert(0, me)
+        return ret
 
 
 class FindCoffeeExpressions(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
 
     """
     Search the tree for :class:`~.Writer` statements annotated with
@@ -216,31 +241,27 @@ class FindCoffeeExpressions(Visitor):
     index_access).
 
     By default the top-level call to visit will record a node_parent
-    of None for the visited Node.  To provide one, pass an
-    environment in to the visitor::
+    of None for the visited Node.  To provide one, pass a keyword
+    argument in to the visitor::
 
     .. code-block::
 
-       v.visit(node, {"node_parent": parent})
+       v.visit(node, parent=parent)
 
     """
 
-    default_env = dict(node_parent=None)
-
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_Node(self, o, env):
-        ops, _ = o.operands()
-        new_env = Environment(env, node_parent=o)
-        args = [self.visit(op, env=new_env) for op in ops]
-        ret = OrderedDict()
-        # Merge values from children
-        for a in args:
-            ret.update(a)
+    def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
-    def visit_Writer(self, o, env):
+    def visit_Node(self, o, ret=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, parent=o)
+        return ret
+
+    def visit_Writer(self, o, ret=None, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
         for p in o.pragma:
             opts = p.split(" ", 2)
             # Don't care if we don't have three values
@@ -248,35 +269,45 @@ class FindCoffeeExpressions(Visitor):
                 continue
             if opts[1] == "coffee" and opts[2] == "expression":
                 # (parent, loop-nest, rank)
-                parent = env["node_parent"]
-                return {o: (parent, None, o.children[0].rank)}
-        return {}
+                ret[o] = (parent, None, o.children[0].rank)
+                return ret
+        return ret
 
-    def visit_For(self, o, env):
-        args = self.visit_Node(o, env)
+    def visit_For(self, o, ret=None, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
+        nval = len(ret)
+
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, parent=o)
+
         # Nothing inside this for loop was annotated (we didn't see a
         # Writer node with #pragma coffee expression)
-        if len(args) == 0:
-            return {}
-        ret = OrderedDict()
-        parent = env["node_parent"]
+        if len(ret) == nval:
+            return ret
         me = (o, parent)
-        for k, v in args.iteritems():
-            p, nest, rank = v
+        # Add nest structure to new items
+        keys = ret.keys()[nval:]
+        for k in keys:
+            p, nest, rank = ret[k]
             if nest is None:
                 # Statement is directly underneath this loop, so the
                 # loop nest structure is just the current loop
-                nest = (me, )
+                nest = [me]
             else:
                 # Inside a nested set of loops, so prepend current
                 # loop info to nest structure
-                nest = list(itertools.chain((me, ), nest))
-            # Merge with updated nest info
-            ret[k] = (p, nest, rank)
+                nest = [me] + nest
+            ret[k] = p, nest, rank
         return ret
 
 
 class SymbolReferences(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return defaultdict(list)
 
     """
     Visit the tree and return a dict mapping symbol names to tuples of
@@ -285,47 +316,44 @@ class SymbolReferences(Visitor):
     parent of that node.
 
     By default the top-level call to visit will record a node_parent
-    of None for the visited Node.  To provide one, pass an
-    environment in to the visitor::
+    of None for the visited Node.  To provide one, pass a keyword
+    argument in to the visitor::
 
     .. code-block::
 
-       v.visit(node, {"node_parent": parent})
+       v.visit(node, parent=parent)
 
     """
 
-    default_env = dict(node_parent=None)
+    def visit_Symbol(self, o, ret=None, parent=None):
+        if ret is None:
+            ret = self.default_retval()
 
-    def visit_Symbol(self, o, env):
         # Map name to (node, parent) tuple
-        parent = env["node_parent"]
-        return {o.symbol: [(o, parent)]}
-
-    def visit_object(self, o, env):
-        # Identity
-        return {}
-
-    def visit_list(self, o, env):
-        ret = defaultdict(list)
-        for entry in o:
-            a = self.visit(entry, env=env)
-            for k, v in a.iteritems():
-                ret[k].extend(v)
+        ret[o.symbol].append((o, parent))
         return ret
 
-    def visit_Node(self, o, env):
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        # Identity
+        return ret
+
+    def visit_list(self, o, ret=None, *args, **kwargs):
+        for entry in o:
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
+        return ret
+
+    def visit_Node(self, o, ret=None, *args, **kwargs):
         ops, _ = o.operands()
-        new_env = Environment(env, node_parent=o)
-        args = [self.visit(op, env=new_env) for op in ops]
-        ret = defaultdict(list)
-        # Merge dicts
-        for a in args:
-            for k, v in a.iteritems():
-                ret[k].extend(v)
+        for op in ops:
+            ret = self.visit(op, ret=ret, parent=o)
         return ret
 
 
 class SymbolDependencies(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
 
     """
     Visit the tree and return a dict collecting symbol dependencies.
@@ -334,80 +362,76 @@ class SymbolDependencies(Visitor):
     empty) loop list the symbol depends on.
     """
 
-    default_env = dict(loop_nest=[], write=False)
+    default_args = dict(loop_nest=[], write=False)
 
-    def visit_Symbol(self, o, env):
-        write = env["write"]
-        nest = env["loop_nest"]
+    def visit_Symbol(self, o, ret=None, *args, **kwargs):
+        write = kwargs["write"]
+        nest = kwargs["loop_nest"]
+        if ret is None:
+            ret = self.default_retval()
         if write:
             # Remember that this symbol /name/ was written,
             # as well as the full current loop nest for the
             # symbol itself
-            return {o: [l for l in nest],
-                    o.symbol: True}
-        # Not being written, only care if the loop indices
-        # of the current nest access the symbol
-        return {o: [l for l in nest if l.dim in o.rank]}
+            ret[o] = [l for l in nest]
+            ret[o.symbol] = True
+        else:
+            # Not being written, only care if the loop indices
+            # of the current nest access the symbol
+            ret[o] = [l for l in nest if l.dim in o.rank]
+        return ret
 
-    def visit_object(self, o, env):
-        return {}
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        return ret
 
-    def visit_Node(self, o, env):
+    def visit_Node(self, o, ret=None, *args, **kwargs):
         ops, _ = o.operands()
-        args = [self.visit(op, env=env) for op in ops]
-        ret = OrderedDict()
-        # Merge values from children
-        for a in args:
-            ret.update(a)
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
     visit_EmptyStatement = visit_object
 
-    def visit_Decl(self, o, env):
+    def visit_Decl(self, o, ret=None, *args, **kwargs):
         # Declaration init could have symbol access
-        args = [self.visit(op, env=env) for op in [o.sym, o.init]]
-        ret = OrderedDict()
-        for a in args:
-            ret.update(a)
+        for op in [o.sym, o.init]:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
     visit_FunCall = visit_Node
 
-    def visit_Invert(self, o, env):
-        return self.visit(o.children[0], env=env)
+    def visit_Invert(self, o, ret=None, *args, **kwargs):
+        return self.visit(o.children[0], ret=ret, *args, **kwargs)
 
-    def visit_Writer(self, o, env):
-        ret = OrderedDict()
-        write_env = Environment(env, write=True)
-        lvalue = self.visit(o.children[0], env=write_env)
-        ret.update(lvalue)
-        for r in o.children[1:]:
-            d = self.visit(r, env=env)
-            ret.update(d)
+    def visit_Writer(self, o, ret=None, *args, **kwargs):
+        write = kwargs.pop("write")
+        ret = self.visit(o.children[0], ret=ret, write=True, *args, **kwargs)
+        for op in o.children[1:]:
+            ret = self.visit(op, ret=ret, write=write, *args, **kwargs)
         return ret
 
-    def visit_For(self, o, env):
-        loop_nest = env["loop_nest"]
-        new_env = Environment(env, loop_nest=loop_nest + [o])
+    def visit_For(self, o, ret=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
+        loop_nest = kwargs.pop("loop_nest") + [o]
+        nval = len(ret)
         # Don't care about symbol access in increments, only children
-        args = [self.visit(op, env=new_env) for op in o.children]
-        ret = OrderedDict()
-        for a in args:
-            ret.update(a)
-
+        for op in o.children:
+            ret = self.visit(op, ret=ret, loop_nest=loop_nest, *args, **kwargs)
         # Dependencies for variables that are written in one nest
         # and read in a subsequent one need to respect this.
-        nest = new_env["loop_nest"]
-        for k, v in ret.iteritems():
+        new_keys = set(ret.keys()[nval:])
+        for k in new_keys:
             if type(k) is not Symbol:
                 continue
-            if k.symbol in ret:
+            if k.symbol in new_keys:
+                v = ret[k]
                 # Symbol name was written in some nest
                 # The dependency for this symbol is therefore
                 # whatever nest came from visiting the children
                 # plus the current nest at this point in the tree,
                 # suitably uniquified.
-                new_v = [l for l in nest]
+                new_v = [l for l in loop_nest]
                 new_v.extend([l for l in v if l not in new_v])
                 ret[k] = new_v
 
@@ -415,6 +439,10 @@ class SymbolDependencies(Visitor):
 
 
 class SymbolModes(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
 
     """
     Visit the tree and return a dict mapping Symbols to tuples of
@@ -425,49 +453,43 @@ class SymbolModes(Visitor):
 
     By default the top-level call to visit will record a parent class
     of NoneType for Symbols without a parent.  To pass in a parent by
-    hand, provide an environment to the visitor.
+    hand, provide a keyword argument to the visitor::
 
     .. code-block::
 
-       v.visit(symbol, {"node_parent": parent})
+       v.visit(symbol, parent=parent)
 
     """
 
-    default_env = dict(access_mode=READ, node_parent=None)
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        return ret
 
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_Node(self, o, env):
-        new_env = Environment(env, node_parent=o)
-        ret = OrderedDict()
+    def visit_Node(self, o, ret=None, *args, **kwargs):
         ops, _ = o.operands()
         for op in ops:
             # WARNING, if the same Symbol object appears multiple
             # times, the "last" access wins, rather than WRITE winning.
             # This assumes all nodes in the tree are unique instances
-            ret.update(self.visit(op, env=new_env))
+            ret = self.visit(op, ret=ret, parent=o)
         return ret
 
-    def visit_Symbol(self, o, env):
-        mode = env["access_mode"]
-        parent = env["node_parent"]
-        return {o: (mode, parent.__class__)}
+    def visit_Symbol(self, o, ret=None, mode=READ, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
+        ret[o] = (mode, parent.__class__)
+        return ret
 
     # Don't do anything with declarations.  If you want lvalues to get
     # a WRITE unless uninitialised, then custom visitor must be
     # written.
     visit_Decl = visit_object
 
-    def visit_Writer(self, o, env):
-        new_env = Environment(env, node_parent=o)
-        write_env = Environment(new_env, access_mode=WRITE)
-        ret = OrderedDict()
+    def visit_Writer(self, o, ret=None, *args, **kwargs):
         # lvalues have access mode WRITE
-        ret.update(self.visit(o.children[0], env=write_env))
+        ret = self.visit(o.children[0], ret=ret, parent=o, mode=WRITE)
         # All others have access mode READ
         for op in o.children[1:]:
-            ret.update(self.visit(op, env=new_env))
+            ret = self.visit(op, ret=ret, parent=o)
         return ret
 
     visit_Invert = visit_Writer
@@ -475,40 +497,48 @@ class SymbolModes(Visitor):
 
 class SymbolDeclarations(Visitor):
 
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
+
     """Return a dict mapping symbol names to a tuple of the declaring
     node.  The node is annotated in place with information about
     whether it is a LOCAL declaration or EXTERNAL (via a function
     argument).
     """
 
-    default_env = dict(scope=LOCAL)
+    def __init__(self):
+        super(SymbolDeclarations, self).__init__()
 
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_Node(self, o, env, *args, **kwargs):
-        ret = OrderedDict()
-        for a in args:
-            # WARNING, last sight of symbol wins.
-            ret.update(a)
+    def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
-    def visit_FunDecl(self, o, env):
-        new_env = Environment(env, scope=EXTERNAL)
-        ret = OrderedDict()
+    def visit_Node(self, o, ret=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
+        return ret
+
+    def visit_FunDecl(self, o, ret=None, *args, **kwargs):
         for op in o.args:
-            ret.update(self.visit(op, env=new_env))
+            ret = self.visit(op, ret=ret, scope=EXTERNAL)
         for op in o.children:
-            ret.update(self.visit(op, env=env))
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
-    def visit_Decl(self, o, env):
-        # FIXME: be side-effect free
-        o.scope = env["scope"]
-        return {o.sym.symbol: o}
+    def visit_Decl(self, o, ret=None, scope=LOCAL, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
+        o.scope = scope
+        ret[o.sym.symbol] = o
+        return ret
 
 
 class FindInstances(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return defaultdict(list)
 
     """
     Visit the tree and return a dict mapping types to a list of
@@ -525,22 +555,19 @@ class FindInstances(Visitor):
         self.with_parent = with_parent
         super(FindInstances, self).__init__()
 
-    def visit_object(self, o, env):
-        return {}
-
-    def visit_list(self, o, env):
-        ret = defaultdict(list)
-        for entry in o:
-            a = self.visit(entry, env=env)
-            for k, v in a.iteritems():
-                ret[k].extend(v)
+    def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
-    def visit_Node(self, o, env):
-        ret = defaultdict(list)
-        new_env = Environment(env, node_parent=o)
+    def visit_list(self, o, ret=None, *args, **kwargs):
+        for entry in o:
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
+        return ret
+
+    def visit_Node(self, o, ret=None, parent=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
         if isinstance(o, self.types):
-            found = (o, env["node_parent"]) if self.with_parent else o
+            found = (o, parent) if self.with_parent else o
             ret[type(o)].append(found)
             # Don't traverse children if stop-on-found
             if self.stop_when_found:
@@ -548,7 +575,5 @@ class FindInstances(Visitor):
         # Not found, or traversing children anyway
         ops, _ = o.operands()
         for op in ops:
-            a = self.visit(op, env=new_env)
-            for k, v in a.iteritems():
-                ret[k].extend(v)
+            ret = self.visit(op, ret=ret, parent=o)
         return ret

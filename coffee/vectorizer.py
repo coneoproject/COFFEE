@@ -86,11 +86,13 @@ class LoopVectorizer(object):
         # Aliases
         decls = self.loop_opt.decls
         header = self.loop_opt.header
-        info = visit(header)
+        info = visit(header, info_items=['symbols_dep', 'symbols_mode', 'symbol_refs',
+                                         'fors'])
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']
-        to_invert = FindInstances(Invert).visit(header)[Invert]
+        retval = FindInstances.default_retval()
+        to_invert = FindInstances(Invert).visit(header, ret=retval)[Invert]
         if len(to_invert) > 1:
             raise NotImplementedError("More than one Invert node not handled")
         if to_invert:

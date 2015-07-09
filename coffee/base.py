@@ -152,7 +152,7 @@ class BinExpr(Expr):
         super(BinExpr, self).__init__([expr1, expr2])
 
     def reconstruct(self, expr1, expr2, **kwargs):
-        return type(self)(expr1, expr2, **kwargs)
+        return type(self)(expr1, expr2)
 
     def __deepcopy__(self, memo):
         """Binary expressions always need to be copied as plain new objects,
@@ -185,7 +185,7 @@ class UnaryExpr(Expr):
         super(UnaryExpr, self).__init__([expr])
 
     def reconstruct(self, expr, **kwargs):
-        return type(self)(expr, **kwargs)
+        return type(self)(expr)
 
     def gencode(self, not_scope=True, parent=None):
         return "%s%s" % (type(self).op, self.children[0].gencode(not_scope)) + semicolon(not_scope)

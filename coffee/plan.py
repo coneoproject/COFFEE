@@ -48,6 +48,7 @@ from expression import MetaExpr
 from coffee.visitors import FindInstances
 
 from copy import deepcopy as dcopy
+from collections import defaultdict, OrderedDict
 import itertools
 import operator
 
@@ -95,9 +96,11 @@ class ASTKernel(object):
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
-        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
+        retval = FindInstances.default_retval()
+        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast,
+                                                                     ret=retval)[FunDecl]
         for kernel in kernels:
-            info = visit(kernel)
+            info = visit(kernel, info_items=['decls', 'exprs'])
             decls = info['decls']
             # Structure up expressions and related metadata
             nests = defaultdict(OrderedDict)
@@ -207,7 +210,7 @@ class ASTKernel(object):
             if permute and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Outer-product vectorization needs no permute")
 
-            info = visit(kernel)
+            info = visit(kernel, info_items=['decls', 'exprs'])
             decls = info['decls']
             # Structure up expressions and related metadata
             nests = defaultdict(OrderedDict)
@@ -273,7 +276,9 @@ class ASTKernel(object):
 
             return loop_opts
 
-        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
+        retval = FindInstances.default_retval()
+        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast,
+                                                                     ret=retval)[FunDecl]
         if opts.get('autotune'):
             if not (compiler and isa):
                 raise RuntimeError("Must initialize COFFEE prior to autotuning")

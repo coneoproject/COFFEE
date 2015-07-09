@@ -37,7 +37,7 @@ import resource
 import operator
 from warnings import warn as warning
 from copy import deepcopy as dcopy
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 
 from base import *
 from coffee.visitors.inspectors import *
@@ -80,7 +80,7 @@ def unroll_factors(loops):
 
     v = inspectors.DetermineUnrollFactors()
 
-    unrolls = [v.visit(l) for l in loops]
+    unrolls = [v.visit(l, ret=v.default_retval()) for l in loops]
     ret = unrolls[0]
     ret.update(d for d in unrolls[1:])
     return ret
@@ -367,7 +367,7 @@ def ast_make_copy(arr1, arr2, itspace, op):
 ###########################################################
 
 
-def visit(node, parent=None):
+def visit(node, parent=None, info_items=None):
     """Explore the AST rooted in ``node`` and collect various info, including:
 
     * Loop nests encountered - a list of tuples, each tuple representing a loop nest
@@ -376,35 +376,52 @@ def visit(node, parent=None):
     * Symbols (access mode) - a dictionary {symbol (AST node): access mode (WRITE, ...)}
     * String to Symbols - a dictionary {symbol (str): [(symbol, parent) (AST nodes)]}
     * Expressions - mathematical expressions to optimize (decorated with a pragma)
-    * Maximum depth - an integer representing the depth of the most depth loop nest
 
     :param node: AST root node of the visit
     :param parent: parent node of ``node``
+    :param info_items: An optional list of information to gather,
+        valid values are::
+
+            - "symbols_dep"
+            - "decls"
+            - "exprs"
+            - "fors"
+            - "symbol_refs"
+            - "symbols_mode"
     """
     info = {}
 
-    info['max_depth'] = MaxLoopDepth().visit(node)
+    if info_items is None:
+        info_items = ['decls', 'symbols_dep', 'symbol_refs',
+                      'symbols_mode', 'exprs', 'fors']
+    if 'decls' in info_items:
+        retval = SymbolDeclarations.default_retval()
+        info['decls'] = SymbolDeclarations().visit(node, ret=retval)
 
-    info['decls'] = SymbolDeclarations().visit(node, env=SymbolDeclarations.default_env)
+    if 'symbols_dep' in info_items:
+        deps = SymbolDependencies().visit(node, ret=SymbolDependencies.default_retval(),
+                                          **SymbolDependencies.default_args)
+        # Prune access mode:
+        for k in deps.keys():
+            if type(k) is not Symbol:
+                del deps[k]
+        info['symbols_dep'] = deps
 
-    deps = SymbolDependencies().visit(node, env=SymbolDependencies.default_env)
-    # Prune access mode:
-    ret = OrderedDict()
-    for k, v in deps.iteritems():
-        if type(k) is not Symbol:
-            continue
-        ret[k] = v
-    info['symbols_dep'] = ret
+    if 'exprs' in info_items:
+        retval = FindCoffeeExpressions.default_retval()
+        info['exprs'] = FindCoffeeExpressions().visit(node, parent=parent, ret=retval)
 
-    env = dict(node_parent=parent)
-    info['exprs'] = FindCoffeeExpressions().visit(node, env=env)
+    if 'fors' in info_items:
+        retval = FindLoopNests.default_retval()
+        info['fors'] = FindLoopNests().visit(node, parent=parent, ret=retval)
 
-    info['fors'] = FindLoopNests().visit(node, env=env)
+    if 'symbol_refs' in info_items:
+        retval = SymbolReferences.default_retval()
+        info['symbol_refs'] = SymbolReferences().visit(node, parent=parent, ret=retval)
 
-    info['symbol_refs'] = SymbolReferences().visit(node, env=env)
-
-    env = dict(SymbolModes.default_env.items() + env.items())
-    info['symbols_mode'] = SymbolModes().visit(node, env=env)
+    if 'symbols_mode' in info_items:
+        retval = SymbolModes.default_retval()
+        info['symbols_mode'] = SymbolModes().visit(node, parent=parent, ret=retval)
 
     return info
 
@@ -428,13 +445,13 @@ def explore_operator(node):
 def inner_loops(node):
     """Find inner loops in the subtree rooted in ``node``."""
 
-    return FindInnerLoops().visit(node, env=FindInnerLoops.default_env)
+    return FindInnerLoops().visit(node)
 
 
 def is_perfect_loop(loop):
     """Return True if ``loop`` is part of a perfect loop nest, False otherwise."""
 
-    return CheckPerfectLoop().visit(loop, env=CheckPerfectLoop.default_env)
+    return CheckPerfectLoop().visit(loop)
 
 
 def count(node, mode='symbol', read_only=False):
@@ -476,7 +493,7 @@ def count(node, mode='symbol', read_only=False):
         raise RuntimeError("`Count` function got a wrong mode (valid: %s)" % modes)
 
     v = CountOccurences(key=key, only_rvalues=read_only)
-    return v.visit(node)
+    return v.visit(node, ret=v.default_retval())
 
 
 def check_type(stmt, decls):
@@ -490,9 +507,8 @@ def check_type(stmt, decls):
                   the name of a symbol) to Decl nodes
     """
     v = SymbolReferences()
-    env = dict(node_parent=stmt)
-    lhs_symbol = v.visit(stmt.children[0], env=env).keys()[0]
-    rhs_symbols = v.visit(stmt.children[1], env=env).keys()
+    lhs_symbol = v.visit(stmt.children[0], parent=stmt, ret=v.default_retval()).keys()[0]
+    rhs_symbols = v.visit(stmt.children[1], parent=stmt, ret=v.default_retval()).keys()
 
     lhs_decl = decls[lhs_symbol]
     rhs_decls = [decls[s] for s in rhs_symbols if s in decls]
