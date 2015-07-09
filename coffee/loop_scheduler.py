@@ -238,7 +238,7 @@ class ExpressionFissioner(LoopScheduler):
         self.loops = kwargs.get('loops', 'expr')
         self.perfect = kwargs.get('perfect', False)
 
-        if self.match:
+        if 'match' in kwargs:
             self.cutter = self.CutterMatch(self)
         elif self.cut > 0:
             self.cutter = self.CutterSum(self)
@@ -263,10 +263,10 @@ class ExpressionFissioner(LoopScheduler):
             /remainder/ always contains the subexpression after the fission point
             """
             self._success = False
-
             left = dcopy(node)
             self._cut(left.children[1], left, 'split')
 
+            self._success = False
             right = dcopy(node)
             self._cut(right.children[1], right, 'remainder')
 
@@ -338,7 +338,12 @@ class ExpressionFissioner(LoopScheduler):
             self.matched = []
 
         def _cut(self, node, parent, side, topsum=None):
-            if topsum and str(node) in self.expr_fissioner.match:
+            if not self._success and str(node) in self.expr_fissioner.match:
+                # We initially assume that the found 'match' corresponds
+                # to the entire node provided as input to the /CutterMatch/.
+                # Recurring back, we might switch /_success/ to 'match_and_cut',
+                # if /node/ actually was a summand of a Sum/Sub
+                self._success = 'match'
                 return node
 
             elif isinstance(node, (Symbol, FunCall)):
@@ -352,7 +357,16 @@ class ExpressionFissioner(LoopScheduler):
 
             elif isinstance(node, Prod):
                 cutting = self._cut(node.left, node, side)
-                return cutting if cutting else self._cut(node.right, node, side)
+                if cutting:
+                    # Found a match /within/ /node.left/; for correctness, we
+                    # need to be sure we will be cutting the whole Prod, so we
+                    # return /node/ instead of /cutting/.
+                    return node
+                cutting = self._cut(node.right, node, side)
+                if cutting:
+                    # Same as above
+                    return node
+                return None
 
             elif isinstance(node, (Sum, Sub)):
                 topsum = topsum or (parent, parent.children.index(node))
@@ -371,12 +385,12 @@ class ExpressionFissioner(LoopScheduler):
                 # Adjust if a Sub
                 if isinstance(node, Sub) and cutting == node.right:
                     cutting = Neg(cutting)
+                self._success = 'match_and_cut'
                 if side == 'split':
                     # In a tree of Sum/Subs, only the /top/ Sum/Sub performs the
                     # actual cut, while the others just propagate upwards the
                     # notification "a cut point was found"
                     if parent == topsum[0]:
-                        self._success = True
                         topsum[0].children[topsum[1]] = cutting
                         return parent
                     else:
@@ -390,7 +404,8 @@ class ExpressionFissioner(LoopScheduler):
 
         def cut(self, node, expr_info):
             left, right = ExpressionFissioner.Cutter.cut(self, node)
-            if self._success:
+
+            if self._success == 'match_and_cut':
                 # Append /left/ to a new loop nest
                 split = (left, self.expr_fissioner._embedexpr(left, expr_info))
                 self.matched.append(left)
@@ -400,6 +415,12 @@ class ExpressionFissioner(LoopScheduler):
                 expr_info.parent.children[index] = right
                 splittable = (right, copy_metaexpr(expr_info))
                 return (split, splittable)
+
+            elif self._success == 'match':
+                # A match was actualy found, but there's just nothing to cut
+                # (i.e., the /match/ is a direct child of /node/)
+                self.matched.append(node)
+
             return ((node, expr_info), ())
 
     def _embedexpr(self, stmt, expr_info):
@@ -432,9 +453,9 @@ class ExpressionFissioner(LoopScheduler):
         loops_info += tuple(finder.visit(domain_outerloop, env=env)[0])
 
         # Append the newly created loop nest
-        if self.loops == 'all':
+        if self.loops == 'all' and expr_info.out_domain_loops_info:
             expr_info.outermost_parent.children.append(out_domain_loop)
-        elif self.loops == 'expr':
+        else:
             domain_outerloop_parent.children.append(domain_outerloop)
 
         # Finally, create and return the MetaExpr object
