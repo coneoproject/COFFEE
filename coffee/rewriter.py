@@ -96,10 +96,13 @@ class ExpressionRewriter(object):
         autovectorization.
 
         :param kwargs:
-            * hoist_domain_const: True if ``n``-dimensional arrays are allowed
-                for hoisting expressions crossing ``n`` loops in the nest.
-            * hoist_out_domain: True if only outer-loop invariant terms should
-                be hoisted
+            * only_domain: hoist all domain-dependent subexpressions, even if
+                they would require ``n``-dimensional temporary arrays (with
+                ``n`` being the number of domain loops).
+            * only_outdomain: hoist all subexpressions independent of the
+                domain loops.
+            * only_const: hoist all constant subexpressions (i.e., no loop
+                dependencies at all).
             * look_ahead: True if only a projection of the hoistable subexpressions
                 is needed (i.e., the actual expression is not modified)
         """
@@ -410,8 +413,9 @@ class ExpressionHoister(object):
         Hoistable sub-expressions are stored in ``dep_subexprs``."""
 
         # Parameters driving the extraction pass
-        hoist_domain_const = kwargs.get('hoist_domain_const')
-        hoist_out_domain = kwargs.get('hoist_out_domain')
+        only_domain = kwargs.get('only_domain')
+        only_outdomain = kwargs.get('only_outdomain')
+        only_const = kwargs.get('only_const')
         look_ahead = kwargs.get('look_ahead')
 
         # Constants used to charaterize sub-expressions:
@@ -419,18 +423,29 @@ class ExpressionHoister(object):
         HOISTED = 1  # expression should not be hoisted any further
 
         def __try_hoist(node, dep):
+            operands = [o for o, p in explore_operator(node)]
             should_extract = True
-            operands = explore_operator(node)
             if isinstance(node, Symbol):
-                # Do not extract individual symbols
+                # Never extract individual symbols
                 should_extract = False
-            elif hoist_out_domain:
-                # Do not extract unless independent of the expression's dimensions
+            elif only_domain:
+                # Do extract if all domain-dependent subexpressions are requested
+                should_extract = True
+            elif only_const:
+                # Do not extract unless constant in all loops
                 if set(dep) and set(dep).issubset(set(self.expr_info.dims)):
                     should_extract = False
-            elif not hoist_domain_const:
-                # Do not extract binary operations
-                if all(isinstance(i, Symbol) for i, _ in operands) and len(operands) <= 2:
+            elif all(isinstance(o, Symbol) for o in operands):
+                if len(operands) <= 2:
+                    # Do not extract binary/unary operations
+                    should_extract = False
+                if len([o for o in operands if any(r in self.expr_info.domain_dims
+                        for r in o.rank)]) == 1:
+                    # Do not extract if only one domain-dependent symbol is present
+                    should_extract = False
+            elif only_outdomain:
+                # Do not extract unless independent of the domain loops
+                if not set(dep).issubset(set(self.expr_info.out_domain_dims)):
                     should_extract = False
             if should_extract or look_ahead:
                 dep_subexprs[dep].append(node)
@@ -464,14 +479,20 @@ class ExpressionHoister(object):
                     if dep_l == dep_r:
                         # E.g. alpha*beta, A[i] + B[i]
                         return (dep_l, INVARIANT)
-                    elif (not dep_l or not dep_r) and not hoist_domain_const:
-                        # E.g. A[i,j]*alpha, alpha*A[i,j]
-                        if not (__try_hoist(left, dep_l) or __try_hoist(right, dep_r)):
-                            return (dep_n, INVARIANT)
-                    elif not dep_l and hoist_domain_const:
+                    elif not dep_l and not only_domain:
+                        # E.g. alpha*A[i,j]
+                        if not set(self.expr_info.domain_dims) & set(dep_r) or \
+                                not (__try_hoist(left, dep_l) or __try_hoist(right, dep_r)):
+                            return (dep_r, INVARIANT)
+                    elif not dep_r and not only_domain:
+                        # E.g. A[i,j]*alpha
+                        if not set(self.expr_info.domain_dims) & set(dep_l) or \
+                                not (__try_hoist(right, dep_r) or __try_hoist(left, dep_l)):
+                            return (dep_l, INVARIANT)
+                    elif not dep_l and only_domain:
                         # E.g. alpha*A[i,j], not hoistable anymore
                         __try_hoist(right, dep_r)
-                    elif not dep_r and hoist_domain_const:
+                    elif not dep_r and only_domain:
                         # E.g. A[i,j]*alpha, not hoistable anymore
                         __try_hoist(left, dep_l)
                     elif set(dep_l).issubset(set(dep_r)):
@@ -482,7 +503,7 @@ class ExpressionHoister(object):
                         # E.g. A[i,j]*B[i]
                         if not __try_hoist(right, dep_r):
                             return (dep_n, INVARIANT)
-                    elif hoist_domain_const:
+                    elif only_domain:
                         # E.g. A[i]*B[j], hoistable in TMP[i,j]
                         return (dep_n, INVARIANT)
                     else:
@@ -545,7 +566,7 @@ class ExpressionHoister(object):
                     wrap_loop = ()
                     next_loop = expr_outermost_loop
                 elif len(dep) == 1 and is_perfect_loop(expr_outermost_loop):
-                    # As vector, outside of the loop nest;
+                    # As scalar, outside of the loop nest;
                     place = self.header
                     wrap_loop = (expr_dims_loops[dep[0]],)
                     next_loop = expr_outermost_loop
@@ -555,10 +576,11 @@ class ExpressionHoister(object):
                     wrap_loop = ()
                     next_loop = od_find_next(expr_dims_loops, dep[0])
                 elif len(dep) == 1:
-                    # As scalar, at the bottom of the loop imposing the dependency
+                    # As scalar, right before the expression (which is enclosed
+                    # in just a single loop, we can claim at this point)
                     place = expr_dims_loops[dep[0]].children[0]
                     wrap_loop = ()
-                    next_loop = place.children[-1]
+                    next_loop = place.children[place.children.index(self.stmt)]
                 elif set(dep).issuperset(set(self.expr_info.domain_dims)) and \
                         not any([self.expr_graph.is_written(e) for e in subexprs]):
                     # As n-dimensional vector, where /n == len(dep)/, outside of
@@ -619,17 +641,17 @@ class ExpressionHoister(object):
                 outer_wrap_loop = ast_make_for(inv_stmts, wrap_loop[-1])
                 for l in reversed(wrap_loop[:-1]):
                     outer_wrap_loop = ast_make_for([outer_wrap_loop], l)
-                inv_code = [outer_wrap_loop]
-                inv_loop = inv_code[0]
+                code = inv_decls + [outer_wrap_loop]
+                wrap_loop = outer_wrap_loop
             else:
-                inv_code = inv_stmts
-                inv_loop = None
+                code = inv_decls + inv_stmts
+                wrap_loop = None
             # Insert the new nodes at the right level in the loop nest
             ofs = place.children.index(next_loop)
-            place.children[ofs:ofs] = inv_decls + inv_code + [FlatBlock("\n")]
+            place.children[ofs:ofs] = code + [FlatBlock("\n")]
             # Track hoisted symbols
             for i, j in zip(inv_stmts, inv_decls):
-                self.hoisted[j.sym.symbol] = (i, j, inv_loop, place)
+                self.hoisted[j.sym.symbol] = (i, j, wrap_loop, place)
 
         # Finally, make sure symbols are unique in the AST
         self.stmt.children[1] = dcopy(self.stmt.children[1])

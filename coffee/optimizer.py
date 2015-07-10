@@ -117,7 +117,7 @@ class LoopOptimizer(object):
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             if expr_info.dimension in [0, 1] and expr_info.mode in [1, 2]:
-                ew.licm(hoist_out_domain=True)
+                ew.licm(only_outdomain=True)
                 continue
 
             if expr_info.mode == 1:
@@ -134,13 +134,13 @@ class LoopOptimizer(object):
                 if expr_info.is_tensor:
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
-                    ew.licm(hoist_out_domain=True)
+                    ew.licm(only_const=True)
                     ew.factorize(mode='constants')
                     ew.reassociate()
-                    ew.licm(hoist_domain_const=True)
+                    ew.licm(only_domain=True)
                     ew.simplify()
                     ew.factorize(mode='immutable')
-                    ew.licm(hoist_out_domain=True)
+                    ew.licm(only_const=True)
 
         # Try merging and optimizing the loops created by rewriting
         merged_loops = SSALoopMerger(self.expr_graph).merge(self.header)
@@ -469,7 +469,7 @@ class LoopOptimizer(object):
                     ew.expand(mode='full')
                     ew.factorize(mode='immutable')
                     ew.factorize(mode='constants')
-                    nterms = ew.licm(look_ahead=True, hoist_domain_const=True)
+                    nterms = ew.licm(look_ahead=True, only_domain=True)
                     nterms = len(uniquify(nterms[expr_info.dims])) or 1
                     fake_parent[fake_parent.index(fake_stmt)] = stmt
                     cost = nterms * increase_factor
