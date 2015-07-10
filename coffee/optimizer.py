@@ -138,7 +138,7 @@ class LoopOptimizer(object):
                     ew.factorize(mode='constants')
                     ew.reassociate()
                     ew.licm(only_domain=True)
-                    ew.simplify()
+                    ew.preevaluate()
                     ew.factorize(mode='immutable')
                     ew.licm(only_const=True)
 
