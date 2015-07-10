@@ -268,34 +268,24 @@ class ExpressionRewriter(object):
 
         _reassociate(self.stmt.children[1], self.stmt)
 
-    def simplify(self):
-        """Simplify an expression by applying transformations which should enhance
-        the effectiveness of later rewriting passes. The transformations applied
-        are: ::
-
-            * ``division replacement``: replace divisions by a constant with
-                multiplications, which gives expansion and factorization more
-                rewriting opportunities
-            * ``loop reduction``: simplify loops along which a reduction is
-                performed by 1) preaccumulating along the dimension of the
-                reduction, 2) removing the reduction loop, 3) precomputing
-                constant expressions
-        """
-        # Aliases
-        stmt, expr_info = self.stmt, self.expr_info
-
-        # Division replacement
+    def replacediv(self):
+        """Replace divisions by a constant with multiplications."""
         retval = FindInstances.default_retval()
-        divisions = FindInstances(Div).visit(stmt.children[1], ret=retval)[Div]
+        divisions = FindInstances(Div).visit(self.stmt.children[1], ret=retval)[Div]
         to_replace = {}
         for i in divisions:
             if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
                 to_replace[i] = Prod(i.left, Div(1, i.right.symbol))
-        ast_replace(stmt.children[1], to_replace, copy=True, mode='symbol')
+        ast_replace(self.stmt.children[1], to_replace, copy=True, mode='symbol')
 
-        ###
+    def preevaluate(self):
+        """Preevaluates subexpressions which values are compile-time constants.
+        In this process, reduction loops might be removed if the reduction itself
+        could be pre-evaluated."""
+        # Aliases
+        stmt, expr_info = self.stmt, self.expr_info
 
-        # Loop reduction
+        # Simplify reduction loops
         if not isinstance(stmt, (Incr, Decr, IMul, IDiv)):
             # Not a reduction expression, give up
             return
@@ -349,8 +339,6 @@ class ExpressionRewriter(object):
                 s.rank = self.expr_info.domain_dims
             # Update expression metadata
             self.expr_info._loops_info.remove((l, p))
-
-        ###
 
         # Precompute constant expressions
         for hoisted_loop in self.hoisted.all_loops:
