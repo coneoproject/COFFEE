@@ -64,7 +64,7 @@ class MetaExpr(object):
 
     @property
     def dims(self):
-        return [l.dim for l in self.loops]
+        return tuple(l.dim for l in self.loops)
 
     @property
     def domain_dims(self):
@@ -72,7 +72,7 @@ class MetaExpr(object):
 
     @property
     def out_domain_dims(self):
-        return [d for d in self.dims if d not in self.domain_dims]
+        return tuple(d for d in self.dims if d not in self.domain_dims)
 
     @property
     def loops(self):
