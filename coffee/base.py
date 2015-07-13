@@ -443,6 +443,11 @@ class Symbol(Expr):
     def dim(self):
         return len(self.rank)
 
+    @property
+    def is_const(self):
+        from utils import is_const_dim
+        return all(is_const_dim(r) for r in self.rank)
+
     def gencode(self, not_scope=True, parent=None):
         points = ""
         if not self.offset:
