@@ -7,7 +7,7 @@ from collections import OrderedDict, defaultdict
 import numpy as np
 
 from coffee.visitor import Visitor, Environment
-from coffee.base import Sum, Sub, Prod, Div, SparseArrayInit
+from coffee.base import Sum, Sub, Prod, Div, ArrayInit, SparseArrayInit
 from coffee.utils import ItSpace, flatten
 
 
@@ -98,12 +98,15 @@ class Evaluate(Visitor):
     ArrayInit object.
 
     :arg decls: dictionary mapping symbol names to known Decl nodes.
+    :arg track_zeros: True if the evaluated arrays are expected to be block-sparse
+        and the pattern of zeros should be tracked.
     """
 
     default_args = dict(loop_nest=[])
 
-    def __init__(self, decls):
+    def __init__(self, decls, track_zeros):
         self.decls = decls
+        self.track_zeros = track_zeros
         self.mapper = {
             Sum: np.add,
             Sub: np.subtract,
@@ -150,6 +153,10 @@ class Evaluate(Visitor):
             expr_values, precision = self.visit(o.children[1], new_env)
             # The sum takes into account reductions
             values[i] = np.sum(expr_values)
+
+        # If values is not expected to be block-sparse, just return
+        if not self.track_zeros:
+            return {lvalue: ArrayInit(values)}
 
         # Sniff the values to check for the presence of zero-valued blocks: ...
         # ... set default nonzero patten
