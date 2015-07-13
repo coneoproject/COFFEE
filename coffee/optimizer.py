@@ -33,7 +33,6 @@
 
 import operator
 import resource
-import sys
 from warnings import warn as warning
 from math import factorial as fact
 
@@ -354,9 +353,6 @@ class LoopOptimizer(object):
         which tries to pre-evaluate subexpressions whose values are known at
         code generation time. Injection is essential to factorize such subexprs.
         """
-
-        # 0) Injection may grow too much the AST, need allow deeper visits
-        sys.setrecursionlimit(4000)
 
         # 1) Find out and unroll injectable loops. For unrolling we create new
         # expressions; that is, for now, we do not modify the AST in place.

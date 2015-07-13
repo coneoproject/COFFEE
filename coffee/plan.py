@@ -52,6 +52,7 @@ from collections import defaultdict, OrderedDict
 from warnings import warn as warning
 import itertools
 import operator
+import sys
 
 
 class ASTKernel(object):
@@ -405,11 +406,18 @@ def init_coffee(_isa, _compiler, _blas):
     """Initialize COFFEE."""
 
     global isa, compiler, blas, initialized
+
+    # Populate dictionaries with keywords for backend-specific (hardware,
+    # compiler, ...) optimizations
     isa = _init_isa(_isa)
     compiler = _init_compiler(_compiler)
     blas = _init_blas(_blas)
     if isa and compiler:
         initialized = True
+
+    # Allow visits of ASTs that become huge due to transformation. The constant
+    # /4000/ was empirically found to be an acceptable value
+    sys.setrecursionlimit(4000)
 
 
 def _init_isa(isa):
