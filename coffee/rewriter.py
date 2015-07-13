@@ -91,8 +91,8 @@ class ExpressionRewriter(object):
 
         For example, if a sub-expression ``E`` depends on ``[i, j]`` and the
         loop nest has three loops ``[i, j, k]``, then ``E`` is hoisted out from
-        the body of ``k`` to the body of ``i``). All hoisted expressions are
-        then wrapped and evaluated in a new loop in order to promote compiler
+        the body of ``k`` to the body of ``i``. All hoisted expressions are
+        then wrapped and evaluated in a 'clone' loop in order to promote compiler
         autovectorization.
 
         :param kwargs:
@@ -108,6 +108,9 @@ class ExpressionRewriter(object):
         """
         if kwargs.get('look_ahead'):
             return self.expr_hoister.extract(**kwargs)
+        elif kwargs.get('only_domain'):
+            # Reassociation can promote more hoisting in /only_domain/ mode
+            self.reassociate()
         self.expr_hoister.licm(**kwargs)
 
     def expand(self, mode='standard', **kwargs):
