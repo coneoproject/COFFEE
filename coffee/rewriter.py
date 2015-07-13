@@ -317,7 +317,7 @@ class ExpressionRewriter(object):
                 # So if this condition fails, we give up
                 return
             # At this point, tensors can be reduced along the reducible dimensions
-            reducible_syms = [s for s in expr_syms if s.rank]
+            reducible_syms = [s for s in expr_syms if not s.is_const]
             # All involved symbols must result from hoisting
             if not all([s.symbol in self.hoisted for s in reducible_syms]):
                 return
@@ -364,6 +364,10 @@ class ExpressionRewriter(object):
                 hoisted.decl.init = values
                 hoisted.decl.qual = ['static', 'const']
                 self.hoisted.pop(s.symbol)
+                # Move all decls at the top of the kernel
+                self.header.children.remove(hoisted.decl)
+                self.header.children.insert(0, hoisted.decl)
+            self.header.children.insert(0, FlatBlock("// Preevaluated tables"))
             # Clean up
             self.header.children.remove(hoisted_loop)
 
