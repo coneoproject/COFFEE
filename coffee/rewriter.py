@@ -223,7 +223,7 @@ class ExpressionRewriter(object):
         # Perform the factorization
         self.expr_factorizer.factorize(should_factorize)
 
-    def reassociate(self, reorder=lambda x: x):
+    def reassociate(self, reorder=None):
         """Reorder symbols in associative operations following a convention.
         By default, the convention is to order the symbols based on their rank.
         For example, the terms in the expression ::
@@ -251,21 +251,21 @@ class ExpressionRewriter(object):
             elif isinstance(node, Prod):
                 children = explore_operator(node)
                 # Reassociate symbols
-                symbols = [(n.rank, n, p) for n, p in children if isinstance(n, Symbol)]
-                symbols.sort(key=lambda n: (len(n[0]), n[0]))
+                symbols = [n for n, p in children if isinstance(n, Symbol)]
                 # Capture the other children and recur on them
                 other_nodes = [(n, p) for n, p in children if not isinstance(n, Symbol)]
                 for n, p in other_nodes:
                     _reassociate(n, p)
                 # Create the reassociated product and modify the original AST
                 children = zip(*other_nodes)[0] if other_nodes else ()
-                children += tuple(reorder(zip(*symbols)[1] if symbols else ()))
+                children += tuple(sorted(symbols, key=reorder))
                 reassociated_node = ast_make_expr(Prod, children)
                 parent.children[parent.children.index(node)] = reassociated_node
 
             else:
                 warning('Unexpect node of type %s while reassociating', typ(node))
 
+        reorder = reorder if reorder else lambda n: (n.rank, n.dim)
         _reassociate(self.stmt.children[1], self.stmt)
 
     def replacediv(self):
