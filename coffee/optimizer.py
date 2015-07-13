@@ -115,31 +115,36 @@ class LoopOptimizer(object):
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
-            if expr_info.dimension in [0, 1] and expr_info.mode in [1, 2]:
-                ew.licm(only_outdomain=True)
-                continue
 
             if expr_info.mode == 1:
-                ew.licm()
+                if expr_info.dimension in [0, 1]:
+                    ew.licm(only_outdomain=True)
+                else:
+                    ew.licm()
 
             elif expr_info.mode == 2:
-                ew.licm()
-                if expr_info.is_tensor:
+                if expr_info.dimension == 0:
+                    ew.licm(only_outdomain=True)
+                elif expr_info.dimension == 1:
+                    ew.licm(only_outdomain=True)
+                    ew.expand(mode='full')
+                    ew.factorize(mode='immutable')
+                    ew.licm(only_outdomain=True)
+                else:
+                    ew.licm()
                     ew.expand()
                     ew.factorize()
                     ew.licm()
 
             elif expr_info.mode == 'auto':
-                if expr_info.is_tensor:
-                    ew.expand(mode='full')
-                    ew.factorize(mode='immutable')
-                    ew.licm(only_const=True)
-                    ew.factorize(mode='constants')
-                    ew.reassociate()
-                    ew.licm(only_domain=True)
-                    ew.preevaluate()
-                    ew.factorize(mode='immutable')
-                    ew.licm(only_const=True)
+                ew.expand(mode='full')
+                ew.factorize(mode='immutable')
+                ew.licm(only_const=True)
+                ew.factorize(mode='constants')
+                ew.licm(only_domain=True)
+                ew.preevaluate()
+                ew.factorize(mode='immutable')
+                ew.licm(only_const=True)
 
         # Try merging and optimizing the loops created by rewriting
         merged_loops = SSALoopMerger(self.expr_graph).merge(self.header)
