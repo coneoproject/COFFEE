@@ -146,10 +146,18 @@ class LoopOptimizer(object):
                 ew.factorize(mode='immutable')
                 ew.licm(only_const=True)
 
-        # Try merging and optimizing the loops created by rewriting
+        # Try merging the loops created by expression rewriting
         merged_loops = SSALoopMerger(self.expr_graph).merge(self.header)
+        # Update the trackers
         for merged, merged_in in merged_loops:
-            [self.hoisted.update_loop(l, merged_in) for l in merged]
+            for l in merged:
+                self.hoisted.update_loop(l, merged_in)
+                # Was /merged/ an expression loops? If so, need to update the
+                # corresponding MetaExpr
+                for stmt, expr_info in self.exprs.items():
+                    if expr_info.loops[-1] == l:
+                        expr_info._loops_info[-1] = (merged_in, expr_info.loops_parents[-1])
+                        expr_info._parent = merged_in.children[0]
 
         # Handle the effects, at the C-level, of the AST transformation
         self._recoil()
