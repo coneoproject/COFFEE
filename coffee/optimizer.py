@@ -300,17 +300,24 @@ class LoopOptimizer(object):
         stmt_occs = dict((k, v) for d in in_stmt for k, v in d.items())
 
         for l in self.hoisted.all_loops:
+
+            # First, try to further simplify the hoisted statements
+            for stmt in l.body:
+                ef = ExpressionFactorizer(stmt)
+                should_factorize = lambda n: any(r == l.dim for r in n.rank)
+                ef.factorize(should_factorize)
+
             l_occs = count(l, read_only=True)
             info = visit(l)
             innermost_block = FindInstances(Block).visit(l)[Block][-1]
             to_replace, to_remove = {}, []
-
             for (symbol, rank), sym_occs in l_occs.items():
-                # If the symbol appears once, then it is a potential candidate
-                # for removal. It is actually removed if it does't appear in
-                # the expression from which was extracted. Symbols appearing
-                # more than once are removed if they host an expression made
-                # of just one symbol
+                # A temporary /symbol/ is removed if any of the following
+                # conditions hold:
+                # - it is read once in /l/ and it is not read any longer (this
+                #   is checked through /stmt_occs/)
+                # - it is read multiple times in /l/, but it actually hosts a
+                #   single symbol (checked through /sym_occs/)
                 if symbol not in self.hoisted or symbol in stmt_occs:
                     continue
                 if self.hoisted[symbol].loop is not l:
@@ -323,11 +330,12 @@ class LoopOptimizer(object):
 
                 symbol_refs = info['symbol_refs'][symbol]
                 syms_mode = info['symbols_mode']
-                # Note: only one write is possible
+                # Note: only one write is possible at this point
                 write = [(s, p) for s, p in symbol_refs if syms_mode[s][0] == WRITE][0]
                 to_replace[write[0]] = expr
                 to_remove.append(write[1])
                 place.children.remove(decl)
+                # Update trackers
                 self.hoisted.pop(symbol)
                 self.decls.pop(symbol)
 
