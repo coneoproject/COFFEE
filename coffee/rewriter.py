@@ -898,7 +898,7 @@ class ExpressionFactorizer(object):
             factorized = OrderedDict()
             for t in terms:
                 operand = set([t.operands_ast]) if t.operands else set()
-                factor = set([t.factors_ast]) if t.factors else set()
+                factor = set([t.factors_ast]) if t.factors else set([Symbol(1.0)])
                 factorized_term = self.Term(operand, factor, node.__class__)
                 _t = factorized.setdefault(str(t.operands_ast), factorized_term)
                 _t.factors |= factor
@@ -911,5 +911,7 @@ class ExpressionFactorizer(object):
             raise RuntimeError("Factorization error: unknown node: %s" % str(node))
 
     def factorize(self, should_factorize):
+        if not isinstance(self.stmt, Writer):
+            return
         self.should_factorize = should_factorize
         self._factorize(self.stmt.children[1], self.stmt)
