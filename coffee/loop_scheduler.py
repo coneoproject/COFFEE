@@ -429,7 +429,7 @@ class ZeroRemover(LoopScheduler):
             itspace = OrderedDict()
             itspace.update(itspace_l)
             for r_r, r_size_ofs in itspace_r.items():
-                if not r_r in itspace:
+                if r_r not in itspace:
                     itspace[r_r] = r_size_ofs
                 l_size_ofs = itspace[r_r]
                 if isinstance(node, (Prod, Div)):
