@@ -168,20 +168,20 @@ class SSALoopMerger(LoopScheduler):
                 continue
             mergeable = []
             merging_in = loop_nests[-1]
-            merging_in_reads = SymbolModes().visit(merging_in.body,
-                                                   env=SymbolModes.default_env)
+            retval = SymbolModes.default_retval()
+            merging_in_reads = SymbolModes().visit(merging_in.body, ret=retval)
             merging_in_reads = [s for s, m in merging_in_reads.items() if m[0] == READ]
             for l in loop_nests[:-1]:
                 is_mergeable = True
                 # Get the symbols written in /l/
-                l_writes = SymbolModes().visit(l.body, env=SymbolModes.default_env)
+                l_writes = SymbolModes().visit(l.body, ret=SymbolModes.default_retval())
                 l_writes = [s for s, m in l_writes.items() if m[0] == WRITE]
                 # Get the symbols written between loop /l/ (excluded) and loop
                 # merging_in (included)
                 bound_left = parent.children.index(l)+1
                 bound_right = parent.children.index(merging_in)
                 for n in parent.children[bound_left:bound_right]:
-                    in_writes = SymbolModes().visit(n, env=SymbolModes.default_env)
+                    in_writes = SymbolModes().visit(n, ret=SymbolModes.default_retval())
                     in_writes = [s for s, m in in_writes.items() if m[0] == WRITE]
                     # Check condition 2
                     for iw, lw in product(in_writes, l_writes):

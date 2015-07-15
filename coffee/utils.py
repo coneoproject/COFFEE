@@ -253,7 +253,7 @@ def ast_update_ofs(node, ofs, **kwargs):
     """
     increase = kwargs.get('increase', False)
 
-    symbols = FindInstances(Symbol).visit(node)[Symbol]
+    symbols = FindInstances(Symbol).visit(node, ret=FindInstances.default_retval())[Symbol]
     for s in symbols:
         new_offset = []
         for r, o in zip(s.rank, s.offset):
@@ -284,7 +284,7 @@ def ast_update_rank(node, mapper):
         node will be transformed into 'A[j] = B[j]'
     """
 
-    symbols = FindInstances(Symbol).visit(node)[Symbol]
+    symbols = FindInstances(Symbol).visit(node, ret=FindInstances.default_retval())[Symbol]
     for s in symbols:
         if mapper.get(s.symbol):
             # Add a dimension
