@@ -774,7 +774,7 @@ class ZeroRemover(LoopScheduler):
         return nz_syms, new_nz_info
 
     def _shrink(self, root, nz_syms, nz_info):
-        references = SymbolReferences().visit(root, env=SymbolReferences.default_env)
+        references = SymbolReferences().visit(root, ret=SymbolReferences.default_retval())
         dataspaces = defaultdict(list)
 
         # Calculate the dataspaces
