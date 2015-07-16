@@ -136,7 +136,7 @@ class LoopOptimizer(object):
                     ew.factorize()
                     ew.licm()
 
-            elif expr_info.mode == 'auto':
+            elif expr_info.mode == 3:
                 ew.expand(mode='full')
                 ew.factorize(mode='immutable')
                 ew.licm(only_const=True)
@@ -526,7 +526,7 @@ class LoopOptimizer(object):
             new_exprs = fissioner.fission(stmt, self.exprs.pop(stmt))
             self.exprs.update(new_exprs)
             for stmt, expr_info in new_exprs.items():
-                expr_info.mode = 'auto' if stmt in fissioner.matched else 2
+                expr_info.mode = 3 if stmt in fissioner.matched else 2
 
     def _recoil(self):
         """Increase the stack size if the kernel arrays exceed the stack limit

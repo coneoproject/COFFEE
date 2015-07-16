@@ -219,8 +219,8 @@ class ASTKernel(object):
                 raise RuntimeError("SIMDization forbidden with zero-valued blocks avoidance")
             if unroll and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("SIMDization forbidden with unrolling")
-            if rewrite == 3 and len(info['exprs']) > 1:
-                warning("Rewrite mode=3 forbidden with multiple expressions")
+            if rewrite == 'auto' and len(info['exprs']) > 1:
+                warning("Rewrite mode=auto forbidden with multiple expressions")
                 warning("Switching to rewrite mode=2")
                 rewrite = 2
 
