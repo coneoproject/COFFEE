@@ -780,10 +780,11 @@ class For(Statement):
         self.children[0].children = new_body
 
     def gencode(self, not_scope=False):
-        return "\n".join(self.pragma) + "\n" + for_loop(self.init.gencode(True),
-                                                        self.cond.gencode(),
-                                                        self.incr.gencode(True),
-                                                        self.children[0].gencode())
+        pragma = [i for i in self.pragma if 'coffee' not in i]
+        return "\n".join(pragma) + "\n" + for_loop(self.init.gencode(True),
+                                                   self.cond.gencode(),
+                                                   self.incr.gencode(True),
+                                                   self.children[0].gencode())
 
 
 class Switch(Statement):
