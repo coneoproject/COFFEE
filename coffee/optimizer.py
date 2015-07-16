@@ -127,8 +127,8 @@ class LoopOptimizer(object):
                     ew.licm(only_outdomain=True)
                 elif expr_info.dimension == 1:
                     ew.licm(only_outdomain=True)
-                    ew.expand(mode='full')
-                    ew.factorize(mode='immutable')
+                    ew.expand(mode='domain')
+                    ew.factorize(mode='domain')
                     ew.licm(only_outdomain=True)
                 else:
                     ew.licm()
@@ -137,13 +137,13 @@ class LoopOptimizer(object):
                     ew.licm()
 
             elif expr_info.mode == 3:
-                ew.expand(mode='full')
-                ew.factorize(mode='immutable')
+                ew.expand(mode='all')
+                ew.factorize(mode='all')
                 ew.licm(only_const=True)
                 ew.factorize(mode='constants')
                 ew.licm(only_domain=True)
                 ew.preevaluate()
-                ew.factorize(mode='immutable')
+                ew.factorize(mode='domain')
                 ew.licm(only_const=True)
 
         # Try merging the loops created by expression rewriting
@@ -484,9 +484,7 @@ class LoopOptimizer(object):
                     fake_parent = expr_info.parent.children
                     fake_parent[fake_parent.index(stmt)] = fake_stmt
                     ew = ExpressionRewriter(fake_stmt, expr_info, self.decls)
-                    ew.expand(mode='full')
-                    ew.factorize(mode='immutable')
-                    ew.factorize(mode='constants')
+                    ew.expand(mode='all').factorize(mode='all').factorize(mode='domain')
                     nterms = ew.licm(look_ahead=True, only_domain=True)
                     nterms = len(uniquify(nterms[expr_info.dims])) or 1
                     fake_parent[fake_parent.index(fake_stmt)] = stmt

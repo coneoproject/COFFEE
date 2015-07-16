@@ -112,6 +112,7 @@ class ExpressionRewriter(object):
             # Reassociation can promote more hoisting in /only_domain/ mode
             self.reassociate()
         self.expr_hoister.licm(**kwargs)
+        return self
 
     def expand(self, mode='standard', **kwargs):
         """Expand expressions over other expressions based on different heuristics.
@@ -144,32 +145,48 @@ class ExpressionRewriter(object):
           is evaluated, and ``cost(L') > cost(L'')``;
 
         :param mode: multiple expansion strategies are possible, each exposing
-                     different, "hidden" opportunities for later code motion.
+            different, "hidden" opportunities for later code motion.
 
-                     * mode == 'standard': this heuristics consists of expanding \
-                                           along the loop dimension appearing \
-                                           the most in different (i.e., unique) \
-                                           arrays. This has the goal of making \
-                                           factorization more effective.
-                     * mode == 'full': expansion is performed aggressively without \
-                                       any specific restrictions.
+            * mode == 'standard': this heuristics consists of expanding along the
+                loop dimension appearing the most in different (i.e., unique).
+                This aims at making factorization more effective.
+            * mode == 'all': expand when symbols depend on at least one of the
+                expression's dimensions
+            * mode == 'domain': expand when symbols depending on the expressions's
+                domain are encountered.
+            * mode == 'outdomain': expand when symbols independent of the
+                expression's domain are encountered.
         """
-        retval = FindInstances.default_retval()
-        symbols = FindInstances(Symbol).visit(self.stmt.children[1], ret=retval)[Symbol]
 
-        # Select the expansion strategy
         if mode == 'standard':
-            # Get the ranks...
-            occurrences = [s.rank for s in symbols if s.rank]
-            # ...filter out irrelevant dimensions...
-            occurrences = [tuple(r for r in rank if r in self.expr_info.domain_dims)
-                           for rank in occurrences]
-            # ...and finally establish the expansion dimension
+            retval = FindInstances.default_retval()
+            symbols = FindInstances(Symbol).visit(self.stmt.children[1], ret=retval)[Symbol]
+            # The heuristics privileges domain dimensions
+            dims = self.expr_info.out_domain_dims
+            if not dims or self.expr_info.dimension >= 2:
+                dims = self.expr_info.domain_dims
+            # Get the dimension occurring most often
+            occurrences = [tuple(r for r in s.rank if r in dims) for s in symbols]
+            occurrences = [i for i in occurrences if i]
+            if not occurrences:
+                return self
+            # Finally, establish the expansion dimension
             dimension = Counter(occurrences).most_common(1)[0][0]
             should_expand = lambda n: set(dimension).issubset(set(n.rank))
-        elif mode == 'full':
-            should_expand = lambda n: \
-                n.symbol in self.decls and self.decls[n.symbol].is_static_const
+        elif mode in ['all', 'domain', 'outdomain']:
+            info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
+            symbols = defaultdict(set)
+            for s, dep in info['symbols_dep'].items():
+                symbols[s.symbol] |= {l.dim for l in dep}
+            if mode == 'all':
+                should_expand = lambda n: symbols.get(n.symbol) and \
+                    any(r in self.expr_info.dims for r in symbols[n.symbol])
+            elif mode == 'domain':
+                should_expand = lambda n: symbols.get(n.symbol) and \
+                    any(r in self.expr_info.domain_dims for r in symbols[n.symbol])
+            elif mode == 'outdomain':
+                should_expand = lambda n: symbols.get(n.symbol) and \
+                    not symbols[n.symbol].issubset(set(self.expr_info.domain_dims))
         else:
             warning('Unknown expansion strategy. Skipping.')
             return
@@ -179,6 +196,7 @@ class ExpressionRewriter(object):
 
         # Update known declarations
         self.decls.update(self.expr_expander.expanded_decls)
+        return self
 
     def factorize(self, mode='standard', **kwargs):
         """Factorize terms in the expression. For example: ::
@@ -192,39 +210,55 @@ class ExpressionRewriter(object):
         :param mode: multiple factorization strategies are possible, each exposing
                      different, "hidden" opportunities for code motion.
 
-                     * mode == 'standard': this simple heuristics consists of \
-                                           grouping on symbols that appear the \
-                                           most in the expression.
-                     * mode == 'immutable': if many static constant objects are \
-                                            expected, with this strategy they are \
-                                            grouped together, within the obvious \
-                                            limits imposed by the expression itself.
-                     * mode == 'constants': factorize loop-independent terms.
+            * mode == 'standard': factorize symbols along the dimension that appears
+                most often in the expression.
+            * mode == 'all': factorize symbols depending on at least one of the
+                expression's dimensions.
+            * mode == 'domain': factorize symbols depending on the expression's domain.
+            * mode == 'outdomain': factorize symbols independent of the expression's
+                domain.
+            * mode == 'constants': factorize symbols independent of any loops enclosing
+                the expression.
         """
-        retval = FindInstances.default_retval()
-        symbols = FindInstances(Symbol).visit(self.stmt.children[1], ret=retval)[Symbol]
 
-        # Select the expansion strategy
         if mode == 'standard':
-            # Get the ranks...
-            occurrences = [s.rank for s in symbols if s.rank]
-            # ...filter out irrelevant dimensions...
-            occurrences = [tuple(r for r in rank if r in self.expr_info.domain_dims)
-                           for rank in occurrences]
-            # ...and finally establish the expansion dimension
+            retval = FindInstances.default_retval()
+            symbols = FindInstances(Symbol).visit(self.stmt.children[1], ret=retval)[Symbol]
+            # The heuristics privileges domain dimensions
+            dims = self.expr_info.out_domain_dims
+            if not dims or self.expr_info.dimension >= 2:
+                dims = self.expr_info.domain_dims
+            # Get the dimension occurring most often
+            occurrences = [tuple(r for r in s.rank if r in dims) for s in symbols]
+            occurrences = [i for i in occurrences if i]
+            if not occurrences:
+                return self
+            # Finally, establish the factorization dimension
             dimension = Counter(occurrences).most_common(1)[0][0]
             should_factorize = lambda n: set(dimension).issubset(set(n.rank))
-        elif mode == 'immutable':
-            should_factorize = lambda n: \
-                n.symbol in self.decls and self.decls[n.symbol].is_static_const
-        elif mode == 'constants':
-            should_factorize = lambda n: not n.rank
+        elif mode in ['all', 'domain', 'outdomain', 'constants']:
+            info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
+            symbols = defaultdict(set)
+            for s, dep in info['symbols_dep'].items():
+                symbols[s.symbol] |= {l.dim for l in dep}
+            if mode == 'all':
+                should_factorize = lambda n: symbols.get(n.symbol) and \
+                    any(r in self.expr_info.dims for r in symbols[n.symbol])
+            elif mode == 'domain':
+                should_factorize = lambda n: symbols.get(n.symbol) and \
+                    any(r in self.expr_info.domain_dims for r in symbols[n.symbol])
+            elif mode == 'outdomain':
+                should_factorize = lambda n: symbols.get(n.symbol) and \
+                    not symbols[n.symbol].issubset(set(self.expr_info.domain_dims))
+            elif mode == 'constants':
+                should_factorize = lambda n: not symbols.get(n.symbol)
         else:
             warning('Unknown factorization strategy. Skipping.')
             return
 
         # Perform the factorization
         self.expr_factorizer.factorize(should_factorize)
+        return self
 
     def reassociate(self, reorder=None):
         """Reorder symbols in associative operations following a convention.
@@ -270,6 +304,7 @@ class ExpressionRewriter(object):
 
         reorder = reorder if reorder else lambda n: (n.rank, n.dim)
         _reassociate(self.stmt.children[1], self.stmt)
+        return self
 
     def replacediv(self):
         """Replace divisions by a constant with multiplications."""
@@ -280,6 +315,7 @@ class ExpressionRewriter(object):
             if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
                 to_replace[i] = Prod(i.left, Div(1, i.right.symbol))
         ast_replace(self.stmt.children[1], to_replace, copy=True, mode='symbol')
+        return self
 
     def preevaluate(self):
         """Preevaluates subexpressions which values are compile-time constants.
@@ -373,6 +409,7 @@ class ExpressionRewriter(object):
             self.header.children.insert(0, FlatBlock("// Preevaluated tables"))
             # Clean up
             self.header.children.remove(hoisted_loop)
+        return self
 
     @staticmethod
     def reset():
