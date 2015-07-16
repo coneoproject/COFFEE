@@ -6,7 +6,7 @@ from copy import deepcopy
 from collections import OrderedDict, defaultdict
 import numpy as np
 
-from coffee.visitor import Visitor, Environment
+from coffee.visitor import Visitor
 from coffee.base import Sum, Sub, Prod, Div, ArrayInit, SparseArrayInit
 from coffee.utils import ItSpace, flatten
 
@@ -89,6 +89,11 @@ class Uniquify(Visitor):
 
 
 class Evaluate(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return OrderedDict()
+
     """
     Symbolically evaluate an expression enclosed in a loop nest, provided that
     all of the symbols involved are constants and their value is known.
@@ -119,16 +124,16 @@ class Evaluate(Visitor):
         super(Evaluate, self).__init__()
 
     def visit_object(self, o, *args, **kwargs):
-        return {}
+        return self.default_retval()
 
-    def visit_list(self, o, env):
-        ret = OrderedDict()
+    def visit_list(self, o, *args, **kwargs):
+        ret = self.default_retval()
         for entry in o:
             ret.update(self.visit(entry, *args, **kwargs))
         return ret
 
-    def visit_Node(self, o, env):
-        ret = OrderedDict()
+    def visit_Node(self, o, *args, **kwargs):
+        ret = self.default_retval()
         for n in o.children:
             ret.update(self.visit(n, *args, **kwargs))
         return ret
@@ -140,7 +145,7 @@ class Evaluate(Visitor):
 
     def visit_Writer(self, o, *args, **kwargs):
         lvalue = o.children[0]
-        writes = [l for l in env["loop_nest"] if l.dim in lvalue.rank]
+        writes = [l for l in kwargs["loop_nest"] if l.dim in lvalue.rank]
 
         # Evaluate the expression for each point in in the n-dimensional space
         # represented by /writes/
@@ -149,8 +154,7 @@ class Evaluate(Visitor):
         values, precision = np.zeros(shape), None
         for i in itertools.product(*[range(j) for j in shape]):
             point = {d: v for d, v in zip(dims, i)}
-            new_env = Environment(env, point=point)
-            expr_values, precision = self.visit(o.children[1], new_env)
+            expr_values, precision = self.visit(o.children[1], point=point, *args, **kwargs)
             # The sum takes into account reductions
             values[i] = np.sum(expr_values)
 
@@ -201,7 +205,7 @@ class Evaluate(Visitor):
         transformed = [self.visit(op, *args, **kwargs) for op in ops]
         if any([a is None for a in transformed]):
             return
-        values, precisions = zip(*args)
+        values, precisions = zip(*transformed)
         # Precisions must match
         assert precisions.count(precisions[0]) == len(precisions)
         # Return the result of the binary operation plus forward the precision
@@ -250,24 +254,29 @@ class Evaluate(Visitor):
 
 
 class ProjectExpansion(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return list()
+
     """
     Project the output of expression expansion.
     The caller should provid a collection of symbols C. The expression tree (nodes
-    that are not of type :class:`~.Expr` are not allowed) is visited and, for
-    each symbol in C, return a list of tuples. Each tuple represents a subset of
-    the symbols in C that will appear in the same term after expansion.
+    that are not of type :class:`~.Expr` are not allowed) is visited and a set of
+    tuples returned, one tuple for each symbol in C. Each tuple represents the subset
+    of symbols in C that will appear in at least one term after expansion.
 
-    For example, be C = [A, B], and consider the following input expression: ::
+    For example, be C = [a, b], and consider the following input expression: ::
 
-        (A*C + D*E)*(B*C + B*F)
+        (a*c + d*e)*(b*c + b*f)
 
     After expansion, the expression becomes: ::
 
-        A*C*B*C + A*C*B*F + D*E*B*C + D*E*B*F
+        a*c*b*c + a*c*b*f + d*e*b*c + d*e*b*f
 
     In which there are four product terms. In these terms, there are two in which
-    both A and B appear, and there are two in which only B appears. So the visit
-    would return [(A, B), (B,)].
+    both 'a' and 'b' appear, and there are two in which only 'b' appears. So the
+    visit will return [(a, b), (b,)].
 
     :arg symbols: the collection of symbols searched for
     """
@@ -276,30 +285,31 @@ class ProjectExpansion(Visitor):
         self.symbols = symbols
         super(ProjectExpansion, self).__init__()
 
-    def visit_object(self, o, env):
-        return []
+    def visit_object(self, o, *args, **kwargs):
+        return self.default_retval()
 
-    def visit_Expr(self, o, env):
-        children = []
+    def visit_Expr(self, o, parent=None, *args, **kwargs):
+        children = self.default_retval()
         for n in o.children:
-            children.extend(self.visit(n))
+            children.extend(self.visit(n, parent=o, *args, **kwargs))
         ret = []
         for n in children:
             if n not in ret:
                 ret.append(n)
         return ret
 
-    def visit_Prod(self, o, env):
-        projection = [self.visit(n) for n in o.children]
-        product = itertools.product(*projection)
-        if not product:
-            return projection
-        ret = []
-        for i in product:
-            ret.append(list(flatten(i)))
+    def visit_Prod(self, o, parent=None, *args, **kwargs):
+        projection = [self.visit(n, parent=o, *args, **kwargs) for n in o.children]
+        if isinstance(parent, Prod):
+            return list(flatten(projection))
+        else:
+            # Only the top level Prod, in a chain of Prods, should do the
+            # tensor product
+            product = itertools.product(*projection)
+            ret = [list(flatten(i)) for i in product] or projection
         return ret
 
-    def visit_Symbol(self, o, env):
+    def visit_Symbol(self, o, *args, **kwargs):
         return [[o.symbol]] if o.symbol in self.symbols else [[]]
 
 

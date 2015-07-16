@@ -459,7 +459,8 @@ class LoopOptimizer(object):
                     # repetitions/ in the injected-values set. We consider
                     # combinations and not dispositions to take into account the
                     # (future) effect of factorization.
-                    projection = ProjectExpansion(i_syms).visit(target_expr)
+                    retval = ProjectExpansion.default_retval()
+                    projection = ProjectExpansion(i_syms).visit(target_expr, ret=retval)
                     projection = [i for i in projection if i]
                     increase_factor = 0
                     for i in projection:

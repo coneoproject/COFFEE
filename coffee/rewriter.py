@@ -346,7 +346,7 @@ class ExpressionRewriter(object):
         # Precompute constant expressions
         evaluator = Evaluate(self.decls, any(d.nonzero for s, d in self.decls.items()))
         for hoisted_loop in self.hoisted.all_loops:
-            evals = evaluator.visit(hoisted_loop, env=Evaluate.default_env)
+            evals = evaluator.visit(hoisted_loop, **Evaluate.default_args)
             # First, find out identical tables
             mapper = defaultdict(list)
             for s, values in evals.items():

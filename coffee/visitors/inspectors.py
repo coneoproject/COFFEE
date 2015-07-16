@@ -584,6 +584,10 @@ class FindInstances(Visitor):
 
 class FindExpression(Visitor):
 
+    @classmethod
+    def default_retval(cls):
+        return defaultdict(list)
+
     """
     Visit the expression tree and return a list of (sub-)expressions matching
     particular criteria.
@@ -596,26 +600,23 @@ class FindExpression(Visitor):
         in this argument.
     """
 
-    default_env = dict(node_parent=None)
-
     def __init__(self, type, dims=None, symbols=None):
         self.type = type
         self.dims = dims
         self.symbols = symbols
         super(FindExpression, self).__init__()
 
-    def visit_object(self, o, env):
-        return {}
+    def visit_object(self, o, *args, **kwargs):
+        return self.default_retval()
 
-    def visit_Expr(self, o, env):
-        ret = defaultdict(list)
-        new_env = Environment(env, node_parent=o)
-        for i in [self.visit(n, env=new_env) for n in o.children]:
+    def visit_Expr(self, o, parent=None, *args, **kwargs):
+        ret = self.default_retval()
+        for i in [self.visit(n, parent=o, *args, **kwargs) for n in o.children]:
             for k, v in i.items():
                 ret[k].extend([j for j in v if j not in ret[k]])
         if all(i in ret for i in ['matched_syms', 'in_itspace']):
             if isinstance(o, self.type):
-                if isinstance(env['node_parent'], self.type):
+                if isinstance(parent, self.type):
                     # Postpone expression tracking because the parent has same type
                     # as the node currently being visited
                     pass
@@ -635,8 +636,8 @@ class FindExpression(Visitor):
 
     visit_FunCall = visit_Expr
 
-    def visit_Symbol(self, o, env):
-        ret = {}
+    def visit_Symbol(self, o, *args, **kwargs):
+        ret = self.default_retval()
         if self.symbols is None or o.symbol in self.symbols:
             ret['matched_syms'] = [o.symbol]
             ret['inner_syms'] = [o.symbol]

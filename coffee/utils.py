@@ -503,7 +503,7 @@ def check_type(stmt, decls):
 def find_expression(node, e_type, e_dims=None, e_symbol=None):
     """Wrapper of the FindExpression visitor."""
     finder = FindExpression(e_type, e_dims, e_symbol)
-    exprs = finder.visit(node, env=FindExpression.default_env)
+    exprs = finder.visit(node, ret=FindExpression.default_retval())
     if 'matched_syms' in exprs:
         exprs.pop('matched_syms')
     if 'inner_syms' in exprs:
