@@ -33,11 +33,13 @@
 
 import operator
 import resource
+from collections import OrderedDict
 from warnings import warn as warning
 from math import factorial as fact
 
 from base import *
 from utils import *
+from expression import MetaExpr
 from loop_scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
@@ -159,13 +161,16 @@ class LoopOptimizer(object):
                         expr_info._loops_info[-1] = (merged_in, expr_info.loops_parents[-1])
                         expr_info._parent = merged_in.children[0]
 
-        # Handle the effects, at the C-level, of the AST transformation
-        self._recoil()
-
         # Reduce memory pressure by rearranging operations ...
         self._rearrange()
-        # ... which in turn requires updating the expression graph
+        # ... plus, at max rewrite level, apply rewriting to hoisted subexprs too ...
+        if mode == 'auto':
+            self._rewrite_hoisted()
+        # ... which in turn require updating the expression graph
         self.expr_graph = ExpressionGraph(self.header)
+
+        # Handle the effects, at the C-level, of the AST transformation
+        self._recoil()
 
     def eliminate_zeros(self):
         """Restructure the iteration spaces nested in this LoopOptimizer to
@@ -300,13 +305,6 @@ class LoopOptimizer(object):
         stmt_occs = dict((k, v) for d in in_stmt for k, v in d.items())
 
         for l in self.hoisted.all_loops:
-
-            # First, try to further simplify the hoisted statements
-            for stmt in l.body:
-                ef = ExpressionFactorizer(stmt)
-                should_factorize = lambda n: any(r == l.dim for r in n.rank)
-                ef.factorize(should_factorize)
-
             l_occs = count(l, read_only=True)
             info = visit(l)
             innermost_block = FindInstances(Block).visit(l)[Block][-1]
@@ -525,6 +523,49 @@ class LoopOptimizer(object):
             self.exprs.update(new_exprs)
             for stmt, expr_info in new_exprs.items():
                 expr_info.mode = 3 if stmt in fissioner.matched else 2
+
+    def _rewrite_hoisted(self):
+        """Rewrite hoisted expressions."""
+
+        retval = FindLoopNests.default_retval()
+        nests = FindLoopNests().visit(self.header, parent=None, ret=retval)
+        hoisted_exprs = OrderedDict()
+
+        # First, need to create a /MetaExpr/ for each hoisted expression
+        type = self.exprs.values()[0].type
+        for s, hoisted in self.hoisted.items():
+            stmt, loop, place = hoisted.stmt, hoisted.loop, hoisted.place
+            if not loop and place == self.header:
+                # Outside of any loops, so ignoring it
+                continue
+            elif not loop:
+                # Need to find the loop (an outermost loop in a nest)
+                # within which the statement lives
+                for nest in nests:
+                    loops_info = [(l, p) for l, p in nest if stmt in l.body]
+                    if loops_info:
+                        break
+                domain = tuple(l.dim for l, p in loops_info)
+            else:
+                # Need to find the loop nest in which the statement lives
+                for nest in nests:
+                    if any(l == loop for l, p in nest):
+                        break
+                loops_info = nest
+                domain = tuple(l.dim for l, p in loops_info
+                               if l.dim in stmt.children[0].rank)
+            parent = loops_info[-1][0].children[0]
+            hoisted_exprs[stmt] = MetaExpr(type, parent, loops_info, domain)
+
+        # Now we do the usual: for each expression, we create an ExpressionRewriter
+        # and use it to manipulate the expression itself
+        for stmt, expr_info in hoisted_exprs.items():
+            ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
+                                    self.hoisted, self.expr_graph)
+            ew.expand(mode='domain', not_aggregate=True)
+            ew.factorize(mode='domain')
+            ew.licm(only_outdomain=True)
+            ew.factorize().factorize('constants')
 
     def _recoil(self):
         """Increase the stack size if the kernel arrays exceed the stack limit
