@@ -894,6 +894,9 @@ class ExpressionFactorizer(object):
                 return self.operands_ast
             elif len(self.operands) == 0:
                 return self.factors_ast
+            elif len(self.factors) == 1 and \
+                    all(isinstance(i, Symbol) and i.symbol == 1.0 for i in self.factors):
+                return self.operands_ast
             else:
                 return Prod(self.operands_ast, self.factors_ast)
 
@@ -968,7 +971,5 @@ class ExpressionFactorizer(object):
             raise RuntimeError("Factorization error: unknown node: %s" % str(node))
 
     def factorize(self, should_factorize):
-        if not isinstance(self.stmt, Writer):
-            return
         self.should_factorize = should_factorize
         self._factorize(self.stmt.rvalue, self.stmt)
