@@ -160,7 +160,7 @@ class ExpressionRewriter(object):
 
         if mode == 'standard':
             retval = FindInstances.default_retval()
-            symbols = FindInstances(Symbol).visit(self.stmt.children[1], ret=retval)[Symbol]
+            symbols = FindInstances(Symbol).visit(self.stmt.rvalue, ret=retval)[Symbol]
             # The heuristics privileges domain dimensions
             dims = self.expr_info.out_domain_dims
             if not dims or self.expr_info.dimension >= 2:
@@ -223,7 +223,7 @@ class ExpressionRewriter(object):
 
         if mode == 'standard':
             retval = FindInstances.default_retval()
-            symbols = FindInstances(Symbol).visit(self.stmt.children[1], ret=retval)[Symbol]
+            symbols = FindInstances(Symbol).visit(self.stmt.rvalue, ret=retval)[Symbol]
             # The heuristics privileges domain dimensions
             dims = self.expr_info.out_domain_dims
             if not dims or self.expr_info.dimension >= 2:
@@ -303,18 +303,18 @@ class ExpressionRewriter(object):
                 warning('Unexpect node of type %s while reassociating', typ(node))
 
         reorder = reorder if reorder else lambda n: (n.rank, n.dim)
-        _reassociate(self.stmt.children[1], self.stmt)
+        _reassociate(self.stmt.rvalue, self.stmt)
         return self
 
     def replacediv(self):
         """Replace divisions by a constant with multiplications."""
         retval = FindInstances.default_retval()
-        divisions = FindInstances(Div).visit(self.stmt.children[1], ret=retval)[Div]
+        divisions = FindInstances(Div).visit(self.stmt.rvalue, ret=retval)[Div]
         to_replace = {}
         for i in divisions:
             if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
                 to_replace[i] = Prod(i.left, Div(1, i.right.symbol))
-        ast_replace(self.stmt.children[1], to_replace, copy=True, mode='symbol')
+        ast_replace(self.stmt.rvalue, to_replace, copy=True, mode='symbol')
         return self
 
     def preevaluate(self):
@@ -329,7 +329,7 @@ class ExpressionRewriter(object):
             # Not a reduction expression, give up
             return
         retval = FindInstances.default_retval()
-        expr_syms = FindInstances(Symbol).visit(stmt.children[1], ret=retval)[Symbol]
+        expr_syms = FindInstances(Symbol).visit(stmt.rvalue, ret=retval)[Symbol]
         reduction_loops = expr_info.out_domain_loops_info
         if any([not is_perfect_loop(l) for l, p in reduction_loops]):
             # Unsafe if not a perfect loop nest
@@ -568,7 +568,7 @@ class ExpressionHoister(object):
 
         symbols = visit(self.expr_info.outermost_parent)['symbols_dep']
         symbols = dict((s, [l.dim for l in dep]) for s, dep in symbols.items())
-        return self._extract(self.stmt.children[1], symbols, **kwargs)
+        return self._extract(self.stmt.rvalue, symbols, **kwargs)
 
     def licm(self, **kwargs):
         """Perform generalized loop-invariant code motion."""
@@ -584,7 +584,7 @@ class ExpressionHoister(object):
         expr_outermost_loop = self.expr_info.outermost_loop
         inv_dep = {}
         while extracted:
-            extracted = self._extract(self.stmt.children[1], symbols, **kwargs)
+            extracted = self._extract(self.stmt.rvalue, symbols, **kwargs)
             for dep, subexprs in extracted.items():
                 # -1) Remove identical subexpressions
                 subexprs = uniquify(subexprs)
@@ -646,7 +646,7 @@ class ExpressionHoister(object):
 
                 # 3) Replace invariant subtrees with the proper temporary
                 to_replace = dict(zip(subexprs, inv_syms))
-                n_replaced = ast_replace(self.stmt.children[1], to_replace)
+                n_replaced = ast_replace(self.stmt.rvalue, to_replace)
 
                 # 4) Update symbol dependencies
                 for s, e in zip(inv_syms, subexprs):
@@ -687,7 +687,7 @@ class ExpressionHoister(object):
                 self.hoisted[j.sym.symbol] = (i, j, wrap_loop, place)
 
         # Finally, make sure symbols are unique in the AST
-        self.stmt.children[1] = dcopy(self.stmt.children[1])
+        self.stmt.rvalue = dcopy(self.stmt.rvalue)
 
 
 class ExpressionExpander(object):
@@ -761,7 +761,7 @@ class ExpressionExpander(object):
 
         # No dependencies, just perform the expansion
         if not self.expr_graph.is_read(exp):
-            hoisted_stmt.children[1] = op(hoisted_stmt.children[1], dcopy(grp))
+            hoisted_stmt.rvalue = op(hoisted_stmt.rvalue, dcopy(grp))
             self.expr_graph.add_dependency(exp, grp)
             self.cache[cache_key] = exp
             return {exp: exp}
@@ -853,7 +853,7 @@ class ExpressionExpander(object):
         self.should_expand = should_expand
 
         # Expand according to the /should_expand/ heuristic
-        self._expand(self.stmt.children[1], self.stmt)
+        self._expand(self.stmt.rvalue, self.stmt)
 
         # Try to aggregate expanded terms with hoisted expressions (if any)
         if not_aggregate:
@@ -971,4 +971,4 @@ class ExpressionFactorizer(object):
         if not isinstance(self.stmt, Writer):
             return
         self.should_factorize = should_factorize
-        self._factorize(self.stmt.children[1], self.stmt)
+        self._factorize(self.stmt.rvalue, self.stmt)
