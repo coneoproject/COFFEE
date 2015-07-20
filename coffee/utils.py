@@ -80,23 +80,21 @@ def postprocess(node):
             Process.decls = {}
             Process.blockable = []
 
-    def init_decl(stmt):
-        if not isinstance(stmt, Assign):
-            return False
-        lhs, rhs = stmt.children
+    def init_decl(node):
+        lhs, rhs = node.children
         decl = Process.decls.get(lhs.symbol)
-        if decl:
+        if decl and (not decl.init or isinstance(decl.init, EmptyStatement)):
             decl.init = rhs
-            return True
-        return False
+            Process.blockable.remove(decl)
+            return decl
+        else:
+            return node
 
     def update(node, parent):
         index = parent.children.index(node)
         if Process.start is None:
             Process.start = index
         Process.end = index
-        if not init_decl(node):
-            Process.blockable.append(node)
 
     def make_blocks():
         for node, start, end, _, blockable in reversed(Process._processed):
@@ -116,8 +114,13 @@ def postprocess(node):
                     not node.sym.rank:
                 Process.decls[node.sym.symbol] = node
             update(node, parent)
-        elif isinstance(node, (Assign, Incr, Decr, IMul, IDiv)):
+            Process.blockable.append(node)
+        elif isinstance(node, AugmentedAssign):
             update(node, parent)
+            Process.blockable.append(node)
+        elif isinstance(node, Assign):
+            update(node, parent)
+            Process.blockable.append(init_decl(node))
 
     _postprocess(node, None)
     make_blocks()
