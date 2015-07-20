@@ -534,6 +534,14 @@ class Statement(Node):
     def __init__(self, children=None, pragma=None):
         super(Statement, self).__init__(children, pragma)
 
+    @property
+    def lvalue(self):
+        return None
+
+    @property
+    def rvalue(self):
+        return None
+
 
 class EmptyStatement(Statement):
 
@@ -561,6 +569,18 @@ class Assign(Statement, Writer):
     def __init__(self, sym, exp, pragma=None):
         super(Assign, self).__init__([sym, exp], pragma)
 
+    @property
+    def lvalue(self):
+        return self.children[0]
+
+    @property
+    def rvalue(self):
+        return self.children[1]
+
+    @rvalue.setter
+    def rvalue(self, val):
+        self.children[1] = val
+
     def gencode(self, not_scope=False):
         return assign(self.children[0].gencode(),
                       self.children[1].gencode()) + semicolon(not_scope)
@@ -570,6 +590,18 @@ class AugmentedAssign(Statement, Writer):
 
     def __init__(self, sym, exp, pragma=None):
         super(AugmentedAssign, self).__init__([sym, exp], pragma)
+
+    @property
+    def lvalue(self):
+        return self.children[0]
+
+    @property
+    def rvalue(self):
+        return self.children[1]
+
+    @rvalue.setter
+    def rvalue(self, val):
+        self.children[1] = val
 
     def gencode(self, not_scope=False):
         sym, exp = self.children
@@ -618,6 +650,18 @@ class Decl(Statement):
 
     def operands(self):
         return [self.typ, self.sym, self.init, self.qual, self.attr], {}
+
+    @property
+    def lvalue(self):
+        return self.sym
+
+    @property
+    def rvalue(self):
+        return self.init
+
+    @rvalue.setter
+    def rvalue(self, val):
+        self.init = val
 
     @property
     def size(self):
