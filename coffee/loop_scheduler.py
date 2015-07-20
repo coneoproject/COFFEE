@@ -650,11 +650,17 @@ class ZeroRemover(LoopScheduler):
                 if any(j is None for j in nz_expr):
                     return
                 nz_node = list(nz_syms.setdefault(sym.symbol, [nz_expr]))
+                if not nz_expr:
+                    continue
                 merged = False
                 for e, j in enumerate(nz_node):
-                    merge = [ItSpace(mode=1).merge([m, n]) for m, n in zip(nz_expr, j)]
-                    if all(len(m) == 1 for m in merge):
-                        nz_syms[sym.symbol][e] = tuple(flatten(merge))
+                    # Merging condition: complete overlap in all dimensions but
+                    # the innermost one, for which partial overlap is accepted
+                    inner_merge = ItSpace(mode=1).merge([nz_expr[-1], j[-1]])
+                    if len(inner_merge) == 1 and \
+                            all(ItSpace(mode=1).intersect([m, n]) == m for m, n in
+                                zip(nz_expr[:-1], j[:-1])):
+                        nz_syms[sym.symbol][e] = j[:-1] + tuple(inner_merge)
                         merged = True
                         break
                 if not merged:
