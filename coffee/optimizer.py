@@ -37,6 +37,7 @@ from collections import OrderedDict
 from warnings import warn as warning
 from math import factorial as fact
 
+import plan
 from base import *
 from utils import *
 from expression import MetaExpr
@@ -420,6 +421,7 @@ class LoopOptimizer(object):
 
         # 2) Will rewrite mode=3 be cheaper than rewrite mode=2?
         should_unroll = True
+        storage = 0
         i_syms, injected = injectable.keys(), defaultdict(list)
         for stmt, expr_info in self.exprs.items():
             sym, expr = stmt.children
@@ -472,7 +474,7 @@ class LoopOptimizer(object):
                     increase_factor = increase_factor or 1
                     if increase_factor > save_factor:
                         # We immediately give up if this holds since it ensures
-                        # that the /cost > save/ (but not that cost <= save either)
+                        # that /cost > save/ (but not that cost <= save)
                         should_unroll = False
                         continue
                     # The increase factor should be multiplied by the number of
@@ -488,10 +490,19 @@ class LoopOptimizer(object):
                     fake_parent[fake_parent.index(fake_stmt)] = stmt
                     cost = nterms * increase_factor
 
+                    # Preevaluation also increases the working set size by
+                    # /cost/ * /sizeof(term)/. If the architecture threshold is
+                    # exceeded, we give up.
+                    size = reduce(operator.mul, [l.size for l in expr_info.domain_loops], 1)
+                    storage_increase = cost * size * plan.arch[expr_info.type]
+                    ths = plan.arch['cache_size'] * 1.2  # Use some more space, empirically
+
                     # So what's better afterall ?
-                    if cost > save:
+                    if cost > save or storage_increase + storage > ths:
                         should_unroll = False
                     else:
+                        # Update the available storage
+                        storage += storage_increase
                         # At this point, we can happily inject
                         to_replace = {k: v[0] for k, v in injectable.items()}
                         ast_replace(target_expr, to_replace, copy=True)
