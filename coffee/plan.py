@@ -34,6 +34,7 @@
 """COFFEE's optimization plan constructor."""
 
 # The following global variables capture the internal state of COFFEE
+arch = {}
 compiler = {}
 isa = {}
 blas = {}
@@ -402,13 +403,14 @@ class ASTKernel(object):
         return self.ast.gencode()
 
 
-def init_coffee(_isa, _compiler, _blas):
+def init_coffee(_isa, _compiler, _blas, _arch='default'):
     """Initialize COFFEE."""
 
-    global isa, compiler, blas, initialized
+    global arch, isa, compiler, blas, initialized
 
     # Populate dictionaries with keywords for backend-specific (hardware,
     # compiler, ...) optimizations
+    arch = _init_arch(_arch)
     isa = _init_isa(_isa)
     compiler = _init_compiler(_compiler)
     blas = _init_blas(_blas)
@@ -418,6 +420,25 @@ def init_coffee(_isa, _compiler, _blas):
     # Allow visits of ASTs that become huge due to transformation. The constant
     # /4000/ was empirically found to be an acceptable value
     sys.setrecursionlimit(4000)
+
+
+def _init_arch(arch):
+    """Set architecture-specific parameters."""
+
+    # In the following, all sizes are in Bytes
+    if arch == 'default':
+        # The default architecture is a conventional multi-core CPU, such as
+        # an Intel Haswell
+        return {
+            'cache_size': 256 * 10**3,  # The private, closest memory to the core
+            'double': 8
+        }
+
+    else:
+        return {
+            'cache_size': 0,
+            'double': sys.maxint
+        }
 
 
 def _init_isa(isa):
