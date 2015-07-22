@@ -503,12 +503,16 @@ def check_type(stmt, decls):
     return type(lhs_decl)
 
 
-def find_expression(node, e_type, e_dims=None, e_symbol=None):
+def find_expression(node, type, dims=None, in_syms=None, out_syms=None):
     """Wrapper of the FindExpression visitor."""
-    finder = FindExpression(e_type, e_dims, e_symbol)
+    finder = FindExpression(type, dims, in_syms, out_syms)
     exprs = finder.visit(node, ret=FindExpression.default_retval())
-    if 'matched_syms' in exprs:
-        exprs.pop('matched_syms')
+    if 'cleaned' in exprs:
+        exprs.pop('cleaned')
+    if 'in_syms' in exprs:
+        exprs.pop('in_syms')
+    if 'out_syms' in exprs:
+        exprs.pop('out_syms')
     if 'inner_syms' in exprs:
         exprs.pop('inner_syms')
     if 'in_itspace' in exprs:
