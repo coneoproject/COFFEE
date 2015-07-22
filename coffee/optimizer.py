@@ -428,12 +428,16 @@ class LoopOptimizer(object):
 
             # Divide /expr/ into subexpressions, each subexpression affected
             # differently by injection
-            dissected = find_expression(expr, Prod, expr_info.domain_dims, i_syms)
+            if i_syms:
+                dissected = find_expression(expr, Prod, expr_info.domain_dims, i_syms)
+                leftover = find_expression(expr, Prod, expr_info.domain_dims, out_syms=i_syms)
+                leftover = {(): list(flatten(leftover.values()))}
+                dissected = dict(dissected.items() + leftover.items())
+            else:
+                dissected = {(): [expr]}
             if any(i not in flatten(dissected.keys()) for i in i_syms):
                 should_unroll = False
                 continue
-            if not dissected:
-                dissected[()] = [expr]
 
             # Apply the profitability model
             for i_syms, target_exprs in dissected.items():
