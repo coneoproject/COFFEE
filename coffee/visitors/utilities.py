@@ -289,22 +289,25 @@ class ProjectExpansion(Visitor):
         return self.default_retval()
 
     def visit_Expr(self, o, parent=None, *args, **kwargs):
-        children = self.default_retval()
+        projection = self.default_retval()
         for n in o.children:
-            children.extend(self.visit(n, parent=o, *args, **kwargs))
+            projection.extend(self.visit(n, parent=o, *args, **kwargs))
         ret = []
-        for n in children:
+        for n in projection:
             if n not in ret:
                 ret.append(n)
         return ret
 
     def visit_Prod(self, o, parent=None, *args, **kwargs):
-        projection = [self.visit(n, parent=o, *args, **kwargs) for n in o.children]
         if isinstance(parent, Prod):
-            return list(flatten(projection))
+            projection = self.default_retval()
+            for n in o.children:
+                projection.extend(self.visit(n, parent=o, *args, **kwargs))
+            return [list(flatten(projection))]
         else:
             # Only the top level Prod, in a chain of Prods, should do the
             # tensor product
+            projection = [self.visit(n, parent=o, *args, **kwargs) for n in o.children]
             product = itertools.product(*projection)
             ret = [list(flatten(i)) for i in product] or projection
         return ret
