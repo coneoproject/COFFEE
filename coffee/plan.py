@@ -154,7 +154,8 @@ class ASTKernel(object):
         # The higher, the more precise and costly is autotuning
         autotune_resolution = 100000000
         # Kernel variant when blas transformation is selected
-        blas_config = {'rewrite': 2, 'align_pad': True, 'split': 1, 'precompute': 2}
+        blas_config = {'rewrite': 2, 'align_pad': True, 'split': 1,
+                       'precompute': 'perfect'}
         # Kernel variants tested when autotuning is enabled
         autotune_min = [('rewrite', {'rewrite': 1, 'align_pad': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
@@ -163,11 +164,12 @@ class ASTKernel(object):
         autotune_all = [('base', {}),
                         ('base', {'rewrite': 1, 'align_pad': True}),
                         ('rewrite', {'rewrite': 2, 'align_pad': True}),
-                        ('rewrite', {'rewrite': 2, 'align_pad': True, 'precompute': 1}),
+                        ('rewrite', {'rewrite': 2, 'align_pad': True,
+                                     'precompute': 'noloops'}),
                         ('rewrite_full', {'rewrite': 2, 'align_pad': True,
                                           'dead_ops_elimination': True}),
                         ('rewrite_full', {'rewrite': 2, 'align_pad': True,
-                                          'precompute': 1,
+                                          'precompute': 'noloops',
                                           'dead_ops_elimination': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 4}),
@@ -188,17 +190,12 @@ class ASTKernel(object):
             split = kwargs.get('split')
             toblas = kwargs.get('blas')
             unroll = kwargs.get('unroll')
-            permute = kwargs.get('permute')
             precompute = kwargs.get('precompute')
             dead_ops_elimination = kwargs.get('dead_ops_elimination')
 
             # Combining certain optimizations is meaningless/forbidden.
             if unroll and toblas:
                 raise RuntimeError("Cannot unroll and then convert to BLAS")
-            if permute and toblas:
-                raise RuntimeError("Cannot permute and then convert to BLAS")
-            if permute and not precompute:
-                raise RuntimeError("Cannot permute without precomputation")
             if rewrite == 3 and split:
                 raise RuntimeError("Split forbidden when avoiding zero-columns")
             if rewrite == 3 and toblas:
@@ -207,8 +204,6 @@ class ASTKernel(object):
                 raise RuntimeError("Zeros removal only supports auto-vectorization")
             if unroll and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("Outer-product vectorization needs no unroll")
-            if permute and v_type and v_type != VectStrategy.AUTO:
-                raise RuntimeError("Outer-product vectorization needs no permute")
 
             info = visit(kernel, info_items=['decls', 'exprs'])
             decls = info['decls']
@@ -240,23 +235,16 @@ class ASTKernel(object):
                 if precompute:
                     loop_opt.precompute(precompute)
 
-                # 3) Permute outer loop
-                if permute:
-                    loop_opt.permute(True)
-
-                # 3) Unroll/Unroll-and-jam
+                # 4) Unroll/Unroll-and-jam
                 if unroll:
                     loop_opt.unroll(dict(unroll))
 
-                # 4) Vectorization
+                # 5) Vectorization
                 if initialized and loop_opt.expr_domain_loops[0]:
                     vect = LoopVectorizer(loop_opt)
-                    if align_pad:
-                        # Data alignment
-                        vect.alignment()
-                        # Padding
-                        if not toblas:
-                            vect.padding()
+                    if align_pad and not toblas:
+                        # Padding and data alignment
+                        vect.pad_and_align()
                     if v_type and v_type != VectStrategy.AUTO:
                         if isa['inst_set'] == 'SSE':
                             raise RuntimeError("SSE vectorization not supported")
@@ -264,7 +252,7 @@ class ASTKernel(object):
                         # of the expression
                         vect.specialize(v_type, v_param)
 
-                # 5) Conversion into blas calls
+                # 6) Conversion into blas calls
                 if toblas:
                     self.blas = loop_opt.blas(toblas)
 
@@ -364,19 +352,18 @@ class ASTKernel(object):
                 'rewrite': 2,
                 'align_pad': True,
                 'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2),
-                'precompute': 1
+                'precompute': 'noloops'
             }
         elif opts.get('O4'):
             params = {
-                'rewrite': 2,
-                'dead_ops_elimination': True,
-                'align_pad': True,
-                'precompute': 1
+                'rewrite': 3,
+                'align_pad': True
             }
         elif opts.get('O3'):
             params = {
-                'rewrite': 3,
-                'align_pad': True
+                'rewrite': 2,
+                'align_pad': True,
+                'dead_ops_elimination': True
             }
         elif opts.get('O2'):
             params = {
@@ -468,7 +455,7 @@ def _init_compiler(compiler):
             'name': 'intel',
             'cmd': 'icc',
             'align': lambda o: '__attribute__((aligned(%s)))' % o,
-            'decl_aligned_for': '#pragma vector aligned',
+            'align_forloop': '#pragma vector aligned',
             'force_simdization': '#pragma simd',
             'AVX': '-xAVX',
             'SSE': '-xSSE',
@@ -482,7 +469,8 @@ def _init_compiler(compiler):
             'name': 'gnu',
             'cmd': 'gcc',
             'align': lambda o: '__attribute__((aligned(%s)))' % o,
-            'decl_aligned_for': '#pragma vector aligned',
+            'align_forloop': '',
+            'force_simdization': '',
             'AVX': '-mavx',
             'SSE': '-msse',
             'ipo': '',

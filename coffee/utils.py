@@ -199,12 +199,12 @@ def ast_replace(node, to_replace, copy=False, mode='all'):
 
 
 def ast_remove(node, to_remove, mode='all'):
-    """Remove the AST Node ``to_remove`` from the tree rooted in ``node``.
+    """Remove the AST node ``to_remove`` from the tree rooted in ``node``.
 
     :param mode: either ``all``, in which case ``to_remove`` is turned into a
-                 string (if not a string already) and all of its occurrences are
-                 removed from the AST; or ``symbol``, in which case only (all of)
-                 the references to the provided ``to_remove`` symbol are cut away.
+        string (if not a string already) and all of its occurrences are removed
+        from the AST; or ``symbol``, in which case only (all of) the references
+        to the provided ``to_remove`` node are cut away.
     """
 
     def _is_removable(n, tr):
@@ -236,38 +236,64 @@ def ast_remove(node, to_remove, mode='all'):
         raise ValueError
 
     try:
-        for tr in to_remove:
-            _ast_remove(node, None, -1, tr)
+        if all(_ast_remove(node, None, None, tr) == -1 for tr in to_remove):
+            return -1
     except TypeError:
-        _ast_remove(node, None, -1, to_remove)
+        return _ast_remove(node, None, None, to_remove)
 
 
-def ast_update_ofs(node, ofs):
-    """Given a dictionary ``ofs`` s.t. ``{'dim': ofs}``, update the various
-    iteration variables in the symbols rooted in ``node``."""
-    if isinstance(node, Symbol):
-        new_ofs = []
-        old_ofs = ((1, 0) for r in node.rank) if not node.offset else node.offset
-        for r, o in zip(node.rank, old_ofs):
-            new_ofs.append((o[0], ofs[r] if r in ofs else o[1]))
-        node.offset = tuple(new_ofs)
-    else:
-        for n in node.children:
-            ast_update_ofs(n, ofs)
+def ast_update_ofs(node, ofs, **kwargs):
+    """Change the offsets of the iteration space variables of the symbols rooted
+    in ``node``.
+
+    :arg node: root AST node
+    :arg ofs: a dictionary ``{'dim': value}``; `dim`'s offset is changed to `value`
+    :arg kwargs: optional parameters to drive the transformation:
+        * increase: `value` is added to the pre-existing offset, not substituted
+    """
+    increase = kwargs.get('increase', False)
+
+    symbols = FindInstances(Symbol).visit(node, ret=FindInstances.default_retval())[Symbol]
+    for s in symbols:
+        new_offset = []
+        for r, o in zip(s.rank, s.offset):
+            if increase:
+                val = ofs.get(r, 0)
+                if isinstance(o[1], str) or isinstance(val, str):
+                    new_o = "%s + %s" % (o[1], val)
+                else:
+                    new_o = o[1] + val
+            else:
+                new_o = ofs.get(r, o[1])
+            new_offset.append((o[0], new_o))
+        s.offset = tuple(new_offset)
+
+    return node
 
 
-def ast_update_rank(node, new_rank):
-    """Given a dictionary ``new_rank`` s.t. ``{'sym': new_dim}``, update the
-    ranks of the symbols rooted in ``node`` by adding them the dimension
-    ``new_dim``."""
-    if isinstance(node, FlatBlock):
-        return
-    elif isinstance(node, Symbol):
-        if node.symbol in new_rank:
-            node.rank = new_rank[node.symbol] + node.rank
-    else:
-        for n in node.children:
-            ast_update_rank(n, new_rank)
+def ast_update_rank(node, mapper):
+    """Change the rank of the symbols rooted in ``node`` as prescribed by
+    ``rank``.
+
+    :arg node: Root AST node
+    :arg mapper: Describe how to change the rank of a symbol.
+    :type mapper: a dictionary. Keys can either be Symbols -- in which case
+        values are interpreted as dimensions to be added to the rank -- or
+        actual ranks (strings, integers) -- which means rank dimensions are
+        replaced; for example, if mapper={'i': 'j'} and node='A[i] = B[i]',
+        node will be transformed into 'A[j] = B[j]'
+    """
+
+    symbols = FindInstances(Symbol).visit(node, ret=FindInstances.default_retval())[Symbol]
+    for s in symbols:
+        if mapper.get(s.symbol):
+            # Add a dimension
+            s.rank = mapper[s.symbol] + s.rank
+        else:
+            # Try to replace dimensions
+            s.rank = tuple([r if r not in mapper else mapper[r] for r in s.rank])
+
+    return node
 
 
 def ast_update_id(symbol, name, id):
@@ -338,28 +364,6 @@ def ast_make_alias(node1, node2):
     else:
         node1.init = node2
     return node1
-
-
-def ast_make_copy(arr1, arr2, itspace, op):
-    """Create an AST performing a copy from ``arr2`` to ``arr1``.
-    Return also an ``ArrayInit`` object indicating how ``arr1`` should be
-    initialized prior to the copy."""
-    init = ArrayInit("0.0")
-    if op == Assign:
-        init = EmptyStatement()
-    rank = ()
-    for i, (start, end) in enumerate(itspace):
-        rank += ("i%d" % i,)
-    arr1, arr2 = dcopy(arr1), dcopy(arr2)
-    body = []
-    for a1, a2 in zip(arr1, arr2):
-        a1.rank, a2.rank = rank, a2.rank[:-len(rank)] + rank
-        body.append(op(a1, a2))
-    for i, (start, end) in enumerate(itspace):
-        if isinstance(init, ArrayInit):
-            init.values = "{%s}" % init.values
-        body = c_for(rank[i], end, body, pragma="", init=start)
-    return body, init
 
 
 ###########################################################
@@ -525,98 +529,100 @@ def check_type(stmt, decls):
 #######################################################################
 
 
-def itspace_size_ofs(itspace):
-    """Given an ``itspace`` in the form ::
+class ItSpace():
 
-        (('dim', (bound_a, bound_b), ...)),
+    """A collection of routines to manipulate iteration spaces."""
 
-    return ::
+    def __init__(self, mode=0):
+        """Initialize an ItSpace object.
 
-        ((('dim', bound_b - bound_a), ...), (('dim', bound_a), ...))"""
-    itspace_info = []
-    for var, bounds in itspace:
-        itspace_info.append(((var, bounds[1] - bounds[0] + 1), (var, bounds[0])))
-    return tuple(zip(*itspace_info))
+        :arg mode: Establish how an interation space is represented.
+        :type mode: integer, allowed [0 (default), 1, 2]; respectively, an
+            iteration space is represented as:
+                * 0: a 2-tuple indicating the bounds of the accessed region
+                * 1: a 2-tuple indicating size and offset of the accessed region
+                * 2: a For loop object
+        """
+        assert mode in [0, 1, 2], "Invalid mode for ItSpace()"
+        self.mode = mode
 
+    def _convert_to_mode0(self, itspaces):
+        if self.mode == 0:
+            return itspaces
+        elif self.mode == 1:
+            return [(ofs, ofs+size) for size, ofs in itspaces]
+        elif self.mode == 2:
+            return [(l.start, l.end) for l in itspaces]
 
-def itspace_merge(itspaces):
-    """Given an iterator of iteration spaces, each iteration space represented
-    as a 2-tuple containing the start and end point, return a tuple of iteration
-    spaces in which contiguous iteration spaces have been merged. For example:
-    ::
+    def _convert_from_mode0(self, itspaces):
+        if self.mode == 0:
+            return itspaces
+        elif self.mode == 1:
+            return [(end-start, start) for start, end in itspaces]
+        elif self.mode == 2:
+            raise RuntimeError("Cannot convert from mode=0 to mode=2")
 
-        [(1,3), (4,6)] -> ((1,6),)
-        [(1,3), (5,6)] -> ((1,3), (5,6))
-    """
-    itspaces = sorted(tuple(set(itspaces)))
-    merged_itspaces = []
-    current_start, current_stop = itspaces[0]
-    for start, stop in itspaces:
-        if start - 1 > current_stop:
-            merged_itspaces.append((current_start, current_stop))
-            current_start, current_stop = start, stop
-        else:
-            # Ranges adjacent or overlapping: merge.
-            current_stop = max(current_stop, stop)
-    merged_itspaces.append((current_start, current_stop))
-    return tuple(merged_itspaces)
+    def merge(self, itspaces):
+        """Merge contiguous, possibly overlapping iteration spaces.
+        For example (assuming ``self.mode = 0``): ::
 
+            [(1,3), (4,6)] -> ((1,6),)
+            [(1,3), (5,6)] -> ((1,3), (5,6))
+        """
+        itspaces = self._convert_to_mode0(itspaces)
 
-def itspace_to_for(itspaces, loop_parent):
-    """Given an iterator of iteration spaces, each iteration space represented
-    as a 2-tuple containing the start and the end point, return a tuple
-    ``(loops_info, inner_block)``, in which ``loops_info`` is the tuple of all
-    tuples (loop, loop_parent) embedding ``inner_block``."""
-    inner_block = Block([], open_scope=True)
-    loops, loops_parents = [], [loop_parent]
-    loop_body = inner_block
-    for i, itspace in enumerate(itspaces):
-        start, stop = itspace
-        loops.insert(0, For(Decl("int", start, Symbol(0)), Less(start, stop),
-                            Incr(start, Symbol(1)), loop_body))
-        loop_body = Block([loops[i-1]], open_scope=True)
-        loops_parents.append(loop_body)
-    # Note that #loops_parents = #loops+1, but by zipping we just cut away the
-    # last entry in loops_parents
-    loops_info = zip(loops, loops_parents)
-    return (tuple(loops_info), inner_block)
+        itspaces = sorted(tuple(set(itspaces)))
+        merged_itspaces = []
+        current_start, current_stop = itspaces[0]
+        for start, stop in itspaces:
+            if start - 1 > current_stop:
+                merged_itspaces.append((current_start, current_stop))
+                current_start, current_stop = start, stop
+            else:
+                # Ranges adjacent or overlapping: merge.
+                current_stop = max(current_stop, stop)
+        merged_itspaces.append((current_start, current_stop))
 
+        itspaces = self._convert_from_mode0(merged_itspaces)
+        return itspaces
 
-def itspace_from_for(loops, mode=0):
-    """Given an iterator of for ``loops``, return a tuple that rather contains
-    the iteration space of each loop, i.e. given: ::
+    def intersect(self, itspaces):
+        """Compute the intersection of multiple iteration spaces.
+        For example (assuming ``self.mode = 0``): ::
 
-        [for1, for2, ...]
+            [(1,3)] -> ()
+            [(1,3), (4,6)] -> ()
+            [(1,3), (2,6)] -> (2,3)
+        """
+        itspaces = self._convert_to_mode0(itspaces)
 
-    If ``mode == 0``, return: ::
+        if len(itspaces) in [0, 1]:
+            return ()
+        itspaces = [set(range(i[0], i[1])) for i in itspaces]
+        itspace = set.intersection(*itspaces)
+        itspace = sorted(list(itspace)) or [0, -1]
+        itspaces = [(itspace[0], itspace[-1]+1)]
 
-        ((start1, bound1, increment1), (start2, bound2, increment2), ...)
+        itspace = self._convert_from_mode0(itspaces)[0]
+        return itspace
 
-    If ``mode > 0``, return: ::
+    def to_for(self, itspaces, dims=None, stmts=None):
+        """Create ``For`` objects starting from an iteration space."""
+        if not dims and self.mode == 2:
+            dims = [l.dim for l in itspaces]
+        elif not dims:
+            dims = ['i%d' % i for i, j in enumerate(itspaces)]
 
-        ((for1_dim, (start1, topiter1)), (for2_dim, (start2, topiter2):, ...)
-    """
-    if mode == 0:
-        return tuple((l.start, l.end, l.increment) for l in loops)
-    else:
-        return tuple((l.dim, (l.start, l.end - 1)) for l in loops)
+        itspaces = self._convert_to_mode0(itspaces)
 
+        loops = []
+        body = Block(stmts or [], open_scope=True)
+        for (start, stop), dim in reversed(zip(itspaces, dims)):
+            new_for = For(Decl("int", dim, start), Less(dim, stop), Incr(dim, 1), body)
+            loops.insert(0, new_for)
+            body = Block([new_for], open_scope=True)
 
-def itspace_copy(loop_a, loop_b=None):
-    """Copy the iteration space of ``loop_a`` into ``loop_b``, while preserving
-    the body. If ``loop_b = None``, a new For node is created and returned."""
-    init = dcopy(loop_a.init)
-    cond = dcopy(loop_a.cond)
-    incr = dcopy(loop_a.incr)
-    pragma = dcopy(loop_a.pragma)
-    if not loop_b:
-        loop_b = For(init, cond, incr, loop_a.body, pragma)
-        return loop_b
-    loop_b.init = init
-    loop_b.cond = cond
-    loop_b.incr = incr
-    loop_b.pragma = pragma
-    return loop_b
+        return loops
 
 
 #############################

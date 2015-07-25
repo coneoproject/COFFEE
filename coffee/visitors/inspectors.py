@@ -464,6 +464,11 @@ class SymbolModes(Visitor):
     def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
+    def visit_list(self, o, ret=None, *args, **kwargs):
+        for entry in o:
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
+        return ret
+
     def visit_Node(self, o, ret=None, *args, **kwargs):
         ops, _ = o.operands()
         for op in ops:

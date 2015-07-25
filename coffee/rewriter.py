@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from collections import defaultdict, Counter
+from collections import defaultdict, OrderedDict, Counter
 from copy import deepcopy as dcopy
 import itertools
 
@@ -564,8 +564,7 @@ class ExpressionHoister(object):
                     next_loop = expr_outermost_loop
                 else:
                     # As vector, within the outermost loop imposing the dependency
-                    dep_block = expr_dims_loops[dep[0]].children[0]
-                    place = dep_block
+                    place = expr_dims_loops[dep[0]].children[0]
                     wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, len(dep)))
                     next_loop = od_find_next(expr_dims_loops, dep[0])
 
@@ -660,13 +659,12 @@ class ExpressionExpander(object):
         self.expanded_decls = {}
         self.cache = {}
 
-    def _hoist(self, expansion):
+    def _hoist(self, expansion, info):
         """Try to aggregate an expanded expression E with a previously hoisted
         expression H. If there are no dependencies, H is expanded with E, so
         no new symbols need be introduced. Otherwise (e.g., the H temporary
         appears in multiple places), create a new symbol."""
         exp, grp = expansion.left, expansion.right
-        cache_key = (str(exp), str(grp))
 
         # First, check if any of the symbols in /exp/ have been hoisted
         try:
@@ -680,6 +678,7 @@ class ExpressionExpander(object):
         # Before moving on, access the cache to check whether the same expansion
         # has alredy been performed. If that's the case, we retrieve and return the
         # result of that expansion, since there is no need to add further temporaries
+        cache_key = (str(exp), str(grp))
         if cache_key in self.cache:
             return {exp: self.cache[cache_key]}
 
@@ -695,8 +694,8 @@ class ExpressionExpander(object):
         grp_syms = SymbolReferences().visit(grp, ret=retval).keys()
         for l in reversed(self.expr_info.loops):
             for g in grp_syms:
-                g_refs = self.info['symbol_refs'][g]
-                g_deps = set(flatten([self.info['symbols_dep'][r[0]] for r in g_refs]))
+                g_refs = info['symbol_refs'][g]
+                g_deps = set(flatten([info['symbols_dep'].get(r[0], []) for r in g_refs]))
                 if any([l.dim in g.dim for g in g_deps]):
                     return {}
             if l in hoisted_place.children:
@@ -717,6 +716,7 @@ class ExpressionExpander(object):
                                                    'i': len(self.expanded_decls)}
         decl = dcopy(hoisted_decl)
         decl.sym.symbol = hoisted_exp.symbol
+        decl.scope = LOCAL
         stmt = Assign(hoisted_exp, expr)
         # Update the AST
         hoisted_loop.body.append(stmt)
@@ -727,6 +727,16 @@ class ExpressionExpander(object):
         self.expr_graph.add_dependency(hoisted_exp, expr)
         self.cache[cache_key] = hoisted_exp
         return {exp: hoisted_exp}
+
+    def _build(self, exp, grp):
+        """Create a node for the expansion and keep track of it."""
+        expansion = Prod(exp, dcopy(grp))
+        # Track the new expansion
+        self.expansions.append(expansion)
+        # Untrack any expansions occured in children nodes
+        if grp in self.expansions:
+            self.expansions.remove(grp)
+        return expansion
 
     def _expand(self, node, parent):
         if isinstance(node, Symbol):
@@ -755,9 +765,8 @@ class ExpressionExpander(object):
             expandable = r_exps if l_type == self.GROUP else l_exps
             to_replace = defaultdict(list)
             for exp, grp in itertools.product(expandable, groupable):
-                expansion = Prod(exp, dcopy(grp))
+                expansion = self._build(exp, grp)
                 to_replace[exp].append(expansion)
-                self.expansions.append(expansion)
             ast_replace(node, {k: ast_make_expr(Sum, v) for k, v in to_replace.items()},
                         mode='symbol')
             # Update the parent node, since an expression has just been expanded
@@ -782,18 +791,18 @@ class ExpressionExpander(object):
         """Perform the expansion of the expression rooted in ``self.stmt``.
         Symbols for which the lambda function ``should_expand`` returns
         True are expansion candidates."""
-        # Preload and set data structures for expansion
         self.expansions = []
         self.should_expand = should_expand
-        self.info = visit(self.expr_info.outermost_loop, info_items=['symbol_refs',
-                                                                     'symbols_dep'])
+
+        info = visit(self.expr_info.outermost_loop,
+                     info_items=['symbol_refs', 'symbols_dep'])
 
         # Expand according to the /should_expand/ heuristic
         self._expand(self.stmt.children[1], self.stmt)
 
         # Try to aggregate expanded terms with hoisted expressions (if any)
         for expansion in self.expansions:
-            hoisted = self._hoist(expansion)
+            hoisted = self._hoist(expansion, info)
             if hoisted:
                 ast_replace(self.stmt, hoisted, copy=True, mode='symbol')
                 ast_remove(self.stmt, expansion.right, mode='symbol')
@@ -841,7 +850,7 @@ class ExpressionFactorizer(object):
         self.expr_info = expr_info
 
     def _simplify_sum(self, terms):
-        unique_terms = {}
+        unique_terms = OrderedDict()
         for t in terms:
             unique_terms.setdefault(str(t.generate_ast), list()).append(t)
 
@@ -886,14 +895,15 @@ class ExpressionFactorizer(object):
             # Example: replace (a*b)+(a*b) with 2*(a*b)
             self._simplify_sum(terms)
             # Finally try to factorize some of the operands composing the operation
-            factorized = {}
+            factorized = OrderedDict()
             for t in terms:
                 operand = set([t.operands_ast]) if t.operands else set()
-                factor = set([t.factors_ast]) if t.factors else set()
+                factor = set([t.factors_ast]) if t.factors else set([Symbol(1.0)])
                 factorized_term = self.Term(operand, factor, node.__class__)
                 _t = factorized.setdefault(str(t.operands_ast), factorized_term)
                 _t.factors |= factor
-            factorized = ast_make_expr(Sum, [t.generate_ast for t in factorized.values()])
+            factorized = [t.generate_ast for t in factorized.values()]
+            factorized = ast_make_expr(Sum, sorted(factorized, key=lambda f: str(f)))
             parent.children[parent.children.index(node)] = factorized
             return self.Term(set([factorized]))
 
@@ -901,5 +911,7 @@ class ExpressionFactorizer(object):
             raise RuntimeError("Factorization error: unknown node: %s" % str(node))
 
     def factorize(self, should_factorize):
+        if not isinstance(self.stmt, Writer):
+            return
         self.should_factorize = should_factorize
         self._factorize(self.stmt.children[1], self.stmt)

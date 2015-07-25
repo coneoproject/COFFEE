@@ -54,7 +54,7 @@ decl = lambda q, t, s, a: "%s%s %s %s" % (q, t, s, a)
 decl_init = lambda q, t, s, a, e: "%s%s %s %s = %s" % (q, t, s, a, e)
 for_loop = lambda s1, e, s2, s3: "for (%s; %s; %s)\n%s" % (s1, e, s2, s3)
 ternary = lambda e, s1, s2: wrap("%s ? %s : %s" % (e, s1, s2))
-init_array = lambda v, f=str: '{%s}' % ', '.join([f(i) for i in v])
+init_array = lambda v, f: '{%s}' % ', '.join([f(i) for i in v])
 
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
 
@@ -225,7 +225,7 @@ class ArrayInit(Expr):
     def __init__(self, values, precision=None):
         """Initialize an ArrayInit object.
 
-        :arg values: representation of the values the array is initialized to
+        :arg values: a representation of the values the array is initialized to
         :type values: a string or a numpy ndarray.
         :arg precision: the number of decimal digits that should be used when
             converting a float (in a numpy array) to a string.
@@ -267,42 +267,55 @@ class ArrayInit(Expr):
             # n-dimensional case
             return init_array([self._tabulate_values(arr[0])] +
                               ["\n%s" % self._tabulate_values(arr[i])
-                               for i in range(1, arr.shape[0])])
+                               for i in range(1, arr.shape[0])], str)
 
     def gencode(self, not_scope=True, parent=None):
         if isinstance(self.values, np.ndarray):
-            if len(self.values.shape) == 1 and self.values.shape[0] == 1:
+            if parent and not parent.sym.rank:
                 return self._formatter(self.values[0])
             return self._tabulate_values(self.values)
         return self.values
 
 
-class ColSparseArrayInit(ArrayInit):
+class SparseArrayInit(ArrayInit):
 
-    """Array initilizer in which zero-columns, i.e. columns full of zeros, are
-    explictly tracked. Only bi-dimensional arrays are allowed."""
+    """Array initializer in which non-zero blocks are explictly tracked."""
 
-    def __init__(self, values, precision, nonzero_bounds):
-        """Initialize an ArrayInit object in which blocks of zero columns are
-        explicitly tracked.
+    def __init__(self, values, precision, nonzero):
+        """Initialize a SparseArrayInit object.
 
-        :arg values: representation of the values the array is initialized to
-        :type values: a string or a numpy ndarray.
+        :arg values: a representation of the values the array is initialized to
+        :type values: a string or a numpy ndarray
         :arg precision: the number of decimal digits that should be used when
-            converting a float (in a numpy array) to a string.
+            converting a float (in a numpy array) to a string
         :type precision: integer (defaults to 12)
-        :arg zerobounds: a list of 2-tuple of integers, each tuple indicating
-                         the indices of the columns at the boundary of a dense
-                         block
-        """
-        super(ColSparseArrayInit, self).__init__(values, precision)
-        self.nonzero_bounds = nonzero_bounds
+        :arg nonzero: track a non-zero valued block in the initializer
+        :type nonzero: an n-tuple, where n is the rank of the tensor initialized.
+            Each entry is a list of 2-tuple. A 2-tuple represents a "panel" of
+            non zero-values in the array by indicating 1) size of the region and
+            2) offset from the start. For example, consider the following: ::
 
-    def reconstruct(self, values, precision, nonzero_bounds, **kwargs):
-        return type(self)(values, precision, nonzero_bounds, **kwargs)
+                A[4][3] = {{0, 0, 0},
+                           {2, 1, 0},
+                           {2, 1, 0},
+                           {0, 0, 0},
+                           {3, 3, 0}}
+
+            then, ``nonzero`` takes the following form: ::
+
+                nonzero = ([(2, 1), (1, 4)], [(2, 0)])
+
+            since there are two non-contiguous groups of non zero-valued rows
+            (1-2 and 3) and one group of non zero-valued columns
+        """
+        super(SparseArrayInit, self).__init__(values, precision)
+        self.nonzero = nonzero
+
+    def reconstruct(self, values, precision, nonzero, **kwargs):
+        return type(self)(values, precision, nonzero, **kwargs)
 
     def operands(self):
-        return [self.values, self.precision, self.nonzero_bounds], {}
+        return [self.values, self.precision, self.nonzero], {}
 
 
 class Par(UnaryExpr):
@@ -421,7 +434,7 @@ class Symbol(Expr):
         super(Symbol, self).__init__([])
         self.symbol = symbol
         self.rank = rank
-        self.offset = offset
+        self.offset = offset or tuple([(1, 0) for r in rank])
 
     def operands(self):
         return [self.symbol, self.rank, self.offset], {}
@@ -520,7 +533,7 @@ class EmptyStatement(Statement):
 
     """Empty statement."""
 
-    def gencode(self):
+    def gencode(self, not_scope=False, parent=None):
         return ""
 
 
@@ -638,18 +651,8 @@ class Decl(Statement):
 
     @property
     def nonzero(self):
-        """If the declared array:
-
-        * is a bi-dimensional array,
-        * is initialized to some values,
-        * the initialized values are of type ColSparseArrayInit
-
-        Then return a tuple of the first and last non-zero columns in the array.
-        Else, return an empty tuple."""
-        if len(self.sym.rank) == 2 and isinstance(self.init, ColSparseArrayInit):
-            return self.init.nonzero_bounds
-        else:
-            return ()
+        """Return the location of non-zero valued blocks, if any."""
+        return self.init.nonzero if isinstance(self.init, SparseArrayInit) else ()
 
     def gencode(self, not_scope=False):
         if isinstance(self.init, EmptyStatement):
@@ -657,7 +660,8 @@ class Decl(Statement):
                         spacer(self.attr)) + semicolon(not_scope)
         else:
             return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                             spacer(self.attr), self.init.gencode()) + semicolon(not_scope)
+                             spacer(self.attr), self.init.gencode(parent=self)) +\
+                semicolon(not_scope)
 
 
 class Block(Statement):
@@ -720,11 +724,18 @@ class For(Statement):
 
     @property
     def start(self):
-        return self.init.init.symbol
+        if isinstance(self.init, Decl):
+            return self.init.init.symbol
+        elif isinstance(self.init, Assign):
+            return self.init.children[1]
 
     @property
     def end(self):
         return self.cond.children[1].symbol
+
+    @end.setter
+    def end(self, value):
+        self.cond.children[1] = as_symbol(value)
 
     @property
     def size(self):
@@ -733,6 +744,14 @@ class For(Statement):
     @property
     def increment(self):
         return self.incr.children[1].symbol
+
+    @increment.setter
+    def increment(self, value):
+        self.incr.children[1] = as_symbol(value)
+
+    @property
+    def header(self):
+        return (self.start, self.size, self.increment)
 
     @property
     def body(self):
