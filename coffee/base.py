@@ -35,6 +35,7 @@
 Abstract Syntax Tree (AST)."""
 
 from copy import deepcopy as dcopy
+from math import isnan
 import numpy as np
 
 # Utilities for simple exprs and commands
@@ -257,7 +258,12 @@ class ArrayInit(Expr):
         f = "%%.%dg" % self.precision
         f_int = "%%.%df" % 1
         eps = 10.0**(-self.precision)
-        return f_int % v if abs(v - round(v, 1)) < eps else f % v
+        if isnan(v):
+            return "NAN"
+        elif abs(v - round(v, 1)) < eps:
+            return f_int % v
+        else:
+            return f % v
 
     def _tabulate_values(self, arr):
         if len(arr.shape) == 1:
