@@ -592,7 +592,8 @@ class FindExpression(Visitor):
     Visit the expression tree and return a list of (sub-)expressions matching
     particular criteria.
 
-    :arg type: establish the expressions' root operator(s) (e.g., Sum, Sub, ...).
+    :arg type: (optional) establish the matching expression' root operator(s),
+        such as Sum, Sub, ...
     :arg dims: (optional) a tuple, each entry representing an iteration space
         dimension. Expressions' symbols must iterate along one of these iteration
         space dimensions.
@@ -602,7 +603,7 @@ class FindExpression(Visitor):
         this argument.
     """
 
-    def __init__(self, type, dims=None, in_syms=None, out_syms=None):
+    def __init__(self, type=None, dims=None, in_syms=None, out_syms=None):
         self.type = type
         self.dims = dims
         self.in_syms = in_syms
@@ -622,8 +623,8 @@ class FindExpression(Visitor):
             key = set(ret['in_syms'])
             key |= {j for j in ret['inner_syms']}
             key = tuple(sorted(key))
-            if isinstance(o, self.type):
-                if isinstance(parent, self.type):
+            if not self.type or isinstance(o, self.type):
+                if self.type and isinstance(parent, self.type):
                     # Postpone expression tracking because the parent has same type
                     # as the node currently being visited
                     pass
