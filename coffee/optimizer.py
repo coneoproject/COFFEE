@@ -430,7 +430,7 @@ class LoopOptimizer(object):
             # differently by injection
             if i_syms:
                 dissected = find_expression(expr, Prod, expr_info.domain_dims, i_syms)
-                leftover = find_expression(expr, Prod, expr_info.domain_dims, out_syms=i_syms)
+                leftover = find_expression(expr, dims=expr_info.domain_dims, out_syms=i_syms)
                 leftover = {(): list(flatten(leftover.values()))}
                 dissected = dict(dissected.items() + leftover.items())
             else:
