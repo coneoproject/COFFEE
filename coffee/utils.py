@@ -299,16 +299,23 @@ def ast_make_for(stmts, loop, copy=False):
     return new_loop
 
 
-def ast_make_expr(op, nodes):
+def ast_make_expr(op, nodes, balance=False):
     """Create an ``Expr`` Node of type ``op``, with children given in ``nodes``."""
 
     def _ast_make_expr(nodes):
         return nodes[0] if len(nodes) == 1 else op(nodes[0], _ast_make_expr(nodes[1:]))
 
-    try:
-        return _ast_make_expr(nodes)
-    except IndexError:
+    def _ast_make_bal_expr(nodes):
+        half = len(nodes) / 2
+        return nodes[0] if len(nodes) == 1 else op(_ast_make_bal_expr(nodes[:half]),
+                                                   _ast_make_bal_expr(nodes[half:]))
+
+    if len(nodes) == 0:
         return None
+    elif balance:
+        return _ast_make_bal_expr(nodes)
+    else:
+        return _ast_make_expr(nodes)
 
 
 def ast_make_alias(node1, node2):
