@@ -299,7 +299,7 @@ def ast_make_for(stmts, loop, copy=False):
     return new_loop
 
 
-def ast_make_expr(op, nodes, balance=False):
+def ast_make_expr(op, nodes, balance=True):
     """Create an ``Expr`` Node of type ``op``, with children given in ``nodes``."""
 
     def _ast_make_expr(nodes):
