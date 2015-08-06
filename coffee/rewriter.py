@@ -296,7 +296,7 @@ class ExpressionRewriter(object):
                 # Create the reassociated product and modify the original AST
                 children = zip(*other_nodes)[0] if other_nodes else ()
                 children += tuple(sorted(symbols, key=reorder))
-                reassociated_node = ast_make_expr(Prod, children)
+                reassociated_node = ast_make_expr(Prod, children, balance=False)
                 parent.children[parent.children.index(node)] = reassociated_node
 
             else:
