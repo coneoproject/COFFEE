@@ -274,37 +274,40 @@ class ExpressionFissioner(LoopScheduler):
 
     class CutterSum(Cutter):
 
-        def _cut(self, node, parent, side, topsum=None, counter=0):
+        def _cut(self, node, parent, side, topsum=None):
             if isinstance(node, (Symbol, FunCall)):
-                return False
+                return 0
 
             elif isinstance(node, (Par, Div)):
-                return self._cut(node.children[0], node, side, topsum, counter)
+                return self._cut(node.children[0], node, side, topsum)
 
             elif isinstance(node, Prod):
                 if topsum:
-                    return False
-                if not self._cut(node.left, node, side, topsum, counter):
-                    return self._cut(node.right, node, side, topsum, counter)
-                return True
+                    return 0
+                if self._cut(node.left, node, side, topsum) == 0:
+                    return self._cut(node.right, node, side, topsum)
+                # Prods zero the sum/sub counter
+                return 0
 
             elif isinstance(node, (Sum, Sub)):
-                counter += 1
                 topsum = topsum or (parent, parent.children.index(node))
-                if counter == self.expr_fissioner.cut:
+                counter = 1
+                counter += self._cut(node.left, node, side, topsum)
+                counter += self._cut(node.right, node, side, topsum)
+                if not self._success and counter >= self.expr_fissioner.cut:
+                    # We now are on the topleft sum of this sub-expression such
+                    # that enough sum/sub have been encountered
                     if not parent:
-                        return False
+                        return 0
                     self._success = True
                     if side == 'split':
-                        parent.children[parent.children.index(node)] = node.left
+                        topsum[0].children[topsum[1]] = node.left
                     else:
                         right = Neg(node.right) if isinstance(node, Sub) else node.right
-                        topsum[0].children[topsum[1]] = right
-                    return True
+                        parent.children[parent.children.index(node)] = right
+                    return counter
                 else:
-                    if not self._cut(node.left, node, side, topsum, counter):
-                        return self._cut(node.right, node, side, topsum, counter)
-                    return True
+                    return counter
 
             else:
                 raise RuntimeError("Fission error: found unknown node: %s" % str(node))
