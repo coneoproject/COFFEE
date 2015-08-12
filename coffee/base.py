@@ -745,11 +745,11 @@ class For(Statement):
 
     @property
     def size(self):
-        return self.cond.children[1].symbol - self.init.init.symbol
+        return int(self.cond.children[1].symbol) - int(self.init.init.symbol)
 
     @property
     def increment(self):
-        return self.incr.children[1].symbol
+        return int(self.incr.children[1].symbol)
 
     @increment.setter
     def increment(self, value):
