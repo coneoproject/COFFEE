@@ -481,10 +481,10 @@ class LoopOptimizer(object):
                     for i in projection:
                         partial = 1
                         for j in self.expr_graph.shares(i):
-                            # n=number of unique elements, k=group size
-                            n = injectable[j[0]][1]
-                            k = len(j)
-                            partial *= fact(n + k - 1)/(fact(k)*fact(n - 1))
+                            # _n=number of unique elements, _k=group size
+                            _n = injectable[j[0]][1]
+                            _k = len(j)
+                            partial *= fact(_n + _k - 1)/(fact(_k)*fact(_n - 1))
                         increase_factor += partial
                     increase_factor = increase_factor or 1
                     if increase_factor > save_factor:
