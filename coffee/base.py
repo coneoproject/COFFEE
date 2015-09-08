@@ -774,10 +774,7 @@ class For(Statement):
 
     @property
     def start(self):
-        if isinstance(self.init, Decl):
-            return self.init.init.symbol
-        elif isinstance(self.init, Assign):
-            return self.init.children[1]
+        return self.init.rvalue.symbol
 
     @property
     def end(self):
@@ -789,7 +786,7 @@ class For(Statement):
 
     @property
     def size(self):
-        return int(self.cond.children[1].symbol) - int(self.init.init.symbol)
+        return int(self.end) - int(self.start)
 
     @property
     def increment(self):
