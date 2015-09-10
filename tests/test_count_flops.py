@@ -17,6 +17,13 @@ def binop(request):
 
 
 @pytest.fixture(scope="module",
+                params=[Incr, IMul, Decr, IDiv])
+def increment(request, binop):
+    d = Symbol("d")
+    return request.param(d, binop)
+
+
+@pytest.fixture(scope="module",
                 params=[Prod, Div, Sum, Sub])
 def nested_binop(request, binop):
     c = Symbol("c")
@@ -63,6 +70,27 @@ def test_nested_for(v, binop):
     tree = c_for("i", 10, [binop])
     tree = c_for("j", 11, [tree])
     assert v.visit(tree) == 10*11
+
+
+def test_for_assign_init(v, increment):
+    idx = Symbol("i")
+    decl = Decl("int", idx)
+    loop = For(Assign(idx, 3), Less(idx, 10), Incr(idx, 3),
+               Block([increment]))
+    tree = Block([decl, loop])
+
+    assert v.visit(tree) == 2 * 2
+
+
+def test_for_assign_init_avx(v, avxbinop):
+    idx = Symbol("i")
+    c = Symbol("c")
+    decl = Decl("int", idx)
+    loop = For(Assign(idx, 3), Less(idx, 10), Incr(idx, 3),
+               Block([AVXStore(c, avxbinop)]))
+    tree = Block([decl, loop])
+
+    assert v.visit(tree) == 2 * 4
 
 
 if __name__ == "__main__":
