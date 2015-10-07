@@ -701,6 +701,34 @@ class ExpressionExpander(object):
     # Temporary variables template
     _expanded_sym = "%(loop_dep)s_EXP_%(expr_id)d_%(i)d"
 
+    class Cache():
+        """A cache for expanded expressions."""
+
+        def __init__(self):
+            self._map = {}
+            self._hits = defaultdict(int)
+
+        def make_key(self, exp, grp):
+            return (str(exp), str(grp))
+
+        def retrieve(self, key):
+            exp = self._map.get(key)
+            if exp:
+                self._hits[key] += 1
+            return exp
+
+        def invalidate(self, exp):
+            was_hit = False
+            for i, j in self._map.items():
+                if str(j) == str(exp):
+                    self._map.pop(i)
+                    if self._hits[i] > 0:
+                        was_hit = True
+            return was_hit
+
+        def add(self, key, exp):
+            self._map[key] = exp
+
     def __init__(self, stmt, expr_info=None, hoisted=None, expr_graph=None):
         self.stmt = stmt
         self.expr_info = expr_info
@@ -715,7 +743,7 @@ class ExpressionExpander(object):
             self.expr_id = self._expr_handled.index(stmt)
 
         self.expanded_decls = {}
-        self.cache = {}
+        self.cache = self.Cache()
 
     def _hoist(self, expansion, info):
         """Try to aggregate an expanded expression E with a previously hoisted
@@ -736,9 +764,10 @@ class ExpressionExpander(object):
         # Before moving on, access the cache to check whether the same expansion
         # has alredy been performed. If that's the case, we retrieve and return the
         # result of that expansion, since there is no need to add further temporaries
-        cache_key = (str(exp), str(grp))
-        if cache_key in self.cache:
-            return {exp: self.cache[cache_key]}
+        cache_key = self.cache.make_key(exp, grp)
+        cached = self.cache.retrieve(cache_key)
+        if cached:
+            return {exp: cached}
 
         # Aliases
         hoisted_stmt = self.hoisted[exp.symbol].stmt
@@ -759,11 +788,10 @@ class ExpressionExpander(object):
             if l in hoisted_place.children:
                 break
 
-        # No dependencies, just perform the expansion
-        if not self.expr_graph.is_read(exp):
+        # Perform the expansion in place unless cache conflicts are detected
+        if not self.expr_graph.is_read(exp) and not self.cache.invalidate(exp):
             hoisted_stmt.rvalue = op(hoisted_stmt.rvalue, dcopy(grp))
             self.expr_graph.add_dependency(exp, grp)
-            self.cache[cache_key] = exp
             return {exp: exp}
 
         # Create new symbol, expression, and declaration
@@ -783,7 +811,7 @@ class ExpressionExpander(object):
         self.expanded_decls[decl.sym.symbol] = decl
         self.hoisted[hoisted_exp.symbol] = (stmt, decl, hoisted_loop, hoisted_place)
         self.expr_graph.add_dependency(hoisted_exp, expr)
-        self.cache[cache_key] = hoisted_exp
+        self.cache.add(cache_key, hoisted_exp)
         return {exp: hoisted_exp}
 
     def _build(self, exp, grp):
