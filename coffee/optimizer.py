@@ -34,6 +34,7 @@
 import operator
 import resource
 from collections import OrderedDict
+from itertools import combinations
 from warnings import warn as warning
 from math import factorial as fact
 
@@ -112,7 +113,9 @@ class LoopOptimizer(object):
         # mode for each of them. A preliminary transformation of the loop nest may
         # take place in this pass (e.g., injection)
         if mode == 'auto':
-            self._dissect()
+            self._dissect('greedy')
+        elif mode == 'auto-aggressive':
+            self._dissect('aggressive')
 
         # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
@@ -357,13 +360,13 @@ class LoopOptimizer(object):
             for stmt in to_remove:
                 innermost_block.children.remove(stmt)
 
-    def _dissect(self):
+    def _dissect(self, heuristics):
         """Analyze the set of expressions in the LoopOptimizer and infer an
         optimal rewrite mode for each of them.
 
         If an expression is embedded in a non-perfect loop nest, then injection
         may be performed. Injection consists of unrolling any loops outside of
-        the expression's iteration space into the expression itself.
+        the expression iteration space into the expression itself.
         For example: ::
 
             for i
@@ -383,7 +386,17 @@ class LoopOptimizer(object):
         Injection could be necessary to maximize the impact of rewrite mode=3,
         which tries to pre-evaluate subexpressions whose values are known at
         code generation time. Injection is essential to factorize such subexprs.
+
+        :arg heuristic: any value in ['greedy', 'aggressive']. With 'greedy', a greedy
+            approach is used to decide which of the expressions for which injection
+            looks beneficial should be dissected (e.g., injection increases the memory
+            footprint, and some memory constraints must always be preserved).
+            With 'aggressive', the whole space of possibilities is analyzed.
         """
+        # The memory threshold. The total size of temporaries will not have to
+        # be greated than this value. If we predict that injection will lead
+        # to too much temporary space, we have to partially drop it
+        threshold = plan.arch['cache_size'] * 1.2
 
         # 1) Find out and unroll injectable loops. For unrolling we create new
         # expressions; that is, for now, we do not modify the AST in place.
@@ -431,6 +444,19 @@ class LoopOptimizer(object):
                             injectable[i_sym.symbol] = (i_expr, unroll_cost)
 
         # 2) Will rewrite mode=3 be cheaper than rewrite mode=2?
+        def find_save(target_expr, expr_info):
+            save_factor = [l.size for l in expr_info.out_domain_loops] or [1]
+            save_factor = reduce(operator.mul, save_factor)
+            # The save factor should be multiplied by the number of terms
+            # that will /not/ be pre-evaluated. To obtain this number, we
+            # can exploit the linearity of the expression in the terms
+            # depending on the domain loops.
+            syms = FindInstances(Symbol).visit(target_expr)[Symbol]
+            inner = lambda s: any(r == expr_info.domain_dims[-1] for r in s.rank)
+            nterms = len(set(s.symbol for s in syms if inner(s)))
+            save = nterms * save_factor
+            return save_factor, save
+
         should_unroll = True
         storage = 0
         i_syms, injected = injectable.keys(), defaultdict(list)
@@ -451,22 +477,12 @@ class LoopOptimizer(object):
                 continue
 
             # Apply the profitability model
+            analysis = OrderedDict()
             for i_syms, target_exprs in dissected.items():
                 for target_expr in target_exprs:
 
                     # *** Save ***
-                    # If injection will be performed, outer loops could
-                    # potentially be evaluated at code generation time
-                    save_factor = [l.size for l in expr_info.out_domain_loops] or [1]
-                    save_factor = reduce(operator.mul, save_factor)
-                    # The save factor should be multiplied by the number of terms
-                    # that will /not/ be pre-evaluated. To obtain this number, we
-                    # can exploit the linearity of the expression in the terms
-                    # depending on the domain loops.
-                    syms = FindInstances(Symbol).visit(target_expr)[Symbol]
-                    inner = lambda s: any(r == expr_info.domain_dims[-1] for r in s.rank)
-                    nterms = len(set(s.symbol for s in syms if inner(s)))
-                    save = nterms * save_factor
+                    save_factor, save = find_save(target_expr, expr_info)
 
                     # *** Cost ***
                     # The number of operations increases by a factor which
@@ -505,15 +521,21 @@ class LoopOptimizer(object):
                     fake_parent[fake_parent.index(fake_stmt)] = stmt
                     cost = nterms * increase_factor
 
-                    # Preevaluation also increases the working set size by
-                    # /cost/ * /sizeof(term)/. If the architecture threshold is
-                    # exceeded, we give up.
-                    size = reduce(operator.mul, [l.size for l in expr_info.domain_loops], 1)
+                    # Pre-evaluation will also increase the working set size by
+                    # /cost/ * /sizeof(term)/.
+                    size = [l.size for l in expr_info.domain_loops]
+                    size = reduce(operator.mul, size, 1)
                     storage_increase = cost * size * plan.arch[expr_info.type]
-                    ths = plan.arch['cache_size'] * 1.2  # Use some more space, empirically
 
-                    # So what's better afterall ?
-                    if cost > save or storage_increase + storage > ths:
+                    # Track the injectable sub-expression and its cost/save. The
+                    # final decision of whether to actually perform injection or not
+                    # is postponed until all dissected expressions have been analyzed
+                    analysis[target_expr] = (cost, save, storage_increase)
+
+            # So what should we inject afterall ? Time to *use* the cost model
+            if heuristics == 'greedy':
+                for target_expr, (cost, save, storage_increase) in analysis.items():
+                    if cost > save or storage_increase + storage > threshold:
                         should_unroll = False
                     else:
                         # Update the available storage
@@ -522,6 +544,48 @@ class LoopOptimizer(object):
                         to_replace = {k: v[0] for k, v in injectable.items()}
                         ast_replace(target_expr, to_replace, copy=True)
                         injected[stmt].append(target_expr)
+            elif heuristics == 'aggressive':
+                # A) Remove expression that we already know should never be injected
+                not_injected = []
+                for target_expr, (cost, save, storage_increase) in analysis.items():
+                    if cost > save:
+                        should_unroll = False
+                        analysis.pop(target_expr)
+                        not_injected.append(target_expr)
+                # B) Find all possible bipartitions: each bipartition represents
+                # the set of expressions that will be pre-evaluated and the set
+                # of expressions that could also be pre-evaluated, but might not
+                # (e.g. because of memory constraints)
+                target_exprs = analysis.keys()
+                bipartitions = []
+                for i in range(len(target_exprs)+1):
+                    for e1 in combinations(target_exprs, i):
+                        bipartitions.append((e1, tuple(e2 for e2 in target_exprs
+                                                       if e2 not in e1)))
+                # C) Eliminate those bipartitions that would lead to exceeding
+                # the memory threshold
+                bipartitions = [(e1, e2) for e1, e2 in bipartitions if
+                                sum(analysis[i][2] for i in e1) <= threshold]
+                # D) Find out what is best to pre-evaluate (and therefore
+                # what should be injected)
+                totals = OrderedDict()
+                for e1, e2 in bipartitions:
+                    # Is there any value in actually not pre-evaluating the
+                    # expressions in /e2/ ?
+                    fake_expr = ast_make_expr(Sum, list(e2) + not_injected)
+                    _, save = find_save(fake_expr, expr_info) if fake_expr else (0, 0)
+                    cost = sum(analysis[i][0] for i in e1)
+                    totals[(e1, e2)] = save + cost
+                best = min(totals, key=totals.get)
+                # At this point, we can happily inject
+                to_replace = {k: v[0] for k, v in injectable.items()}
+                for target_expr in best[0]:
+                    ast_replace(target_expr, to_replace, copy=True)
+                    injected[stmt].append(target_expr)
+                if best[1]:
+                    # At least one non-injected expressions, let's be sure we
+                    # don't unroll everything
+                    should_unroll = False
 
         # 3) Purge the AST from now useless symbols/expressions
         if should_unroll:
