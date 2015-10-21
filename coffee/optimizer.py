@@ -163,6 +163,17 @@ class LoopOptimizer(object):
                     ew.factorize()
                     ew.licm()
 
+            elif expr_info.mode == 5:
+                ew.replacediv()
+                ew.expand(mode='all')
+                ew.factorize(mode='domain')
+                ew.licm(only_const=True)
+                ew.factorize(mode='domain')
+                ew.licm(only_const=True)
+                for i in range(1, expr_info.dimension):
+                    ew.factorize()
+                    ew.licm()
+
         # Try merging the loops created by expression rewriting
         merged_loops = SSALoopMerger(self.expr_graph).merge(self.header)
         # Update the trackers
