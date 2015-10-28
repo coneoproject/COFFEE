@@ -33,38 +33,11 @@
 
 """Utility functions for the transformation of ASTs."""
 
-import resource
-import operator
-from warnings import warn as warning
 from copy import deepcopy as dcopy
 from collections import defaultdict
 
 from base import *
 from coffee.visitors.inspectors import *
-
-
-def increase_stack(loop_opts):
-    """"Increase the stack size it the total space occupied by the kernel's local
-    arrays is too big."""
-    # Assume the size of a C type double is 8 bytes
-    double_size = 8
-    # Assume the stack size is 1.7 MB (2 MB is usually the limit)
-    stack_size = 1.7*1024*1024
-
-    size = 0
-    for loop_opt in loop_opts:
-        decls = loop_opt.decls.values()
-        size += sum([reduce(operator.mul, d.sym.rank) for d in decls if d.sym.rank])
-
-    if size*double_size > stack_size:
-        # Increase the stack size if the kernel's stack size seems to outreach
-        # the space available
-        try:
-            resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY,
-                                                       resource.RLIM_INFINITY))
-        except resource.error:
-            warning("Stack may blow up, and could not increase its size.")
-            warning("In case of failure, lower COFFEE's licm level to 1.")
 
 
 def unroll_factors(loops):
@@ -107,23 +80,21 @@ def postprocess(node):
             Process.decls = {}
             Process.blockable = []
 
-    def init_decl(stmt):
-        if not isinstance(stmt, Assign):
-            return False
-        lhs, rhs = stmt.children
+    def init_decl(node):
+        lhs, rhs = node.children
         decl = Process.decls.get(lhs.symbol)
-        if decl:
+        if decl and (not decl.init or isinstance(decl.init, EmptyStatement)):
             decl.init = rhs
-            return True
-        return False
+            Process.blockable.remove(decl)
+            return decl
+        else:
+            return node
 
     def update(node, parent):
         index = parent.children.index(node)
         if Process.start is None:
             Process.start = index
         Process.end = index
-        if not init_decl(node):
-            Process.blockable.append(node)
 
     def make_blocks():
         for node, start, end, _, blockable in reversed(Process._processed):
@@ -143,8 +114,13 @@ def postprocess(node):
                     not node.sym.rank:
                 Process.decls[node.sym.symbol] = node
             update(node, parent)
-        elif isinstance(node, (Assign, Incr, Decr, IMul, IDiv)):
+            Process.blockable.append(node)
+        elif isinstance(node, AugmentedAssign):
             update(node, parent)
+            Process.blockable.append(node)
+        elif isinstance(node, Assign):
+            update(node, parent)
+            Process.blockable.append(init_decl(node))
 
     _postprocess(node, None)
     make_blocks()
@@ -323,16 +299,23 @@ def ast_make_for(stmts, loop, copy=False):
     return new_loop
 
 
-def ast_make_expr(op, nodes):
+def ast_make_expr(op, nodes, balance=True):
     """Create an ``Expr`` Node of type ``op``, with children given in ``nodes``."""
 
     def _ast_make_expr(nodes):
         return nodes[0] if len(nodes) == 1 else op(nodes[0], _ast_make_expr(nodes[1:]))
 
-    try:
-        return _ast_make_expr(nodes)
-    except IndexError:
+    def _ast_make_bal_expr(nodes):
+        half = len(nodes) / 2
+        return nodes[0] if len(nodes) == 1 else op(_ast_make_bal_expr(nodes[:half]),
+                                                   _ast_make_bal_expr(nodes[half:]))
+
+    if len(nodes) == 0:
         return None
+    elif balance:
+        return _ast_make_bal_expr(nodes)
+    else:
+        return _ast_make_expr(nodes)
 
 
 def ast_make_alias(node1, node2):
@@ -441,6 +424,9 @@ def explore_operator(node):
             else:
                 children.append((n, node))
 
+    while isinstance(node, Par):
+        node = node.child
+
     children = []
     _explore_operator(node, node.__class__, children)
     return children
@@ -524,6 +510,23 @@ def check_type(stmt, decls):
     return type(lhs_decl)
 
 
+def find_expression(node, type=None, dims=None, in_syms=None, out_syms=None):
+    """Wrapper of the FindExpression visitor."""
+    finder = FindExpression(type, dims, in_syms, out_syms)
+    exprs = finder.visit(node, ret=FindExpression.default_retval())
+    if 'cleaned' in exprs:
+        exprs.pop('cleaned')
+    if 'in_syms' in exprs:
+        exprs.pop('in_syms')
+    if 'out_syms' in exprs:
+        exprs.pop('out_syms')
+    if 'inner_syms' in exprs:
+        exprs.pop('inner_syms')
+    if 'in_itspace' in exprs:
+        exprs.pop('in_itspace')
+    return exprs
+
+
 #######################################################################
 # Functions to manipulate iteration spaces in various representations #
 #######################################################################
@@ -562,20 +565,24 @@ class ItSpace():
         elif self.mode == 2:
             raise RuntimeError("Cannot convert from mode=0 to mode=2")
 
-    def merge(self, itspaces):
+    def merge(self, itspaces, within=None):
         """Merge contiguous, possibly overlapping iteration spaces.
         For example (assuming ``self.mode = 0``): ::
 
             [(1,3), (4,6)] -> ((1,6),)
             [(1,3), (5,6)] -> ((1,3), (5,6))
+
+        :arg within: an integer representing the distance between two iteration
+            spaces to be considered adjacent. Defaults to 1.
         """
         itspaces = self._convert_to_mode0(itspaces)
+        within = within or 1
 
         itspaces = sorted(tuple(set(itspaces)))
         merged_itspaces = []
         current_start, current_stop = itspaces[0]
         for start, stop in itspaces:
-            if start - 1 > current_stop:
+            if start - within > current_stop:
                 merged_itspaces.append((current_start, current_stop))
                 current_start, current_stop = start, stop
             else:
@@ -596,12 +603,13 @@ class ItSpace():
         """
         itspaces = self._convert_to_mode0(itspaces)
 
-        if len(itspaces) in [0, 1]:
+        if len(itspaces) == 0:
             return ()
-        itspaces = [set(range(i[0], i[1])) for i in itspaces]
-        itspace = set.intersection(*itspaces)
-        itspace = sorted(list(itspace)) or [0, -1]
-        itspaces = [(itspace[0], itspace[-1]+1)]
+        elif len(itspaces) > 1:
+            itspaces = [set(range(i[0], i[1])) for i in itspaces]
+            itspace = set.intersection(*itspaces)
+            itspace = sorted(list(itspace)) or [0, -1]
+            itspaces = [(itspace[0], itspace[-1]+1)]
 
         itspace = self._convert_from_mode0(itspaces)[0]
         return itspace
@@ -634,6 +642,10 @@ any_in = lambda a, b: any(i in b for i in a)
 flatten = lambda list: [i for l in list for i in l]
 bind = lambda a, b: [(a, v) for v in b]
 od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
+
+
+def is_const_dim(d):
+    return isinstance(d, int) or (isinstance(d, str) and d.isdigit())
 
 
 def insert_at_elem(_list, elem, new_elem, ofs=0):

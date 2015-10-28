@@ -449,6 +449,11 @@ class Symbol(Expr):
     def dim(self):
         return len(self.rank)
 
+    @property
+    def is_const(self):
+        from utils import is_const_dim
+        return all(is_const_dim(r) for r in self.rank)
+
     def gencode(self, not_scope=True, parent=None):
         points = ""
         if not self.offset:
@@ -647,9 +652,13 @@ class Decl(Statement):
         self.qual = qualifiers or []
         self.attr = attributes or []
         self.init = as_symbol(init) if init is not None else EmptyStatement()
+        self._core = self.sym.rank
 
     def operands(self):
         return [self.typ, self.sym, self.init, self.qual, self.attr], {}
+
+    def pad(self, rank):
+        self.sym.rank = rank
 
     @property
     def lvalue(self):
@@ -673,6 +682,15 @@ class Decl(Statement):
           -> ``(20, 10)``)
         """
         return self.sym.rank or (0,)
+
+    @property
+    def core(self):
+        """Return the size of the declaraed variable without including padding."""
+        return self._core
+
+    @core.setter
+    def core(self, val):
+        self._core = val
 
     @property
     def is_const(self):
@@ -809,10 +827,11 @@ class For(Statement):
         self.children[0].children = new_body
 
     def gencode(self, not_scope=False):
-        return "\n".join(self.pragma) + "\n" + for_loop(self.init.gencode(True),
-                                                        self.cond.gencode(),
-                                                        self.incr.gencode(True),
-                                                        self.children[0].gencode())
+        pragma = [i for i in self.pragma if 'coffee' not in i]
+        return "\n".join(pragma) + "\n" + for_loop(self.init.gencode(True),
+                                                   self.cond.gencode(),
+                                                   self.incr.gencode(True),
+                                                   self.children[0].gencode())
 
 
 class Switch(Statement):
@@ -1180,11 +1199,15 @@ IDIV = Access("IDIV")
 
 class Scope(object):
 
-    """An ``EXTERNAL`` scope means the /Decl/ is an argument of a kernel (i.e.,
-    when it appears in the list of declarations of a /FunDecl/ object). Otherwise,
-    a ``LOCAL`` scope indicates the /Decl/ is within the body of a kernel."""
+    """Three /Scope/s are possible:
 
-    _scopes = ["LOCAL", "EXTERNAL"]
+        * ``EXTERNAL``: the /Decl/ is a kernel argument
+        * ``LOCAL``: the /Decl/ lives within the kernel body
+        * ``BUFFER``: the /Decl/ is ``LOCAL``, but it is special in that it maps
+            data from an ``EXTERNAL`` /Decl/
+    """
+
+    _scopes = ["LOCAL", "EXTERNAL", "BUFFER"]
 
     def __init__(self, scope):
         if scope not in Scope._scopes:
@@ -1196,3 +1219,4 @@ class Scope(object):
 
 LOCAL = Scope("LOCAL")
 EXTERNAL = Scope("EXTERNAL")
+BUFFER = Scope("BUFFER")

@@ -4,12 +4,10 @@ from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol
 from collections import defaultdict, OrderedDict, Counter
 import itertools
 
-__all__ = ["FindInnerLoops", "CheckPerfectLoop",
-           "CountOccurences", "DetermineUnrollFactors",
-           "MaxLoopDepth", "FindLoopNests",
-           "FindCoffeeExpressions", "SymbolReferences",
-           "SymbolDependencies", "SymbolModes",
-           "SymbolDeclarations", "FindInstances"]
+__all__ = ["FindInnerLoops", "CheckPerfectLoop", "CountOccurences",
+           "DetermineUnrollFactors", "MaxLoopDepth", "FindLoopNests",
+           "FindCoffeeExpressions", "SymbolReferences", "SymbolDependencies",
+           "SymbolModes", "SymbolDeclarations", "FindInstances", "FindExpression"]
 
 
 class FindInnerLoops(Visitor):
@@ -581,4 +579,84 @@ class FindInstances(Visitor):
         ops, _ = o.operands()
         for op in ops:
             ret = self.visit(op, ret=ret, parent=o)
+        return ret
+
+
+class FindExpression(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return defaultdict(list)
+
+    """
+    Visit the expression tree and return a list of (sub-)expressions matching
+    particular criteria.
+
+    :arg type: (optional) establish the matching expression' root operator(s),
+        such as Sum, Sub, ...
+    :arg dims: (optional) a tuple, each entry representing an iteration space
+        dimension. Expressions' symbols must iterate along one of these iteration
+        space dimensions.
+    :arg in_syms: (optional) expressions must include at least one of the symbols
+        in this argument.
+    :arg out_syms: (optional) expressions must exclude all of the symbols in
+        this argument.
+    """
+
+    def __init__(self, type=None, dims=None, in_syms=None, out_syms=None):
+        self.type = type
+        self.dims = dims
+        self.in_syms = in_syms
+        self.out_syms = out_syms or []
+        super(FindExpression, self).__init__()
+
+    def visit_object(self, o, *args, **kwargs):
+        return self.default_retval()
+
+    def visit_Expr(self, o, parent=None, *args, **kwargs):
+        ret = self.default_retval()
+        for i in [self.visit(n, parent=o, *args, **kwargs) for n in o.children]:
+            for k, v in i.items():
+                ret[k].extend([j for j in v if j not in ret[k]])
+        if not ret['cleaned'] and all(i in ret for i in ['in_syms', 'in_itspace']):
+            # Create key for expression /o/
+            key = set(ret['in_syms'])
+            key |= {j for j in ret['inner_syms']}
+            key = tuple(sorted(key))
+            if not self.type or isinstance(o, self.type):
+                if self.type and isinstance(parent, self.type):
+                    # Postpone expression tracking because the parent has same type
+                    # as the node currently being visited
+                    pass
+                else:
+                    # Pop inner subexpressions, than push the parent one, since
+                    # it represents a larger match
+                    for k, v in ret.items():
+                        if set(k).issubset(key):
+                            ret.pop(k)
+                    # Does this subexpression /o/ include any of the forbidden symbols ?
+                    if not any(i in key for i in ret['out_syms']):
+                        # Yay, NO, track it
+                        ret[key] = [o]
+                    else:
+                        # Yes. The first time we match an /out_sym/ we still have to go
+                        # through the /else/ above to remove the inner subexpressions,
+                        # but we should do it only once. 'cleaned' prevents popping
+                        # from happening multiple times
+                        ret['cleaned'] = [True]
+            else:
+                ret.pop('in_syms')
+        return ret
+
+    visit_FunCall = visit_Expr
+
+    def visit_Symbol(self, o, *args, **kwargs):
+        ret = self.default_retval()
+        if self.in_syms is None or o.symbol in self.in_syms:
+            ret['in_syms'] = [o.symbol]
+            ret['inner_syms'] = [o.symbol]
+        if o.symbol in self.out_syms:
+            ret['out_syms'] = [o.symbol]
+        if self.dims is None or any(r in self.dims for r in o.rank):
+            ret['in_itspace'] = [True]
         return ret

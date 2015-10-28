@@ -43,7 +43,7 @@ from copy import deepcopy as dcopy
 
 from base import *
 from utils import *
-from expression import MetaExpr, copy_metaexpr
+from expression import copy_metaexpr
 from coffee.visitors import FindLoopNests
 
 
@@ -215,131 +215,275 @@ class SSALoopMerger(LoopScheduler):
 
 class ExpressionFissioner(LoopScheduler):
 
-    """Analyze data dependencies and iteration spaces, then fission associative
-    operations in expressions.
-    Fissioned expressions are placed in a separate loop nest."""
+    """Split expressions embedded in a loop nest."""
 
-    def __init__(self, cut):
+    def __init__(self, **kwargs):
         """Initialize the ExpressionFissioner.
 
-        :param cut: number of operands requested to fission expressions."""
-        self.cut = cut
+        :arg kwargs:
+            * cut: the number of operands an expression should be fissioned into
+            * match: a list of subexpressions that should be cut from the input
+                expression. ``cut`` is ignored if ``match`` is provided.
+            * loops: a value in ['all', 'expr', 'none']. 'all' means that an
+                expression is split, and its chunks are placed in separate loop
+                nests. 'expr' implies that the chunks share the outer loops of the
+                expression, particularly those not belonging to its domain. 'none'
+                means that all chunks are placed within the original loop nest
+            * perfect: if True, create perfect loop nests. This means that any
+                new loop nest in which a chunk is placed is purged from any extra
+                statement (apart, obviously, from the chunk itself)
+        """
+        self.cut = kwargs.get('cut', -1)
+        self.match = [str(i) for i in kwargs.get('match', [])]
+        self.loops = kwargs.get('loops', 'expr')
+        self.perfect = kwargs.get('perfect', False)
 
-    def _split_sum(self, node, parent, is_left, found, sum_count):
-        """Exploit sum's associativity to cut node when a sum is found.
-        Return ``True`` if a potentially splittable node is found, ``False``
-        otherwise."""
-        if isinstance(node, Symbol):
-            return False
-        elif isinstance(node, Par):
-            return self._split_sum(node.child, (node, 0), is_left, found, sum_count)
-        elif isinstance(node, Prod) and found:
-            return False
-        elif isinstance(node, Prod) and not found:
-            if not self._split_sum(node.left, (node, 0), is_left, found, sum_count):
-                return self._split_sum(node.right, (node, 1), is_left, found, sum_count)
-            return True
-        elif isinstance(node, Sum):
-            sum_count += 1
-            if not found:
-                # Track the first Sum we found while cutting
-                found = parent
-            if sum_count == self.cut:
-                # Perform the cut
-                if is_left:
-                    parent, parent_leaf = parent
-                    parent.children[parent_leaf] = node.left
-                else:
-                    found, found_leaf = found
-                    found.children[found_leaf] = node.right
-                return True
-            else:
-                if not self._split_sum(node.left, (node, 0), is_left, found, sum_count):
-                    return self._split_sum(node.right, (node, 1), is_left, found, sum_count)
-                return True
+        if 'match' in kwargs:
+            self.cutter = self.CutterMatch(self)
+        elif self.cut > 0:
+            self.cutter = self.CutterSum(self)
         else:
-            raise RuntimeError("Split error: found unknown node: %s" % str(node))
+            raise RuntimeError("Must specify a `cut` or a `match`.")
 
-    def _sum_fission(self, stmt_info, copy_loops):
-        """Split an expression after ``cut`` operands. This results in two
-        sub-expressions that are placed in different, although identical
-        loop nests if ``copy_loops`` is true; they are placed in the same
-        original loop nest otherwise. Return the two split expressions as a
-        2-tuple, in which the second element is potentially further splittable."""
+    class Cutter():
 
-        stmt, expr_info = stmt_info
-        expr_parent = expr_info.parent
-        domain_outerloop, domain_outerparent = expr_info.domain_loops_info[0]
+        def __init__(self, expr_fissioner):
+            self.expr_fissioner = expr_fissioner
 
-        # Copy the original expression twice, and then split the two copies, that
-        # we refer to as ``left`` and ``right``, meaning that the left copy will
-        # be transformed in the sub-expression from the origin up to the cut point,
-        # and analoguously for right.
-        # For example, consider the expression a*b + c*d; the cut point is the sum
-        # operator. Therefore, the left part is a*b, whereas the right part is c*d
-        stmt_left = dcopy(stmt)
-        stmt_right = dcopy(stmt)
-        expr_left = Par(stmt_left.children[1])
-        expr_right = Par(stmt_right.children[1])
-        sleft = self._split_sum(expr_left.children[0], (expr_left, 0), True, None, 0)
-        sright = self._split_sum(expr_right.children[0], (expr_right, 0), False, None, 0)
+        def cut(self, node):
+            """
+            Split ``node`` into /two halves/, called /split/ and /remainder/
 
-        if sleft and sright:
-            index = expr_parent.children.index(stmt)
+            For example, consider the expression a*b + c*d; if the expression is cut
+            into chunks containing only one operand (i.e., self.cut=1), then we have
+            precisely two chunks, /split/ = a*b, /remainder/ = c*d
 
-            # Append the left-split expression, reusing existing loop nest
-            expr_parent.children[index] = stmt_left
-            split = (stmt_left, MetaExpr(expr_info.type,
-                                         expr_parent,
-                                         expr_info.loops_info,
-                                         expr_info.domain_dims))
+            If the input expression is a*b + c*d + e*f, and still self.cut=1, then we
+            have two chunks, /split/ = a*b, /remainder/ = c*d + e*f; that is,
+            /remainder/ always contains the subexpression after the fission point
+            """
+            self._success = False
+            left = dcopy(node)
+            self._cut(left.children[1], left, 'split')
 
-            # Append the right-split (remainder) expression
-            if copy_loops:
-                # Create a new loop nest
-                new_domain_outerloop = dcopy(domain_outerloop)
-                new_domain_innerloop = new_domain_outerloop.body[0]
-                new_domain_innerloop_block = new_domain_innerloop.children[0]
-                new_domain_innerloop_block.children[0] = stmt_right
-                new_domain_outerloop_info = (new_domain_outerloop,
-                                             domain_outerparent)
-                new_domain_innerloop_info = (new_domain_innerloop,
-                                             new_domain_innerloop_block)
-                new_loops_info = expr_info.out_domain_loops_info + \
-                    (new_domain_outerloop_info,) + (new_domain_innerloop_info,)
-                domain_outerparent.children.append(new_domain_outerloop)
+            self._success = False
+            right = dcopy(node)
+            self._cut(right.children[1], right, 'remainder')
+
+            return left, right
+
+    class CutterSum(Cutter):
+
+        def _cut(self, node, parent, side, topsum=None):
+            if isinstance(node, (Symbol, FunCall)):
+                return 0
+
+            elif isinstance(node, (Par, Div)):
+                return self._cut(node.children[0], node, side, topsum)
+
+            elif isinstance(node, Prod):
+                if topsum:
+                    return 0
+                if self._cut(node.left, node, side, topsum) == 0:
+                    return self._cut(node.right, node, side, topsum)
+                # Prods zero the sum/sub counter
+                return 0
+
+            elif isinstance(node, (Sum, Sub)):
+                topsum = topsum or (parent, parent.children.index(node))
+                counter = 1
+                counter += self._cut(node.left, node, side, topsum)
+                counter += self._cut(node.right, node, side, topsum)
+                if not self._success and counter >= self.expr_fissioner.cut:
+                    # We now are on the topleft sum of this sub-expression such
+                    # that enough sum/sub have been encountered
+                    if not parent:
+                        return 0
+                    self._success = True
+                    if side == 'split':
+                        topsum[0].children[topsum[1]] = node.left
+                    else:
+                        right = Neg(node.right) if isinstance(node, Sub) else node.right
+                        parent.children[parent.children.index(node)] = right
+                    return counter
+                else:
+                    return counter
+
             else:
-                # Reuse loop nest created in the previous function call
-                expr_parent.children.insert(index, stmt_right)
-                new_domain_innerloop_block = expr_parent
-                new_loops_info = expr_info.loops_info
-            splittable = (stmt_right, MetaExpr(expr_info.type,
-                                               new_domain_innerloop_block,
-                                               new_loops_info,
-                                               expr_info.domain_dims))
-            return (split, splittable)
-        return ((stmt, expr_info), ())
+                raise RuntimeError("Fission error: found unknown node: %s" % str(node))
 
-    def fission(self, stmt, expr_info, copy_loops):
-        """Split an expression containing ``x`` summands into ``x/cut`` chunks.
-        Each chunk is placed in a separate loop nest if ``copy_loops`` is true,
-        in the same loop nest otherwise. In the former case, the split occurs
-        in the largest perfect loop nest wrapping the expression in ``stmt``.
-        Return a dictionary of all of the split chunks, which associates the split
-        statements to meta data (in terms of ``MetaExpr`` objects)
+        def cut(self, node, expr_info):
+            left, right = ExpressionFissioner.Cutter.cut(self, node)
+            if self._success:
+                index = expr_info.parent.children.index(node)
 
-        :param stmt: AST statement containing the expression to be fissioned
-        :param expr_info: ``MetaExpr`` object describing the expression in ``stmt``
-        :param copy_loops: true if the split expressions should be placed in two
-                           separate, adjacent loop nests (iterating, of course,
-                           along the same iteration space); false, otherwise."""
+                # Append /left/ to the original loop nest
+                expr_info.parent.children[index] = left
+                split = (left, copy_metaexpr(expr_info))
 
-        split_stmts = {}
-        splittable_stmt = (stmt, expr_info)
-        while splittable_stmt:
-            split_stmt, splittable_stmt = self._sum_fission(splittable_stmt, copy_loops)
-            split_stmts[split_stmt[0]] = split_stmt[1]
-        return split_stmts
+                # Append /right/ ...
+                if self.expr_fissioner.loops in ['expr', 'all']:
+                    # ... in a new loop nest ...
+                    right_info = self.expr_fissioner._embedexpr(right, expr_info)
+                else:
+                    # ... to the original loop nest
+                    expr_info.parent.children.insert(index, right)
+                    right_info = copy_metaexpr(expr_info)
+                splittable = (right, right_info)
+
+                return (split, splittable)
+            return ((node, expr_info), ())
+
+    class CutterMatch(Cutter):
+
+        def __init__(self, expr_fissioner):
+            ExpressionFissioner.Cutter.__init__(self, expr_fissioner)
+            self.matched = []
+
+        def _cut(self, node, parent, side, topsum=None):
+            if not self._success and str(node) in self.expr_fissioner.match:
+                # We initially assume that the found 'match' corresponds
+                # to the entire node provided as input to the /CutterMatch/.
+                # Recurring back, we might switch /_success/ to 'match_and_cut',
+                # if /node/ actually was a summand of a Sum/Sub
+                self._success = 'match'
+                return node
+
+            elif isinstance(node, (Symbol, FunCall)):
+                return None
+
+            elif isinstance(node, Par):
+                return self._cut(node.child, node, side, topsum)
+
+            elif isinstance(node, Div):
+                return self._cut(node.left, node, side)
+
+            elif isinstance(node, Prod):
+                cutting = self._cut(node.left, node, side)
+                if cutting:
+                    # Found a match /within/ /node.left/; for correctness, we
+                    # need to be sure we will be cutting the whole Prod, so we
+                    # return /node/ instead of /cutting/.
+                    return node
+                cutting = self._cut(node.right, node, side)
+                if cutting:
+                    # Same as above
+                    return node
+                return None
+
+            elif isinstance(node, (Sum, Sub)):
+                topsum = topsum or (parent, parent.children.index(node))
+                # Find out if one of the two children is cuttable
+                cutting = self._cut(node.left, node, side, topsum)
+                if cutting and side == 'remainder':
+                    # Need to swap
+                    cutting = node.right
+                elif not cutting:
+                    cutting = self._cut(node.right, node, side, topsum)
+                    if cutting and side == 'remainder':
+                        # Need to swap
+                        cutting = node.left
+                if not cutting:
+                    return None
+                # Adjust if a Sub
+                if isinstance(node, Sub) and cutting == node.right:
+                    cutting = Neg(cutting)
+                self._success = 'match_and_cut'
+                if side == 'split':
+                    # In a tree of Sum/Subs, only the /top/ Sum/Sub performs the
+                    # actual cut, while the others just propagate upwards the
+                    # notification "a cut point was found"
+                    if parent == topsum[0]:
+                        topsum[0].children[topsum[1]] = cutting
+                        return parent
+                    else:
+                        return cutting
+                else:
+                    parent.children[parent.children.index(node)] = cutting
+                    return None
+
+            else:
+                raise RuntimeError("Fission error: found unknown node: %s" % str(node))
+
+        def cut(self, node, expr_info):
+            left, right = ExpressionFissioner.Cutter.cut(self, node)
+
+            if self._success == 'match_and_cut':
+                # Append /left/ to a new loop nest
+                split = (left, self.expr_fissioner._embedexpr(left, expr_info))
+                self.matched.append(left)
+
+                # Append /right/ to the original loop nest
+                index = expr_info.parent.children.index(node)
+                expr_info.parent.children[index] = right
+                splittable = (right, copy_metaexpr(expr_info))
+                return (split, splittable)
+
+            elif self._success == 'match':
+                # A match was actualy found, but there's just nothing to cut
+                # (i.e., the /match/ is a direct child of /node/)
+                self.matched.append(node)
+
+            return ((node, expr_info), ())
+
+    def _embedexpr(self, stmt, expr_info):
+        """Build a loop nest for ``stmt`` and return its :class:`MetaExpr` object."""
+        if self.loops == 'none':
+            return copy_metaexpr(expr_info)
+
+        # Handle the domain loops
+        domain_loops = ItSpace(mode=2).to_for(expr_info.domain_loops, stmts=[stmt])
+        domain_outerloop = domain_loops[0]
+
+        # Handle the out-domain loops
+        if self.loops == 'all' and expr_info.out_domain_loops_info:
+            out_domain_loop, out_domain_loop_parent = expr_info.out_domain_loops_info[0]
+            index = out_domain_loop.body.index(expr_info.domain_loops[0])
+            out_domain_loop = dcopy(out_domain_loop)
+            if self.perfect:
+                out_domain_loop.body[:] = [domain_outerloop]
+            else:
+                out_domain_loop.body[index] = domain_outerloop
+            out_domain_loops_info = ((out_domain_loop, out_domain_loop_parent),)
+            domain_outerloop_parent = out_domain_loop.children[0]
+        else:
+            out_domain_loops_info = expr_info.out_domain_loops_info
+            domain_outerloop_parent = expr_info.domain_loops_parents[0]
+
+        # Build new loops info
+        finder, env = FindLoopNests(), {'node_parent': domain_outerloop_parent}
+        loops_info = out_domain_loops_info
+        loops_info += tuple(finder.visit(domain_outerloop, env=env)[0])
+
+        # Append the newly created loop nest
+        if self.loops == 'all' and expr_info.out_domain_loops_info:
+            expr_info.outermost_parent.children.append(out_domain_loop)
+        else:
+            domain_outerloop_parent.children.append(domain_outerloop)
+
+        # Finally, create and return the MetaExpr object
+        parent = loops_info[-1][0].children[0]
+        return copy_metaexpr(expr_info, parent=parent, loops_info=loops_info)
+
+    @property
+    def matched(self):
+        return self.cutter.matched if self.match else []
+
+    def fission(self, stmt, expr_info):
+        """Split, or fission, an expression ``stmt``, whose metadata are provided
+        through ``expr_info``.
+
+        Return a dictionary mapping expression chunks to :class:`MetaExpr` objects.
+
+        :arg stmt: the expression to be fissioned
+        :arg expr_info: ``MetaExpr`` object describing ``stmt``
+        """
+        exprs = OrderedDict()
+        splittable = (stmt, expr_info)
+        while splittable:
+            split, splittable = self.cutter.cut(*splittable)
+            exprs[split[0]] = split[1]
+        return exprs
 
 
 class ZeroRemover(LoopScheduler):
@@ -376,7 +520,7 @@ class ZeroRemover(LoopScheduler):
         self.decls = decls
         self.hoisted = hoisted
 
-    def _track_nz_expr(self, node, nz_in_syms, nest):
+    def _track_nz_expr(self, node, nz_syms, nest):
         """For the expression rooted in ``node``, return iteration space and
         offset required to iterate over non zero-valued blocks. For example: ::
 
@@ -385,9 +529,11 @@ class ZeroRemover(LoopScheduler):
                 A[i][j] = B[i]*C[j]
 
         If B along `i` is non-zero in ranges [0, k1] and [k2, k3], while C along
-        `j` is non-zero in range [N-k4, N], return the following dictionary: ::
+        `j` is non-zero in range [N-k4, N], return the intersection of the non-zero
+        regions as: ::
 
-            {i: [(k1, 0), (k3-k2, k2)], j: [(N-(N-k4), N-k4)]}
+            [(('i', k1, 0), ('j', N-(N-k4), N-k4))),
+             (('i', k3-k2, k2), ('j', N-(N-k4), N-k4))]
 
         That is, for each iteration space variable, return a list of 2-tuples,
         in which the first entry represents the size of the iteration space,
@@ -396,17 +542,24 @@ class ZeroRemover(LoopScheduler):
         """
 
         if isinstance(node, Symbol):
-            itspace = OrderedDict([(l.dim, [(l.size, 0)]) for l, p in nest])
-            nz_bounds = nz_in_syms.get(node.symbol, ())
-            for r, o, nz_bs in zip(node.rank, node.offset, nz_bounds):
+            itspace = []
+            def_itspace = [tuple((l.dim, (l.size, 0)) for l, p in nest)]
+            nz_bounds = zip(*nz_syms.get(node.symbol, []))
+            for i, (r, o, nz_bs) in enumerate(zip(node.rank, node.offset, nz_bounds)):
                 if o[0] != 1 or isinstance(o[1], str):
                     # Cannot handle jumps nor non-integer offsets
                     continue
                 try:
+                    # Let's see if I know the loop which defines the iteration
+                    # space of dimension /r/ ...
                     loop = [l for l, p in nest if l.dim == r][0]
                 except:
-                    # No loop means constant access along /r/
+                    # ... whops! No, so I just assume it covers the entire
+                    # non zero-valued region
+                    itspace.append([(r, nz_b) for nz_b in nz_bs])
                     continue
+                # Now I can intersect the loop's iteration space with the non
+                # zero-valued regions
                 offset = o[1]
                 r_size_ofs = []
                 for nz_b in nz_bs:
@@ -415,42 +568,54 @@ class ZeroRemover(LoopScheduler):
                     start = max(offset, nz_b_offset)
                     r_offset = start - offset
                     r_size = max(min(offset + loop.size, end) - start, 0)
-                    r_size_ofs.append((r_size, r_offset))
-                itspace[r] = r_size_ofs
+                    r_size_ofs.append((r, (r_size, r_offset)))
+                itspace.append(r_size_ofs)
+            itspace = zip(*itspace) or def_itspace
             return itspace
 
         elif isinstance(node, (Par, FunCall)):
-            return self._track_nz_expr(node.children[0], nz_in_syms, nest)
+            return self._track_nz_expr(node.children[0], nz_syms, nest)
 
         else:
-            itspace_l = self._track_nz_expr(node.left, nz_in_syms, nest)
-            itspace_r = self._track_nz_expr(node.right, nz_in_syms, nest)
-            # Take the intersection of the iteration spaces
+            itspace_l = self._track_nz_expr(node.left, nz_syms, nest)
+            itspace_r = self._track_nz_expr(node.right, nz_syms, nest)
             itspace = OrderedDict()
-            itspace.update(itspace_l)
-            for r_r, r_size_ofs in itspace_r.items():
-                if r_r not in itspace:
-                    itspace[r_r] = r_size_ofs
-                l_size_ofs = itspace[r_r]
-                if isinstance(node, (Prod, Div)):
-                    to_intersect = product(l_size_ofs, r_size_ofs)
-                    size_ofs = [ItSpace(mode=1).intersect(b) for b in to_intersect]
+            for l in itspace_l:
+                for i, size_ofs in l:
+                    itspace.setdefault(i, []).append(size_ofs)
+            asdict = OrderedDict()
+            for r in itspace_r:
+                for i, size_ofs in r:
+                    asdict.setdefault(i, []).append(size_ofs)
+            itspace_r = asdict
+            for i, size_ofs in itspace_r.items():
+                if i not in itspace:
+                    itspace[i] = size_ofs
+                elif isinstance(node, (Prod, Div)):
+                    result = []
+                    for j in product(itspace[i], size_ofs):
+                        # Products over zero-valued regions are ininfluent
+                        result += [ItSpace(mode=1).intersect(j)]
+                    itspace[i] = result
                 elif isinstance(node, (Sum, Sub)):
-                    size_ofs = ItSpace(mode=1).merge(l_size_ofs + r_size_ofs)
+                    # Sums over zeros remove the zero-valued region (in other words,
+                    # the non zero-valued regions get /merged/)
+                    itspace[i] = ItSpace(mode=1).merge(itspace[i] + size_ofs)
                 else:
                     raise RuntimeError("Zero-avoidance: unexpected op %s", str(node))
-                itspace[r_r] = size_ofs
+            itspace = [zip(itspace, i) for i in product(*itspace.values())]
+            itspace = list(set([tuple(i) for i in itspace]))
             return itspace
 
-    def _track_nz_blocks(self, node, nz_in_syms, nz_info, nest=None, parent=None):
+    def _track_nz_blocks(self, node, nz_syms, nz_info, nest=None, parent=None):
         """Track the propagation of zero-valued blocks in the AST rooted in ``node``
 
-        ``nz_in_syms`` contains, for each known identifier, the ranges of
+        ``nz_syms`` contains, for each known identifier, the ranges of
         its non zero-valued blocks. For example, assuming identifier A is an
         array and has non-zero values in positions [0, k] and [N-k, N], then
-        ``nz_in_syms`` will contain an entry {"A": ((0, k), (N-k, N))}.
+        ``nz_syms`` will contain an entry {"A": ((0, k), (N-k, N))}.
         If A is modified by some statements rooted in ``node``, then
-        ``nz_in_syms["A"]`` will be modified accordingly.
+        ``nz_syms["A"]`` will be modified accordingly.
 
         This method also populates ``nz_info``, which maps loop nests to the
         enclosed symbols' non-zero blocks. For example, given the following
@@ -471,36 +636,51 @@ class ZeroRemover(LoopScheduler):
         """
         if isinstance(node, (Assign, Incr, Decr)):
             sym, expr = node.children
-            symbol, rank = sym.symbol, sym.rank
 
             # Note: outer, non-perfect loops are discarded for transformation
-            # safety. In fact, splitting non-perfect loop nests inherently
-            # breaks the code
+            # safety, because splitting (which is a consequence of zero-removal)
+            # non-perfect loop nests is unsafe
             nest = tuple([(l, p) for l, p in (nest or []) if is_perfect_loop(l)])
             if not nest:
                 return
 
-            # Track the propagation of non zero-valued blocks. If it is not the
-            # first time that /symbol/ is encountered, info get merged.
-            itspace = self._track_nz_expr(expr, nz_in_syms, nest)
-            if not all([r in itspace for r in rank]):
-                return
-            nz_in_expr = tuple(itspace[r] for r in rank)
-            if symbol in nz_in_syms:
-                nz_in_expr = tuple([ItSpace(mode=1).merge(flatten(i)) for i in
-                                    zip(nz_in_expr, nz_in_syms[symbol])])
-            nz_in_syms[symbol] = nz_in_expr
+            # Track the propagation of non zero-valued blocks: ...
+            # ... within the rvalue
+            itspaces = self._track_nz_expr(expr, nz_syms, nest)
+            for i in itspaces:
+                # ... and then through the lvalue (merging overlaps)
+                nz_expr = tuple(dict(i).get(r) for r in sym.rank if not isinstance(r, int))
+                if any(j is None for j in nz_expr):
+                    return
+                nz_node = list(nz_syms.setdefault(sym.symbol, [nz_expr]))
+                if not nz_expr:
+                    continue
+                merged = False
+                for e, j in enumerate(nz_node):
+                    # Merging condition: complete overlap in all dimensions but
+                    # the innermost one, for which partial overlap is accepted
+                    inner_merge = ItSpace(mode=1).merge([nz_expr[-1], j[-1]])
+                    if len(inner_merge) == 1 and \
+                            all(ItSpace(mode=1).intersect([m, n]) == m for m, n in
+                                zip(nz_expr[:-1], j[:-1])):
+                        nz_syms[sym.symbol][e] = j[:-1] + tuple(inner_merge)
+                        merged = True
+                        break
+                if not merged:
+                    nz_syms[sym.symbol].append(nz_expr)
 
             # Record loop nest bounds and memory offsets for /node/
-            nz_info.setdefault(nest, []).append((node, itspace))
+            dims = [l.dim for l, p in nest]
+            itspaces = [tuple(j for j in i if j[0] in dims) for i in itspaces]
+            nz_info.setdefault(nest, []).append((node, itspaces))
 
         elif isinstance(node, For):
             new_nest = (nest or []) + [(node, parent)]
-            self._track_nz_blocks(node.children[0], nz_in_syms, nz_info, new_nest, node)
+            self._track_nz_blocks(node.children[0], nz_syms, nz_info, new_nest, node)
 
         elif isinstance(node, (Root, Block)):
             for n in node.children:
-                self._track_nz_blocks(n, nz_in_syms, nz_info, nest, node)
+                self._track_nz_blocks(n, nz_syms, nz_info, nest, node)
 
         elif isinstance(node, (If, Switch)):
             raise RuntimeError("Unexpected control flow while tracking zero blocks")
@@ -533,18 +713,25 @@ class ZeroRemover(LoopScheduler):
         A dictionary describing the structure of the new iteration spaces is
         returned.
         """
-
-        # 1) Identify the initial sparsity pattern of the symbols in /root/
-        nz_in_syms = {s: d.nonzero for s, d in self.decls.items() if d.nonzero}
         nz_info = OrderedDict()
 
-        # 2) Track propagation of non-zero blocks by symbolic execution. This
-        # has the effect of populating /nz_info/
-        self._track_nz_blocks(root, nz_in_syms, nz_info)
+        # 1) Elaborate the initial sparsity pattern of the symbols in /root/
+        nz_syms = defaultdict(list)
+        for s, d in self.decls.items():
+            if not d.nonzero:
+                continue
+            for nz_b in product(*d.nonzero):
+                entries = [range(i[1], i[1] + i[0]) for i in nz_b]
+                if not np.all(d.init.values[np.ix_(*entries)] == 0.0):
+                    nz_syms[s].append(nz_b)
+
+        # 2) Track the propagation of non zero-valued blocks through symbolic
+        # execution. This populates /nz_info/ and updates /nz_syms/
+        self._track_nz_blocks(root, nz_syms, nz_info)
 
         # 3) At this point we know where non-zero blocks are located, so we have
         # to create proper loop nests to access them
-        track_exprs, new_nz_info = {}, {}
+        new_exprs, new_nz_info = OrderedDict(), OrderedDict()
         for nest, stmt_itspaces in nz_info.items():
             loops, loops_parents = zip(*nest)
             fissioned_nests = defaultdict(list)
@@ -552,19 +739,19 @@ class ZeroRemover(LoopScheduler):
             for stmt, itspaces in stmt_itspaces:
                 sym, expr = stmt.children
                 # For each non zero-valued region iterated over...
-                for dim_size_ofs in [zip(itspaces, x) for x in product(*itspaces.values())]:
-                    dim_offset = dict([(d, o) for d, (sz, o) in dim_size_ofs])
-                    dim_size = tuple([((0, sz), d) for d, (sz, o) in dim_size_ofs])
+                for i in itspaces:
+                    dim_offset = {d: o for d, (sz, o) in i}
+                    dim_size = tuple(((0, dict(i)[l.dim][0]), l.dim) for l in loops)
                     # ...add an offset to /stmt/ to access the correct values
                     new_stmt = ast_update_ofs(dcopy(stmt), dim_offset, increase=True)
                     # ...add /stmt/ to a new, shorter loop nest
                     fissioned_nests[dim_size].append((new_stmt, dim_offset))
                     # ...initialize arrays to 0.0 for correctness
                     if sym.symbol in self.hoisted:
-                        self.hoisted[sym.symbol].decl.init = ArrayInit("{0.0}")
+                        self.hoisted[sym.symbol].decl.init = ArrayInit(np.array([0.0]))
                     # ...track fissioned expressions
                     if stmt in self.exprs:
-                        track_exprs[new_stmt] = self.exprs[stmt]
+                        new_exprs[new_stmt] = self.exprs[stmt]
             # Generate the fissioned loop nests
             # Note: the dictionary is sorted because smaller loop nests should
             # be executed first, since larger ones depend on them
@@ -578,20 +765,122 @@ class ZeroRemover(LoopScheduler):
                     # ... populate it
                     new_loops[-1].body.append(stmt)
                     # ... and update tracked data
-                    if stmt in track_exprs:
+                    if stmt in new_exprs:
                         new_nest = zip(new_loops, loops_parents)
-                        self.exprs[stmt] = copy_metaexpr(track_exprs[stmt],
-                                                         parent=new_loops[-1].body,
-                                                         loops_info=new_nest)
+                        new_exprs[stmt] = copy_metaexpr(new_exprs[stmt],
+                                                        parent=new_loops[-1].body,
+                                                        loops_info=new_nest)
                     self.hoisted.update_stmt(stmt.children[0].symbol,
                                              loop=new_loops[0],
                                              place=loops_parents[0])
-                new_nz_info[new_loops[-1]] = stmt_dim_offsets
+                new_nz_info[tuple(new_loops)] = stmt_dim_offsets
                 # Append the new loops to the root
                 insert_at_elem(loops_parents[0].children, loops[0], new_loops[0])
             loops_parents[0].children.remove(loops[0])
 
-        return new_nz_info
+        self.exprs.clear()
+        self.exprs.update(new_exprs)
+        return nz_syms, new_nz_info
+
+    def _shrink(self, root, nz_syms, nz_info):
+        references = SymbolReferences().visit(root, ret=SymbolReferences.default_retval())
+        dataspaces = defaultdict(list)
+
+        # Calculate the dataspaces
+        for nest, stmt_dim_offsets in nz_info.items():
+            nest = {l.dim: l for l in nest}
+            for stmt, dim_offset in stmt_dim_offsets:
+                symbols = FindInstances(Symbol).visit(stmt)[Symbol]
+                symbols = [s for s in symbols if s.symbol in self.decls and
+                           isinstance(self.decls[s.symbol].init, SparseArrayInit)]
+                for s in symbols:
+                    decl = self.decls[s.symbol]
+                    # Each dataspace is stored as a 2-tuple (size, offset)
+                    dataspace = []
+                    for r, o, d_size in zip(s.rank, s.offset, decl.sym.rank):
+                        size = nest[r].size if r in nest else d_size
+                        dataspace.append((size, o[1]))
+                    dataspaces[s.symbol].append(tuple(dataspace))
+
+        # For each symbol, and for each of its dimension, aggregate the dataspaces
+        # if they are contiguous
+        for symbol, dataspace in dataspaces.items():
+            decl = self.decls[symbol]
+            merged_dataspace = []
+            for regions, size in zip(zip(*dataspace), decl.sym.rank):
+                merged_dataspace.append(ItSpace(mode=1).merge(regions, within=size)[0])
+            dataspaces[symbol] = tuple(merged_dataspace)
+
+        # Now that we know the dataspaces, we should see if they are smaller than
+        # the actual array size
+        for symbol, dataspace in dataspaces.items():
+            decl = self.decls[symbol]
+            sections = [range(d[1], d[1] + d[0]) for d in dataspace]
+            values = decl.init.values[np.ix_(*sections)]
+            if values.shape != decl.init.values.shape:
+                # Set the shrunk values ...
+                decl.init.values = values
+                decl.sym.rank = values.shape
+                # ... changes any relevant offsets
+                s_references = [s[0] for s in references[symbol] if s[0] is not decl.sym]
+                for s in s_references:
+                    offset = []
+                    for i, section in enumerate(sections):
+                        # Is the shrunk array still starting from the old base?
+                        # If not, update the offset of each symbol occurence
+                        if s.offset[i][1] > 0 and section[0] > 0:
+                            offset.append((s.offset[i][0], s.offset[i][1] - section[0]))
+                        else:
+                            offset.append(s.offset[i])
+                    s.offset = tuple(offset)
+                # ... and update the /nz_syms/ dictionary
+                nz_syms[symbol] = tuple([(i, 0)] for i in values.shape)
+
+        # Finally, we can merge tables that became identical after shrinking
+        mapper = defaultdict(list)
+        for symbol, dataspace in dataspaces.items():
+            values = self.decls[symbol].init.values
+            mapper[values.tostring()].append(symbol)
+        for values, symbols in mapper.items():
+            to_replace = {s: symbols[0] for s in symbols[1:]}
+            for replacing, target in to_replace.items():
+                for s, p in references[replacing]:
+                    s.symbol = target
+                    if isinstance(p, Decl):
+                        root.children.remove(p)
+                # Clean up
+                self.decls.pop(replacing)
+                if replacing in self.hoisted:
+                    self.hoisted.pop(replacing)
+
+    def _recombine(self, nz_info):
+        """Recombine expressions writing to the same lvalue."""
+        new_exprs = OrderedDict()
+        ops = {Incr: Sum, Decr: Sub, IMul: Prod}
+
+        for nest, stmt_dim_offsets in nz_info.items():
+            mapper = OrderedDict()
+            for stmt, dim_offsets in stmt_dim_offsets:
+                sym, expr = stmt.children
+                if type(stmt) in ops:
+                    # The /key/ means: I'm in the same loop nest, I'm writing to
+                    # the same symbol, and in particular to the same symbol
+                    # locations, and I'm doing an associative AugmentedAssignment.
+                    key = (str(sym), type(stmt))
+                    mapper.setdefault(key, []).append(stmt)
+
+            for (_, op), stmts in mapper.items():
+                exprs = [i.children[1] for i in stmts]
+                for i in stmts:
+                    nest[-1].body.remove(i)
+                stmt = op(i.children[0], ast_make_expr(ops[op], exprs))
+                nest[-1].body.append(stmt)
+                # Update the tracked expressions, if necessary
+                if all(i in self.exprs for i in stmts):
+                    new_exprs[stmt] = self.exprs[i]
+
+        self.exprs.clear()
+        self.exprs.update(new_exprs)
 
     def reschedule(self, root):
         """Restructure the loop nests in ``root`` to avoid computation over
@@ -602,14 +891,21 @@ class ZeroRemover(LoopScheduler):
         # First, split expressions to maximize the impact of the transformation.
         # This is because different summands may have zero-valued blocks at
         # different offsets
-        elf = ExpressionFissioner(cut=1)
+        elf = ExpressionFissioner(cut=1, loops='none')
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
                 continue
-            elif expr_info.dimension > 1:
-                self.exprs.pop(stmt)
-                self.exprs.update(elf.fission(stmt, expr_info, False))
+            self.exprs.pop(stmt)
+            self.exprs.update(elf.fission(stmt, expr_info))
 
         # Perform symbolic execution, track the propagation of non zero-valued
         # blocks, restructure the iteration spaces to avoid useless arithmetic ops
-        return self._reschedule_itspace(root)
+        nz_syms, nz_info = self._reschedule_itspace(root)
+
+        # Shrink sparse arrays by removing zero-valued regions
+        self._shrink(root, nz_syms, nz_info)
+
+        # Finally, "inline" the expressions that were originally split
+        self._recombine(nz_info)
+
+        return nz_syms

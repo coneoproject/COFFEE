@@ -34,6 +34,7 @@
 """COFFEE's optimization plan constructor."""
 
 # The following global variables capture the internal state of COFFEE
+arch = {}
 compiler = {}
 isa = {}
 blas = {}
@@ -49,8 +50,10 @@ from coffee.visitors import FindInstances
 
 from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict
+from warnings import warn as warning
 import itertools
 import operator
+import sys
 
 
 class ASTKernel(object):
@@ -193,19 +196,7 @@ class ASTKernel(object):
             precompute = kwargs.get('precompute')
             dead_ops_elimination = kwargs.get('dead_ops_elimination')
 
-            # Combining certain optimizations is meaningless/forbidden.
-            if unroll and toblas:
-                raise RuntimeError("Cannot unroll and then convert to BLAS")
-            if rewrite == 3 and split:
-                raise RuntimeError("Split forbidden when avoiding zero-columns")
-            if rewrite == 3 and toblas:
-                raise RuntimeError("BLAS forbidden when avoiding zero-columns")
-            if rewrite == 3 and v_type and v_type != VectStrategy.AUTO:
-                raise RuntimeError("Zeros removal only supports auto-vectorization")
-            if unroll and v_type and v_type != VectStrategy.AUTO:
-                raise RuntimeError("Outer-product vectorization needs no unroll")
-
-            info = visit(kernel, info_items=['decls', 'exprs'])
+            info = visit(kernel)
             decls = info['decls']
             # Structure up expressions and related metadata
             nests = defaultdict(OrderedDict)
@@ -215,9 +206,26 @@ class ASTKernel(object):
                     continue
                 metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, domain)
                 nests[nest[0]].update({stmt: metaexpr})
-
             loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
                          for (loop, header), exprs in nests.items()]
+
+            # Combining certain optimizations is meaningless/forbidden.
+            if unroll and toblas:
+                raise RuntimeError("BLAS forbidden with unrolling")
+            if dead_ops_elimination and split:
+                raise RuntimeError("Split forbidden with zero-valued blocks avoidance")
+            if dead_ops_elimination and toblas:
+                raise RuntimeError("BLAS forbidden with zero-valued blocks avoidance")
+            if dead_ops_elimination and v_type and v_type != VectStrategy.AUTO:
+                raise RuntimeError("SIMDization forbidden with zero-valued blocks avoidance")
+            if unroll and v_type and v_type != VectStrategy.AUTO:
+                raise RuntimeError("SIMDization forbidden with unrolling")
+            if rewrite == 'auto' and len(info['exprs']) > 1:
+                warning("Rewrite mode=auto forbidden with multiple expressions")
+                warning("Switching to rewrite mode=2")
+                rewrite = 2
+
+            ### Optimization pipeline ###
             for loop_opt in loop_opts:
                 # 0) Expression Rewriting
                 if rewrite:
@@ -240,7 +248,7 @@ class ASTKernel(object):
                     loop_opt.unroll(dict(unroll))
 
                 # 5) Vectorization
-                if initialized and loop_opt.expr_domain_loops[0]:
+                if initialized and flatten(loop_opt.expr_domain_loops):
                     vect = LoopVectorizer(loop_opt)
                     if align_pad and not toblas:
                         # Padding and data alignment
@@ -356,8 +364,9 @@ class ASTKernel(object):
             }
         elif opts.get('O4'):
             params = {
-                'rewrite': 3,
-                'align_pad': True
+                'rewrite': 'auto',
+                'align_pad': True,
+                'dead_ops_elimination': True
             }
         elif opts.get('O3'):
             params = {
@@ -384,10 +393,7 @@ class ASTKernel(object):
         # each function (or "kernel") found in the provided AST
         for kernel in kernels:
             # Generate a specific code version
-            loop_opts = _generate_cpu_code(self, kernel, **params)
-
-            # Increase stack size if too much space is used on the stack
-            increase_stack(loop_opts)
+            _generate_cpu_code(self, kernel, **params)
 
             # Post processing of the AST ensures higher-quality code
             postprocess(kernel)
@@ -397,15 +403,42 @@ class ASTKernel(object):
         return self.ast.gencode()
 
 
-def init_coffee(_isa, _compiler, _blas):
+def init_coffee(_isa, _compiler, _blas, _arch='default'):
     """Initialize COFFEE."""
 
-    global isa, compiler, blas, initialized
+    global arch, isa, compiler, blas, initialized
+
+    # Populate dictionaries with keywords for backend-specific (hardware,
+    # compiler, ...) optimizations
+    arch = _init_arch(_arch)
     isa = _init_isa(_isa)
     compiler = _init_compiler(_compiler)
     blas = _init_blas(_blas)
     if isa and compiler:
         initialized = True
+
+    # Allow visits of ASTs that become huge due to transformation. The constant
+    # /4000/ was empirically found to be an acceptable value
+    sys.setrecursionlimit(4000)
+
+
+def _init_arch(arch):
+    """Set architecture-specific parameters."""
+
+    # In the following, all sizes are in Bytes
+    if arch == 'default':
+        # The default architecture is a conventional multi-core CPU, such as
+        # an Intel Haswell
+        return {
+            'cache_size': 256 * 10**3,  # The private, closest memory to the core
+            'double': 8
+        }
+
+    else:
+        return {
+            'cache_size': 0,
+            'double': sys.maxint
+        }
 
 
 def _init_isa(isa):

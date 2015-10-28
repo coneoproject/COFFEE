@@ -120,8 +120,12 @@ class StmtTracker(OrderedDict):
         return self[sym].place if self.get(sym) else None
 
     @property
+    def all_stmts(self):
+        return set((stmt_info.stmt for stmt_info in self.values() if stmt_info.stmt))
+
+    @property
     def all_places(self):
-        return set((stmt_info.place for stmt_info in self.values()))
+        return set((stmt_info.place for stmt_info in self.values() if stmt_info.place))
 
     @property
     def all_loops(self):
@@ -181,3 +185,20 @@ class ExpressionGraph(object):
             elif nx.has_path(self.deps, s.symbol, target_sym.symbol):
                 return True
         return False
+
+    def shares(self, symbols):
+        """Return an iterator of tuples, each tuple being a group of symbols
+        identifiers sharing the same reads."""
+        groups = set()
+        for i in [set(self.reads(s)) for s in symbols]:
+            group = tuple(j for j in symbols if i.intersection(set(self.reads(j))))
+            groups.add(group)
+        return list(groups)
+
+    def readers(self, sym):
+        """Return the list of symbol identifiers that read from ``sym``."""
+        return [i for i, j in self.deps.in_edges(sym)]
+
+    def reads(self, sym):
+        """Return the list of symbol identifiers that ``sym`` reads from."""
+        return [j for i, j in self.deps.out_edges(sym)]

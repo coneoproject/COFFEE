@@ -39,7 +39,7 @@ class MetaExpr(object):
 
     """Metadata container for a compute-intensive expression."""
 
-    def __init__(self, type, parent, loops_info, domain):
+    def __init__(self, type, parent, loops_info, domain, mode=0):
         """Initialize the MetaExpr.
 
         :param type: the C type of the expression.
@@ -50,11 +50,13 @@ class MetaExpr(object):
              evaluated by the expression. The i-th entry corresponds to
              the loop dimension along which iteration occurs (For example,
              given an output tensor ``A[i][j]``, ``domain=(i, j)``).
+        :param mode: suggested rewrite mode.
         """
         self._type = type
         self._parent = parent
         self._loops_info = list(loops_info)
         self._domain = domain
+        self._mode = mode
 
     @property
     def type(self):
@@ -62,7 +64,7 @@ class MetaExpr(object):
 
     @property
     def dims(self):
-        return [l.dim for l in self.loops]
+        return tuple(l.dim for l in self.loops)
 
     @property
     def domain_dims(self):
@@ -70,7 +72,7 @@ class MetaExpr(object):
 
     @property
     def out_domain_dims(self):
-        return [d for d in self.dims if d not in self.domain_dims]
+        return tuple(d for d in self.dims if d not in self.domain_dims)
 
     @property
     def loops(self):
@@ -141,19 +143,29 @@ class MetaExpr(object):
     def is_tensor(self):
         return not self.is_scalar
 
+    @property
+    def mode(self):
+        return self._mode
+
+    @mode.setter
+    def mode(self, value):
+        self._mode = value
+
 
 def copy_metaexpr(expr_info, **kwargs):
     """Given a ``MetaExpr``, return a plain new ``MetaExpr`` starting from a
     copy of ``expr_info``, and replaces some attributes as specified in
     ``kwargs``. In particular, ``kwargs`` has the following keys:
 
-    * ``parent``: the block node that embeds the expression.
-    * ``loops_info``: an iterator of 2-tuple ``(loop, loop_parent)`` which
-      substitute analogous information in the new ``MetaExpr``.
-    * ``domain``: the domain of the output tensor evaluated by the expression.
+        * parent: the block node that embeds the expression.
+        * loops_info: an iterator of 2-tuple ``(loop, loop_parent)`` which
+          substitute analogous information in the new ``MetaExpr``.
+        * domain: the domain of the output tensor evaluated by the expression.
+        * mode: the suggested rewrite mode.
     """
     parent = kwargs.get('parent', expr_info.parent)
     domain = kwargs.get('domain', expr_info.domain_dims)
+    mode = kwargs.get('mode', expr_info.mode)
 
     new_loops_info, old_loops_info = [], expr_info.loops_info
     to_replace_loops_info = kwargs.get('loops_info', [])
@@ -166,4 +178,4 @@ def copy_metaexpr(expr_info, **kwargs):
         else:
             new_loops_info.append(loop_info)
 
-    return MetaExpr(expr_info.type, parent, new_loops_info, domain)
+    return MetaExpr(expr_info.type, parent, new_loops_info, domain, mode)
