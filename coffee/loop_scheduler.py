@@ -112,30 +112,11 @@ class SSALoopMerger(LoopScheduler):
               A[i] = B[i] + C[i]
               D[i] = A[i]
         """
-
-        def replace_expr(node, parent, parent_idx, dim, hoisted_expr):
-            """Recursively search for any sub-expressions rooted in node that have
-            been hoisted and therefore are already kept in a temporary. Replace them
-            with such temporary."""
-            if isinstance(node, Symbol):
-                return
-            else:
-                tmp_sym = hoisted_expr.get(str(node)) or hoisted_expr.get(str(parent))
-                if tmp_sym:
-                    # Found a temporary value already hosting the value of node
-                    parent.children[parent_idx] = dcopy(tmp_sym)
-                else:
-                    # Go ahead recursively
-                    for i, n in enumerate(node.children):
-                        replace_expr(n, node, i, dim, hoisted_expr)
-
-        hoisted_expr = {}
+        to_replace = {}
         for loop in merged_loops:
-            block = loop.body
-            for stmt in block:
-                sym, expr = stmt.children
-                replace_expr(expr.children[0], expr, 0, loop.dim, hoisted_expr)
-                hoisted_expr[str(expr)] = sym
+            for stmt in loop.body:
+                ast_replace(stmt, to_replace, copy=True)
+                to_replace[stmt.rvalue] = stmt.lvalue
 
     def merge(self, root):
         """Merge perfect loop nests in ``root``."""
