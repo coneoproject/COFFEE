@@ -331,17 +331,17 @@ class LoopOptimizer(object):
         stmt_occs = dict((k, v) for d in in_stmt for k, v in d.items())
 
         for l in self.hoisted.all_loops:
-            l_occs = count(l, read_only=True)
             info = visit(l)
+            occurrences = count(l, read_only=True)
             innermost_block = FindInstances(Block).visit(l)[Block][-1]
             to_replace, to_remove = {}, []
-            for (symbol, rank), sym_occs in l_occs.items():
+            for (symbol, rank), sym_occurrences in occurrences.items():
                 # A temporary /symbol/ is removed if any of the following
                 # conditions hold:
                 # - it is read once in /l/ and it is not read any longer (this
                 #   is checked through /stmt_occs/)
-                # - it is read multiple times in /l/, but it actually hosts a
-                #   single symbol (checked through /sym_occs/)
+                # - it is read one or more times in /l/, but it actually hosts a
+                #   symbol (this is checked through /sym_occurrences/)
                 if symbol not in self.hoisted or symbol in stmt_occs:
                     continue
                 if self.hoisted[symbol].loop is not l:
@@ -349,7 +349,7 @@ class LoopOptimizer(object):
                 decl = self.hoisted[symbol].decl
                 place = self.hoisted[symbol].place
                 expr = self.hoisted[symbol].stmt.children[1]
-                if sym_occs > 1 and not isinstance(expr.children[0], Symbol):
+                if sym_occurrences > 1 and explore_operator(expr):
                     continue
 
                 symbol_refs = info['symbol_refs'][symbol]
