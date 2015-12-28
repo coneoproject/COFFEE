@@ -115,41 +115,34 @@ class ExpressionRewriter(object):
         return self
 
     def expand(self, mode='standard', **kwargs):
-        """Expand expressions over other expressions based on different heuristics.
-        In the simplest example one can have: ::
+        """Expand expressions based on different rules. For example: ::
 
             (X[i] + Y[j])*F + ...
 
-        which could be transformed into: ::
+        can be expanded into: ::
 
             (X[i]*F + Y[j]*F) + ...
 
-        When creating the expanded object, if the expanding term had already been
-        hoisted, then the expansion itself is also lifted. For example, if: ::
+        The expanded term could also be lifted. For example, if we have: ::
 
             Y[j] = f(...)
             (X[i]*Y[j])*F + ...
 
-        and we assume it has been decided (see below) the expansion should occur
-        along the loop dimension ``j``, the transformation generates: ::
+        where ``Y`` was produced by code motion, expansion results in: ::
 
             Y[j] = f(...)*F
             (X[i]*Y[j]) + ...
 
-        One may want to expand expressions for several reasons, which include
+        Reasons for expanding expressions include:
 
-        * Exposing factorization opportunities;
-        * Exposing high-level (linear algebra) operations (e.g., matrix multiplies)
-        * Relieving register pressure; when, for example, ``(X[i]*Y[j])`` is
-          computed in a loop L' different than the loop L'' in which ``Y[j]``
-          is evaluated, and ``cost(L') > cost(L'')``;
+        * Exposing factorization opportunities
+        * Exposing higher level operations (e.g., matrix multiplies)
+        * Relieving register pressure
 
-        :param mode: multiple expansion strategies are possible, each exposing
-            different, "hidden" opportunities for later code motion.
+        :param mode: multiple expansion strategies are possible
 
-            * mode == 'standard': this heuristics consists of expanding along the
-                loop dimension appearing the most in different (i.e., unique).
-                This aims at making factorization more effective.
+            * mode == 'standard': expand along the loop dimension appearing most
+                often in different symbols
             * mode == 'all': expand when symbols depend on at least one of the
                 expression's dimensions
             * mode == 'domain': expand when symbols depending on the expressions's
@@ -193,9 +186,9 @@ class ExpressionRewriter(object):
 
         # Perform the expansion
         self.expr_expander.expand(should_expand, kwargs.get('not_aggregate'))
-
         # Update known declarations
         self.decls.update(self.expr_expander.expanded_decls)
+
         return self
 
     def factorize(self, mode='standard', **kwargs):
