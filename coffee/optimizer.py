@@ -124,18 +124,18 @@ class LoopOptimizer(object):
 
             if expr_info.mode == 1:
                 if expr_info.dimension in [0, 1]:
-                    ew.licm(only_outdomain=True)
+                    ew.licm(mode='only_outdomain')
                 else:
                     ew.licm()
 
             elif expr_info.mode == 2:
                 if expr_info.dimension == 0:
-                    ew.licm(only_outdomain=True)
+                    ew.licm(mode='only_outdomain')
                 elif expr_info.dimension == 1:
-                    ew.licm(only_outdomain=True)
+                    ew.licm(mode='only_outdomain')
                     ew.expand(mode='domain')
                     ew.factorize(mode='domain')
-                    ew.licm(only_outdomain=True)
+                    ew.licm(mode='only_outdomain')
                 else:
                     ew.licm()
                     ew.expand()
@@ -145,20 +145,20 @@ class LoopOptimizer(object):
             elif expr_info.mode == 3:
                 ew.expand(mode='all')
                 ew.factorize(mode='all')
-                ew.licm(only_const=True)
+                ew.licm(mode='only_const')
                 ew.factorize(mode='constants')
-                ew.licm(only_domain=True)
+                ew.licm(mode='aggressive')
                 ew.preevaluate()
                 ew.factorize(mode='domain')
-                ew.licm(only_const=True)
+                ew.licm(mode='only_const')
 
             elif expr_info.mode == 4:
                 ew.replacediv()
-                ew.licm(only_outdomain=True)
+                ew.licm(mode='only_outdomain')
                 ew.expand(mode='domain')
                 ew.factorize(mode='domain')
-                ew.licm(only_outdomain=True)
-                ew.licm(only_const=True)
+                ew.licm(mode='only_outdomain')
+                ew.licm(mode='only_const')
                 for i in range(1, expr_info.dimension):
                     ew.factorize()
                     ew.licm()
@@ -167,9 +167,9 @@ class LoopOptimizer(object):
                 ew.replacediv()
                 ew.expand(mode='all')
                 ew.factorize(mode='domain')
-                ew.licm(only_const=True)
+                ew.licm(mode='only_const')
                 ew.factorize(mode='domain')
-                ew.licm(only_const=True)
+                ew.licm(mode='only_const')
                 for i in range(1, expr_info.dimension):
                     ew.factorize()
                     ew.licm()
@@ -527,7 +527,7 @@ class LoopOptimizer(object):
                     fake_parent[fake_parent.index(stmt)] = fake_stmt
                     ew = ExpressionRewriter(fake_stmt, expr_info, self.decls)
                     ew.expand(mode='all').factorize(mode='all').factorize(mode='domain')
-                    nterms = ew.licm(look_ahead=True, only_domain=True)
+                    nterms = ew.licm(mode='aggressive', look_ahead=True)
                     nterms = len(uniquify(nterms[expr_info.dims])) or 1
                     fake_parent[fake_parent.index(fake_stmt)] = stmt
                     cost = nterms * increase_factor
@@ -665,7 +665,7 @@ class LoopOptimizer(object):
                                     self.hoisted, self.expr_graph)
             ew.expand(mode='domain', not_aggregate=True)
             ew.factorize(mode='domain')
-            ew.licm(only_outdomain=True)
+            ew.licm(mode='only_outdomain')
             ew.factorize().factorize('constants')
 
     def _recoil(self):
