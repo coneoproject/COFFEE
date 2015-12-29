@@ -72,36 +72,20 @@ class LoopOptimizer(object):
         self.hoisted = StmtTracker()
 
     def rewrite(self, mode):
-        """Rewrite a compute-intensive expression found in the loop nest so as to
-        minimize floating point operations and to relieve register pressure.
-        This involves several possible transformations:
+        """Rewrite all compute-intensive expressions detected in the loop nest to
+        minimize the number of floating point operations performed.
 
-        1. Generalized loop-invariant code motion
-        2. Factorization of common loop-dependent terms
-        3. Expansion of constants over loop-dependent terms
+        :param mode: Any value in (0, 1, 2, 3, 4). Each ``mode`` corresponds to a
+            different expression rewriting strategy.
 
-        :param mode: Any value in (0, 1, 2, 3). Each ``mode`` corresponds to a
-            different expression rewriting strategy. A strategy impacts the aspects:
-            amount of floating point calculations required to evaluate the expression;
-            amount of temporary storage introduced; accuracy of the result.
-
-            * mode == 0: No rewriting is performed
-            * mode == 1: Apply one pass: generalized loop-invariant code motion.
-                Safest: accuracy not affected
-            * mode == 2: Apply four passes: generalized loop-invariant code motion;
+            * mode == 0: no rewriting is performed.
+            * mode == 1: generalized loop-invariant code motion.
+            * mode == 2: apply four passes: generalized loop-invariant code motion;
                 expansion of inner-loop dependent expressions; factorization of
                 inner-loop dependent terms; generalized loop-invariant code motion.
-                Factorization may affect accuracy. Improves performance while trying to
-                minimize temporary storage
-            * mode == 3: Apply nine passes: Expansion of inner-loops dependent terms.
-                Factorization of inner-loops dependent terms; generalized loop-invariant
-                code motion of outer-loop dependent terms. Factorization of constants.
-                Reassociation, followed by 'aggressive' generalized loop-invariant code
-                motion (in which n-rank temporary arrays can be allocated to host
-                expressions independent of more than one loop). Simplification is the
-                key pass: it tries to remove reduction loops and precompute constant
-                expressions. Finally, two last sweeps of factorization and code motion
-                are applied.
+            * mode == 3: apply multiple passes; aims at pre-evaluating sub-expressions
+                that fully depend on reduction loops.
+            * mode == 4: rewrite an expression based on its sharing graph
         """
         ExpressionRewriter.reset()
 
@@ -154,25 +138,12 @@ class LoopOptimizer(object):
 
             elif expr_info.mode == 4:
                 ew.replacediv()
+                ew.factorize()
                 ew.licm(mode='only_outdomain')
-                ew.expand(mode='domain')
-                ew.factorize(mode='domain')
-                ew.licm(mode='only_outdomain')
-                ew.licm(mode='only_const')
-                for i in range(1, expr_info.dimension):
-                    ew.factorize()
-                    ew.licm()
-
-            elif expr_info.mode == 5:
-                ew.replacediv()
-                ew.expand(mode='all')
-                ew.factorize(mode='domain')
-                ew.licm(mode='only_const')
-                ew.factorize(mode='domain')
-                ew.licm(mode='only_const')
-                for i in range(1, expr_info.dimension):
-                    ew.factorize()
-                    ew.licm()
+                if expr_info.dimension > 0:
+                    ew.licm(mode='only_domain', iterative=False, max_sharing=True)
+                    ew.SGrewrite()
+                    ew.expand()
 
         # Try merging the loops created by expression rewriting
         merged_loops = SSALoopMerger(self.expr_graph).merge(self.header)
@@ -187,12 +158,8 @@ class LoopOptimizer(object):
                         expr_info._loops_info[-1] = (merged_in, expr_info.loops_parents[-1])
                         expr_info._parent = merged_in.children[0]
 
-        # Reduce memory pressure by rearranging operations ...
-        self._rearrange()
-        # ... plus, at max rewrite level, apply rewriting to hoisted subexprs too ...
-        if mode == 'auto':
-            self._rewrite_hoisted()
-        # ... which in turn require updating the expression graph
+        # Reduce memory pressure by avoiding useless temporaries
+        self._min_temporaries()
         self.expr_graph = ExpressionGraph(self.header)
 
         # Handle the effects, at the C-level, of the AST transformation
@@ -323,9 +290,8 @@ class LoopOptimizer(object):
         # ... scalar-expanding the precomputed symbols
         ast_update_rank(self.loop, precomputed_syms)
 
-    def _rearrange(self):
-        """Relieve the memory pressure by removing temporaries read by only
-        one statement."""
+    def _min_temporaries(self):
+        """Relieve the memory pressure by removing unnecessary temporaries."""
 
         in_stmt = [count(s, mode='symbol_id', read_only=True) for s in self.exprs.keys()]
         stmt_occs = dict((k, v) for d in in_stmt for k, v in d.items())
@@ -615,7 +581,7 @@ class LoopOptimizer(object):
 
         # 4) Split the expressions if injection has been performed
         for stmt, expr_info in self.exprs.items():
-            expr_info.mode = 2
+            expr_info.mode = 4
             inj_exprs = injected.get(stmt)
             if not inj_exprs:
                 continue
@@ -623,7 +589,7 @@ class LoopOptimizer(object):
             new_exprs = fissioner.fission(stmt, self.exprs.pop(stmt))
             self.exprs.update(new_exprs)
             for stmt, expr_info in new_exprs.items():
-                expr_info.mode = 3 if stmt in fissioner.matched else 2
+                expr_info.mode = 3 if stmt in fissioner.matched else 4
 
     def _rewrite_hoisted(self):
         """Rewrite hoisted expressions."""
