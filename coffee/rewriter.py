@@ -142,15 +142,22 @@ class ExpressionRewriter(object):
         * Relieving register pressure
 
         :param mode: multiple expansion strategies are possible
-
             * mode == 'standard': expand along the loop dimension appearing most
                 often in different symbols
+            * mode == 'dimensions': expand along the loop dimensions provided in
+                /kwargs['dimensions']/
             * mode == 'all': expand when symbols depend on at least one of the
                 expression's dimensions
             * mode == 'domain': expand when symbols depending on the expressions's
                 domain are encountered.
             * mode == 'outdomain': expand when symbols independent of the
                 expression's domain are encountered.
+        :param kwargs:
+            * not_aggregate: True if should not try to aggregate expanded symbols
+                with previously hoisted expressions
+            * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
+                provided, expansion will be performed only within these trees,
+                rather than within the whole expression
         """
 
         if mode == 'standard':
@@ -168,6 +175,9 @@ class ExpressionRewriter(object):
             # Finally, establish the expansion dimension
             dimension = Counter(occurrences).most_common(1)[0][0]
             should_expand = lambda n: set(dimension).issubset(set(n.rank))
+        elif mode == 'dimensions':
+            dimensions = kwargs.get('dimensions', ())
+            should_expand = lambda n: set(dimensions).issubset(set(n.rank))
         elif mode in ['all', 'domain', 'outdomain']:
             info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
             symbols = defaultdict(set)
@@ -187,8 +197,7 @@ class ExpressionRewriter(object):
             return
 
         # Perform the expansion
-        self.expr_expander.expand(should_expand, kwargs.get('not_aggregate'))
-        # Update known declarations
+        self.expr_expander.expand(should_expand, **kwargs)
         self.decls.update(self.expr_expander.expanded_decls)
 
         return self
@@ -202,11 +211,13 @@ class ExpressionRewriter(object):
 
             A[i]*(B[j] + C[j]).
 
-        :param mode: multiple factorization strategies are possible, each exposing
-                     different, "hidden" opportunities for code motion.
+        :param mode: multiple factorization strategies are possible. Note that
+                     different strategies may expose different code motion opportunities
 
             * mode == 'standard': factorize symbols along the dimension that appears
                 most often in the expression.
+            * mode == 'dimensions': factorize symbols along the loop dimensions provided
+                in /kwargs['dimensions']/
             * mode == 'all': factorize symbols depending on at least one of the
                 expression's dimensions.
             * mode == 'domain': factorize symbols depending on the expression's domain.
@@ -214,6 +225,10 @@ class ExpressionRewriter(object):
                 domain.
             * mode == 'constants': factorize symbols independent of any loops enclosing
                 the expression.
+        :param kwargs:
+            * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
+                provided, factorization will be performed only within these trees,
+                rather than within the whole expression
         """
 
         if mode == 'standard':
@@ -231,6 +246,9 @@ class ExpressionRewriter(object):
             # Finally, establish the factorization dimension
             dimension = Counter(occurrences).most_common(1)[0][0]
             should_factorize = lambda n: set(dimension).issubset(set(n.rank))
+        elif mode == 'dimensions':
+            dimensions = kwargs.get('dimensions', ())
+            should_factorize = lambda n: set(dimensions).issubset(set(n.rank))
         elif mode in ['all', 'domain', 'outdomain', 'constants']:
             info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
             symbols = defaultdict(set)
@@ -252,7 +270,7 @@ class ExpressionRewriter(object):
             return
 
         # Perform the factorization
-        self.expr_factorizer.factorize(should_factorize)
+        self.expr_factorizer.factorize(should_factorize, **kwargs)
         return self
 
     def reassociate(self, reorder=None):
@@ -963,25 +981,24 @@ class ExpressionExpander(object):
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
 
-    def expand(self, should_expand, not_aggregate=False):
-        """Perform the expansion of the expression rooted in ``self.stmt``.
-        Symbols for which the lambda function ``should_expand`` returns
-        True are expansion candidates."""
-        self.expansions = []
+    def expand(self, should_expand, **kwargs):
+        not_aggregate = kwargs.get('not_aggregate')
+        expressions = kwargs.get('subexprs', [(self.stmt.rvalue, self.stmt)])
+
         self.should_expand = should_expand
 
-        # Expand according to the /should_expand/ heuristic
-        self._expand(self.stmt.rvalue, self.stmt)
+        for node, parent in expressions:
+            self.expansions = []
+            self._expand(node, parent)
 
-        # Try to aggregate expanded terms with hoisted expressions (if any)
-        if not_aggregate:
-            return
-        info = visit(self.expr_info.outermost_loop) if self.expr_info else visit(self.stmt)
-        for expansion in self.expansions:
-            hoisted = self._hoist(expansion, info)
-            if hoisted:
-                ast_replace(self.stmt, hoisted, copy=True, mode='symbol')
-                ast_remove(self.stmt, expansion.right, mode='symbol')
+            if not_aggregate:
+                continue
+            info = visit(self.expr_info.outermost_loop) if self.expr_info else visit(parent)
+            for expansion in self.expansions:
+                hoisted = self._hoist(expansion, info)
+                if hoisted:
+                    ast_replace(parent, hoisted, copy=True, mode='symbol')
+                    ast_remove(parent, expansion.right, mode='symbol')
 
 
 class ExpressionFactorizer(object):
@@ -1088,6 +1105,10 @@ class ExpressionFactorizer(object):
         else:
             raise RuntimeError("Factorization error: unknown node: %s" % str(node))
 
-    def factorize(self, should_factorize):
+    def factorize(self, should_factorize, **kwargs):
+        expressions = kwargs.get('subexprs', [(self.stmt.rvalue, self.stmt)])
+
         self.should_factorize = should_factorize
-        self._factorize(self.stmt.rvalue, self.stmt)
+
+        for node, parent in expressions:
+            self._factorize(node, parent)
