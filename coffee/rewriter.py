@@ -440,6 +440,69 @@ class ExpressionRewriter(object):
             self.header.children.remove(hoisted_loop)
         return self
 
+    def SGrewrite(self):
+        """Apply rewrite rules based on the sharing graph of the expression."""
+
+        # First eliminate sharing "locally", i.e., within Sums
+        sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        handled = set()
+        for n in sgraph.nodes():
+            mapped = mapper.get((n,), [])
+            with_sharing = [e for e in mapped if e and e not in handled]
+            for e in with_sharing:
+                self.expand(mode='dimensions', subexprs=[e],
+                            not_aggregate=True, dimensions=n[1])
+                self.factorize(mode='dimensions', subexprs=[e], dimensions=n[1])
+                handled.add(e)
+        self.licm(mode='only_outdomain')
+
+        # Then apply rewrite rules A, B, and C
+        sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        if 'topsum' in mapper:
+            self.expand(mode='domain', subexprs=[mapper['topsum']], not_aggregate=True)
+            sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        while True:
+            if all(sgraph.degree(n) <= 1 for n in sgraph.nodes()):
+                break
+
+            with_terminals = [(n, [i[1] for i in sgraph.edges(n)
+                                   if sgraph.degree(i[1]) == 1]) for n in sgraph.nodes()]
+            with_terminals = [(n, v) for n, v in with_terminals if v]
+            while with_terminals:
+                # Rule A: more than one terminals {t1, ..., tn}, expand and
+                # factorize /n/ such that n(...t1 + ... + ...tn)
+                handling = {n: v for n, v in with_terminals if len(v) > 1}
+                self.factorize(mode='adhoc', adhoc=handling)
+                with_terminals = [t for t in with_terminals if t[0] not in handling]
+                if handling:
+                    self.licm(mode='only_domain')
+                    sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+
+                # Rule B: only one terminal /t/, expand and factorize /n/ such
+                # that n(...t + ...s), where /s/ is a non-terminal adjacent to /n/
+                handling = {n: v[0] for n, v in with_terminals if len(v) == 1}
+                for n, v in handling.items():
+                    adjacent = [s for s in sgraph.edges(n) if s != v]
+                    if len(adjacent) >= 1:
+                        handling[n] = [v, adjacent[0]]
+                    else:
+                        handling.pop(n)
+                self.factorize(mode='adhoc', adhoc=handling)
+                with_terminals = [t for t in with_terminals if t[0] not in handling]
+                if handling:
+                    self.licm(mode='only_domain')
+                    sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+
+            # Rule C: no terminals, take /n/ with highest degree, expand and
+            # factorize /n/ such that n(...s1 + ... + ...sn) and /s1/, ..., /sn/
+            # are the non-terminals adjacent to /n/
+            nodes = [n for n in sgraph.nodes() if sgraph.node[n]['occs'] > 1]
+            nodes = sorted(nodes, key=lambda i: sgraph.degree(i), reverse=True)
+            for n in nodes:
+                self.factorize(mode='adhoc', adhoc={n: []})
+            self.licm()
+            sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+
     @staticmethod
     def reset():
         ExpressionHoister._expr_handled[:] = []
