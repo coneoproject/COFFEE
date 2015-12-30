@@ -326,7 +326,9 @@ class ExpressionRewriter(object):
         to_replace = {}
         for i in divisions:
             if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
-                to_replace[i] = Prod(i.left, Div(1, i.right.symbol))
+                to_replace[i] = Prod(i.left, 1 / i.right.symbol)
+            else:
+                to_replace[i] = Prod(i.left, Div(1, i.right))
         ast_replace(self.stmt.rvalue, to_replace, copy=True, mode='symbol')
         return self
 
