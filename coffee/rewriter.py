@@ -412,6 +412,181 @@ class ExpressionRewriter(object):
         ExpressionExpander._expr_handled[:] = []
 
 
+class ExpressionExtractor():
+
+    EXT = 0  # expression marker: extract
+    STOP = 1  # expression marker: do not extract
+
+    def __init__(self, stmt, expr_info):
+        self.stmt = stmt
+        self.expr_info = expr_info
+        self.counter = 0
+
+    def _try(self, node, dep):
+        if isinstance(node, Symbol):
+            # Never extract individual symbols
+            return False
+        operands = [o for o, p in explore_operator(node)]
+        should_extract = True
+        if self.mode == 'aggressive':
+            # Do extract everything
+            should_extract = True
+        elif self.mode == 'only_const':
+            # Do not extract unless constant in all loops
+            if set(dep) and set(dep).issubset(set(self.expr_info.dims)):
+                should_extract = False
+        elif all(isinstance(o, Symbol) for o in operands):
+            if len(operands) <= 2:
+                # Do not extract binary/unary operations
+                should_extract = False
+            if len([o for o in operands if any(r in self.expr_info.domain_dims
+                    for r in o.rank)]) == 1:
+                # Do not extract if only one domain-dependent symbol is present
+                should_extract = False
+        elif self.mode == 'only_domain':
+            # Do not extract unless dependent on domain loops
+            if set(dep).issubset(set(self.expr_info.out_domain_dims)):
+                should_extract = False
+        elif self.mode == 'only_outdomain':
+            # Do not extract unless independent of the domain loops
+            if not set(dep).issubset(set(self.expr_info.out_domain_dims)):
+                should_extract = False
+        if should_extract or self.look_ahead:
+            self.extracted.setdefault(dep, []).append(node)
+        return should_extract
+
+    def _soft(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+        if info_l == self.EXT and info_r == self.EXT:
+            if dep_l == dep_r:
+                # E.g. alpha*beta, A[i] + B[i]
+                return (dep_l, self.EXT)
+            elif set(dep_l).issubset(set(dep_r)):
+                # E.g. A[i]*B[i,j]
+                if not self._try(right, dep_r):
+                    return (dep_n, self.EXT)
+            elif set(dep_r).issubset(set(dep_l)):
+                # E.g. A[i,j]*B[i]
+                if not self._try(left, dep_l):
+                    return (dep_n, self.EXT)
+            else:
+                # E.g. A[i]*B[j]
+                self._try(left, dep_l)
+                self._try(right, dep_r)
+        elif info_r == self.EXT:
+            self._try(right, dep_r)
+        elif info_l == self.EXT:
+            self._try(left, dep_l)
+        return (dep_n, self.STOP)
+
+    def _normal(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+        if info_l == self.EXT and info_r == self.EXT:
+            if dep_l == dep_r:
+                # E.g. alpha*beta, A[i] + B[i]
+                return (dep_l, self.EXT)
+            elif not dep_l:
+                # E.g. alpha*A[i,j]
+                if not set(self.expr_info.domain_dims) & set(dep_r) or \
+                        not (self._try(left, dep_l) or self._try(right, dep_r)):
+                    return (dep_r, self.EXT)
+            elif not dep_r:
+                # E.g. A[i,j]*alpha
+                if not set(self.expr_info.domain_dims) & set(dep_l) or \
+                        not (self._try(right, dep_r) or self._try(left, dep_l)):
+                    return (dep_l, self.EXT)
+            elif set(dep_l).issubset(set(dep_r)):
+                # E.g. A[i]*B[i,j]
+                if not self._try(left, dep_l):
+                    return (dep_n, self.EXT)
+            elif set(dep_r).issubset(set(dep_l)):
+                # E.g. A[i,j]*B[i]
+                if not self._try(right, dep_r):
+                    return (dep_n, self.EXT)
+            else:
+                # E.g. A[i]*B[j]
+                self._try(left, dep_l)
+                self._try(right, dep_r)
+        elif info_r == self.EXT:
+            self._try(right, dep_r)
+        elif info_l == self.EXT:
+            self._try(left, dep_l)
+        return (dep_n, self.STOP)
+
+    def _aggressive(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+        if info_l == self.EXT and info_r == self.EXT:
+            if dep_l == dep_r:
+                # E.g. alpha*beta, A[i] + B[i]
+                return (dep_l, self.EXT)
+            elif not dep_l:
+                # E.g. alpha*A[i,j], not hoistable anymore
+                self._try(right, dep_r)
+            elif not dep_r:
+                # E.g. A[i,j]*alpha, not hoistable anymore
+                self._try(left, dep_l)
+            elif set(dep_l).issubset(set(dep_r)):
+                # E.g. A[i]*B[i,j]
+                if not self._try(left, dep_l):
+                    return (dep_n, self.EXT)
+            elif set(dep_r).issubset(set(dep_l)):
+                # E.g. A[i,j]*B[i]
+                if not self._try(right, dep_r):
+                    return (dep_n, self.EXT)
+            else:
+                # E.g. A[i]*B[j], hoistable in TMP[i,j]
+                return (dep_n, self.EXT)
+        elif info_r == self.EXT:
+            self._try(right, dep_r)
+        elif info_l == self.EXT:
+            self._try(left, dep_l)
+        return (dep_n, self.STOP)
+
+    def _extract(self, node):
+        if isinstance(node, Symbol):
+            return (self.symbols[node], self.EXT)
+
+        elif isinstance(node, Par):
+            return self._extract(node.child)
+
+        elif isinstance(node, FunCall):
+            arg_deps = [self._extract(n) for n in node.children]
+            dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
+            info = self.EXT if all(i == self.EXT for _, i in arg_deps) else self.STOP
+            return (dep, info)
+
+        else:
+            # Traverse the expression tree
+            left, right = node.children
+            dep_l, info_l = self._extract(left)
+            dep_r, info_r = self._extract(right)
+
+            # Filter out false dependencies
+            dep_l = tuple(d for d in dep_l if d in self.expr_info.dims)
+            dep_r = tuple(d for d in dep_r if d in self.expr_info.dims)
+            dep_n = dep_l + tuple(d for d in dep_r if d not in dep_l)
+
+            args = left, right, dep_l, dep_r, dep_n, info_l, info_r
+
+            if self.mode in ['normal', 'only_const', 'only_outdomain']:
+                return self._normal(*args)
+            elif self.mode == 'only_domain':
+                return self._soft(*args)
+            elif self.mode == 'aggressive':
+                return self._aggressive(*args)
+            else:
+                raise RuntimeError("licm: unexpected hoisting mode (%s)" % self.mode)
+
+    def __call__(self, mode, look_ahead, symbols):
+        """Extract invariant subexpressions from /self.expr/."""
+
+        self.mode = mode
+        self.look_ahead = look_ahead
+        self.symbols = symbols
+        self.extracted = OrderedDict()
+        self._extract(self.stmt.rvalue)
+
+        self.counter += 1
+        return self.extracted
+
+
 class ExpressionHoister(object):
 
     # Track all expressions to which LICM has been applied
@@ -427,7 +602,7 @@ class ExpressionHoister(object):
         self.decls = decls
         self.hoisted = hoisted
         self.expr_graph = expr_graph
-        self.counter = 0
+        self.extractor = ExpressionExtractor(self.stmt, self.expr_info)
 
         # Set counters to create meaningful and unique (temporary) variable names
         try:
@@ -435,144 +610,6 @@ class ExpressionHoister(object):
         except ValueError:
             self._expr_handled.append(stmt)
             self.expr_id = self._expr_handled.index(stmt)
-
-    def _extract(self, node, symbols, mode, look_ahead=False):
-        """Extract invariant subexpressions from the original expression.
-        Hoistable sub-expressions are stored in ``dep_subexprs``."""
-
-        # Constants used to charaterize sub-expressions:
-        INVARIANT = 0  # expression is loop invariant
-        HOISTED = 1  # expression should not be hoisted any further
-
-        def __try_hoist(node, dep):
-            if isinstance(node, Symbol):
-                # Never extract individual symbols
-                return False
-            operands = [o for o, p in explore_operator(node)]
-            should_extract = True
-            if mode == 'aggressive':
-                # Do extract everything
-                should_extract = True
-            elif mode == 'only_const':
-                # Do not extract unless constant in all loops
-                if set(dep) and set(dep).issubset(set(self.expr_info.dims)):
-                    should_extract = False
-            elif all(isinstance(o, Symbol) for o in operands):
-                if len(operands) <= 2:
-                    # Do not extract binary/unary operations
-                    should_extract = False
-                if len([o for o in operands if any(r in self.expr_info.domain_dims
-                        for r in o.rank)]) == 1:
-                    # Do not extract if only one domain-dependent symbol is present
-                    should_extract = False
-            elif mode == 'only_domain':
-                # Do not extract unless dependent on domain loops
-                if set(dep).issubset(set(self.expr_info.out_domain_dims)):
-                    should_extract = False
-            elif mode == 'only_outdomain':
-                # Do not extract unless independent of the domain loops
-                if not set(dep).issubset(set(self.expr_info.out_domain_dims)):
-                    should_extract = False
-            if should_extract or look_ahead:
-                dep_subexprs[dep].append(node)
-            return should_extract
-
-        def __normal(left, right, dep_l, dep_r, dep_n, info_l, info_r):
-            if info_l == INVARIANT and info_r == INVARIANT:
-                if dep_l == dep_r:
-                    # E.g. alpha*beta, A[i] + B[i]
-                    return (dep_l, INVARIANT)
-                elif not dep_l:
-                    # E.g. alpha*A[i,j]
-                    if not set(self.expr_info.domain_dims) & set(dep_r) or \
-                            not (__try_hoist(left, dep_l) or __try_hoist(right, dep_r)):
-                        return (dep_r, INVARIANT)
-                elif not dep_r:
-                    # E.g. A[i,j]*alpha
-                    if not set(self.expr_info.domain_dims) & set(dep_l) or \
-                            not (__try_hoist(right, dep_r) or __try_hoist(left, dep_l)):
-                        return (dep_l, INVARIANT)
-                elif set(dep_l).issubset(set(dep_r)):
-                    # E.g. A[i]*B[i,j]
-                    if not __try_hoist(left, dep_l):
-                        return (dep_n, INVARIANT)
-                elif set(dep_r).issubset(set(dep_l)):
-                    # E.g. A[i,j]*B[i]
-                    if not __try_hoist(right, dep_r):
-                        return (dep_n, INVARIANT)
-                else:
-                    # E.g. A[i]*B[j]
-                    __try_hoist(left, dep_l)
-                    __try_hoist(right, dep_r)
-            elif info_r == INVARIANT:
-                __try_hoist(right, dep_r)
-            elif info_l == INVARIANT:
-                __try_hoist(left, dep_l)
-            return (dep_n, HOISTED)
-
-        def __aggressive(left, right, dep_l, dep_r, dep_n, info_l, info_r):
-            if info_l == INVARIANT and info_r == INVARIANT:
-                if dep_l == dep_r:
-                    # E.g. alpha*beta, A[i] + B[i]
-                    return (dep_l, INVARIANT)
-                elif not dep_l:
-                    # E.g. alpha*A[i,j], not hoistable anymore
-                    __try_hoist(right, dep_r)
-                elif not dep_r:
-                    # E.g. A[i,j]*alpha, not hoistable anymore
-                    __try_hoist(left, dep_l)
-                elif set(dep_l).issubset(set(dep_r)):
-                    # E.g. A[i]*B[i,j]
-                    if not __try_hoist(left, dep_l):
-                        return (dep_n, INVARIANT)
-                elif set(dep_r).issubset(set(dep_l)):
-                    # E.g. A[i,j]*B[i]
-                    if not __try_hoist(right, dep_r):
-                        return (dep_n, INVARIANT)
-                else:
-                    # E.g. A[i]*B[j], hoistable in TMP[i,j]
-                    return (dep_n, INVARIANT)
-            elif info_r == INVARIANT:
-                __try_hoist(right, dep_r)
-            elif info_l == INVARIANT:
-                __try_hoist(left, dep_l)
-            return (dep_n, HOISTED)
-
-        def __extract(node, dep_subexprs):
-            if isinstance(node, Symbol):
-                return (symbols[node], INVARIANT)
-
-            elif isinstance(node, Par):
-                return (__extract(node.child, dep_subexprs))
-
-            elif isinstance(node, FunCall):
-                arg_deps = [__extract(n, dep_subexprs) for n in node.children]
-                dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
-                info = INVARIANT if all([i == INVARIANT for _, i in arg_deps]) else HOISTED
-                return (dep, info)
-
-            else:
-                # Traverse the expression tree
-                left, right = node.children
-                dep_l, info_l = __extract(left, dep_subexprs)
-                dep_r, info_r = __extract(right, dep_subexprs)
-
-                # Filter out false dependencies
-                dep_l = tuple(d for d in dep_l if d in self.expr_info.dims)
-                dep_r = tuple(d for d in dep_r if d in self.expr_info.dims)
-                dep_n = dep_l + tuple(d for d in dep_r if d not in dep_l)
-
-                if mode in ['normal', 'only_const', 'only_outdomain', 'only_domain']:
-                    return __normal(left, right, dep_l, dep_r, dep_n, info_l, info_r)
-                elif mode == 'aggressive':
-                    return __aggressive(left, right, dep_l, dep_r, dep_n, info_l, info_r)
-                else:
-                    raise RuntimeError("licm: unexpected hoisting mode (%s)" % mode)
-
-        dep_subexprs = defaultdict(list)
-        __extract(node, dep_subexprs)
-        self.counter += 1
-        return dep_subexprs
 
     def _filter(self, subexprs, make_unique=True, sharing=None):
         """Filter hoistable subexpressions."""
@@ -603,15 +640,18 @@ class ExpressionHoister(object):
         always is a legal transformation."""
         return all([is_perfect_loop(l) for l in loops[1:]])
 
+    def _symbols(self):
+        symbols = visit(self.expr_info.outermost_parent,
+                        info_items=['symbols_dep'])['symbols_dep']
+        symbols = dict((s, tuple(l.dim for l in dep)) for s, dep in symbols.items())
+        return symbols
+
     def extract(self, mode):
         """Return a dictionary of hoistable subexpressions."""
         if not self._check_loops(self.expr_info.loops):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
             return
-
-        symbols = visit(self.expr_info.outermost_parent)['symbols_dep']
-        symbols = dict((s, tuple(l.dim for l in dep)) for s, dep in symbols.items())
-        return self._extract(self.stmt.rvalue, symbols, mode, look_ahead=True)
+        return self.extractor(mode, True, self._symbols())
 
     def licm(self, mode, iterative=True, max_sharing=False):
         """Perform generalized loop-invariant code motion."""
@@ -619,15 +659,14 @@ class ExpressionHoister(object):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
             return
 
-        symbols = visit(self.header, info_items=['symbols_dep'])['symbols_dep']
-        symbols = dict((s, tuple(l.dim for l in dep)) for s, dep in symbols.items())
-
-        extracted = True
+        inv_dep = {}
+        symbols = self._symbols()
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
-        inv_dep = {}
+
+        extracted = True
         while extracted:
-            extracted = self._extract(self.stmt.rvalue, symbols, mode)
+            extracted = self.extractor(mode, False, symbols)
             for dep, subexprs in extracted.items():
                 # 1) Filter subexpressions that will be hoisted
                 sharing = []
@@ -681,7 +720,7 @@ class ExpressionHoister(object):
                 inv_syms = [Symbol(self._hoisted_sym % {
                     'loop_dep': '_'.join(dep).upper() if dep else 'CONST',
                     'expr_id': self.expr_id,
-                    'round': self.counter,
+                    'round': self.extractor.counter,
                     'i': i
                 }, loop_size) for i in range(len(subexprs))]
                 inv_decls = [Decl(self.expr_info.type, s) for s in inv_syms]
