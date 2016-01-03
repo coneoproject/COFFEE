@@ -35,6 +35,7 @@ from collections import defaultdict, OrderedDict, Counter
 from copy import deepcopy as dcopy
 from warnings import warn as warning
 import itertools
+import operator
 
 from base import *
 from utils import *
@@ -1067,6 +1068,16 @@ class ExpressionFactorizer(object):
 
         terms[:] = unique_terms.values()
 
+    def _premultiply_symbols(self, symbols):
+        floats = [s for s in symbols if isinstance(s.symbol, (int, float))]
+        if len(floats) > 1:
+            other_symbols = [s for s in symbols if s not in floats]
+            prem = reduce(operator.mul, [s.symbol for s in floats], 1.0)
+            prem = [Symbol(prem)] if prem not in [1, 1.0] else []
+            return prem + other_symbols
+        else:
+            return symbols
+
     def _factorize(self, node, parent):
         if isinstance(node, Symbol):
             return self.Term.process([node], self.should_factorize)
@@ -1085,6 +1096,7 @@ class ExpressionFactorizer(object):
             children = explore_operator(node)
             symbols = [n for n, _ in children if isinstance(n, Symbol)]
             other_nodes = [(n, p) for n, p in children if n not in symbols]
+            symbols = self._premultiply_symbols(symbols)
             factorized = self.Term.process(symbols, self.should_factorize, Prod)
             terms = [self._factorize(n, p) for n, p in other_nodes]
             for t in terms:
