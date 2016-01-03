@@ -1079,16 +1079,18 @@ class ExpressionFactorizer(object):
             # "I'm not factorizable any further"
             for n in node.children:
                 self._factorize(n, node)
-            return self.Term(set([node]))
+            return self.Term(set(), set([node]))
 
         elif isinstance(node, Prod):
             children = explore_operator(node)
             symbols = [n for n, _ in children if isinstance(n, Symbol)]
             other_nodes = [(n, p) for n, p in children if n not in symbols]
-            term = self.Term.process(symbols, self.should_factorize, Prod)
-            for n, p in other_nodes:
-                term.operands |= self._factorize(n, p).operands
-            return term
+            factorized = self.Term.process(symbols, self.should_factorize, Prod)
+            terms = [self._factorize(n, p) for n, p in other_nodes]
+            for t in terms:
+                factorized.operands |= t.operands
+                factorized.factors |= t.factors
+            return factorized
 
         # The fundamental case is when /node/ is a Sum (or Sub, equivalently).
         # Here, we try to factorize the terms composing the operation
@@ -1110,7 +1112,7 @@ class ExpressionFactorizer(object):
             factorized = [t.generate_ast for t in factorized.values()]
             factorized = ast_make_expr(Sum, sorted(factorized, key=lambda f: str(f)))
             parent.children[parent.children.index(node)] = factorized
-            return self.Term(set([factorized]))
+            return self.Term(set(), set([factorized]))
 
         else:
             raise RuntimeError("Factorization error: unknown node: %s" % str(node))
