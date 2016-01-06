@@ -444,9 +444,9 @@ def is_perfect_loop(loop):
     return CheckPerfectLoop().visit(loop)
 
 
-def count(node, mode='symbol', read_only=False):
-    """For each variable ``node``, count how many times it appears as involved
-    in some expressions. For example, for the expression: ::
+def count(node, mode='urepr', read_only=False):
+    """Count the occurrences of all variables appearing in ``node``. For example,
+    for the expression: ::
 
         ``a*(5+c) + b*(a+4)``
 
@@ -454,31 +454,22 @@ def count(node, mode='symbol', read_only=False):
 
         ``{a: 2, b: 1, c: 1}``
 
-    :param node: Root of the visited AST
-    :param mode: Accepted values are ['symbol', 'symbol_id', 'symbol_str']. This
-                 parameter drives the counting and impacts the format of the
-                 returned dictionary. In particular, the keys in such dictionary
-                 will be:
-
-                * mode == 'symbol': a tuple (symbol name, symbol rank)
-                * mode == 'symbol_id': the symbol name only (a string). This \
-                                       implies that all symbol occurrences \
-                                       accumulate on the same counter, regardless \
-                                       of iteration spaces. For example, if \
-                                       under ``node`` appear both ``A[0]`` and \
-                                       ``A[i][j]``, ``A`` will be counted twice
-                * mode == 'symbol_str': a string representation of the symbol
-
-    :param read_only: True if only variables on the right-hand side of a statement
+    :param node: The root of the AST visited
+    :param mode: Set the key in the returned dictionary. Accepted values
+        are ['urepr', 'symbol_id'], where:
+        * mode == 'urepr': (default) use the symbol representation as key
+        * mode == 'symbol_id': use the symbol name as key, thus ignoring
+            any iteration space or offset. For example, if both A[0] and A[i]
+            appear in ``node``, return {A: 2, ...} (assuming no other
+            occurrences of A)
+    :param read_only: True if only variables on the right hand side of a statement
                       should be counted; False if any appearance should be counted.
     """
-    modes = ['symbol', 'symbol_id', 'symbol_str']
-    if mode == 'symbol':
-        key = lambda n: (n.symbol, n.rank)
+    modes = ['urepr', 'symbol_id']
+    if mode == 'urepr':
+        key = lambda n: n.urepr
     elif mode == 'symbol_id':
         key = lambda n: n.symbol
-    elif mode == 'symbol_str':
-        key = lambda n: str(n)
     else:
         raise RuntimeError("`Count` function got a wrong mode (valid: %s)" % modes)
 

@@ -95,7 +95,7 @@ class CountOccurences(Visitor):
             ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
-    def visit_Assign(self, o, ret=None, *args, **kwargs):
+    def visit_Writer(self, o, ret=None, *args, **kwargs):
         if self.rvalues:
             # Only counting rvalues, so don't walk lvalue
             ops = o.children[1:]
@@ -105,9 +105,15 @@ class CountOccurences(Visitor):
             ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
-    visit_Incr = visit_Assign
-
-    visit_Decr = visit_Assign
+    def visit_Decl(self, o, ret=None, *args, **kwargs):
+        if self.rvalues:
+            # Only counting rvalues, so don't walk lvalue
+            ret = self.visit(o.init, ret=ret, *args, **kwargs)
+        else:
+            ops, _ = o.operands()
+            for op in ops:
+                ret = self.visit(op, ret=ret, *args, **kwargs)
+        return ret
 
     def visit_Symbol(self, o, ret=None, *args, **kwargs):
         if ret is None:
