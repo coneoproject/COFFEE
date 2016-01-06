@@ -225,10 +225,13 @@ class ExpressionRewriter(object):
                 domain.
             * mode == 'constants': factorize symbols independent of any loops enclosing
                 the expression.
+            * mode == 'adhoc': factorize only symbols in /kwargs['adhoc']/
         :param kwargs:
             * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
                 provided, factorization will be performed only within these trees,
                 rather than within the whole expression
+            * adhoc: a list of symbols that should be factorized. Ignored if
+                ``mode != 'adhoc'``.
         """
 
         if mode == 'standard':
@@ -249,6 +252,11 @@ class ExpressionRewriter(object):
         elif mode == 'dimensions':
             dimensions = kwargs.get('dimensions', ())
             should_factorize = lambda n: set(dimensions).issubset(set(n.rank))
+        elif mode == 'adhoc':
+            adhoc = kwargs.get('adhoc', [])
+            if not adhoc:
+                return self
+            should_factorize = lambda n: n.urepr in adhoc
         elif mode in ['all', 'domain', 'outdomain', 'constants']:
             info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
             symbols = defaultdict(set)
