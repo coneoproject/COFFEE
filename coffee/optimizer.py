@@ -332,26 +332,24 @@ class LoopOptimizer(object):
 
         for l in self.hoisted.all_loops:
             info = visit(l)
-            occurrences = count(l, read_only=True)
-            innermost_block = FindInstances(Block).visit(l)[Block][-1]
+            l_occs = count(l, read_only=True)
             to_replace, to_remove = {}, []
-            for (symbol, rank), sym_occurrences in occurrences.items():
+            for (symbol, _, _), sym_occs in l_occs.items():
                 # A temporary /symbol/ is removed if any of the following
                 # conditions hold:
                 # - it is read once in /l/ and it is not read any longer (this
                 #   is checked through /stmt_occs/)
                 # - it is read one or more times in /l/, but it actually hosts a
-                #   symbol (this is checked through /sym_occurrences/)
+                #   symbol (this is checked through /sym_occs/)
                 if symbol not in self.hoisted or symbol in stmt_occs:
                     continue
                 if self.hoisted[symbol].loop is not l:
                     continue
                 decl = self.hoisted[symbol].decl
                 place = self.hoisted[symbol].place
-                expr = self.hoisted[symbol].stmt.children[1]
-                if sym_occurrences > 1 and explore_operator(expr):
+                expr = self.hoisted[symbol].stmt.rvalue
+                if sym_occs > 1 and explore_operator(expr):
                     continue
-
                 symbol_refs = info['symbol_refs'][symbol]
                 syms_mode = info['symbols_mode']
                 # Note: only one write is possible at this point
@@ -363,13 +361,15 @@ class LoopOptimizer(object):
                 self.hoisted.pop(symbol)
                 self.decls.pop(symbol)
 
-            # Perform replacement of selected symbols
-            for stmt in innermost_block.children:
-                ast_replace(stmt.children[1], to_replace, copy=True)
-
-            # Clean up
+            # Replace temporary symbols and clean up
+            l_innermost_body = inner_loops(l)[-1].body
+            for stmt in l_innermost_body:
+                if stmt.lvalue in to_replace:
+                    continue
+                while ast_replace(stmt, to_replace, copy=True):
+                    pass
             for stmt in to_remove:
-                innermost_block.children.remove(stmt)
+                l_innermost_body.remove(stmt)
 
     def _dissect(self, heuristics):
         """Analyze the set of expressions in the LoopOptimizer and infer an
