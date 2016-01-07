@@ -226,13 +226,18 @@ class ExpressionRewriter(object):
                 domain.
             * mode == 'constants': factorize symbols independent of any loops enclosing
                 the expression.
-            * mode == 'adhoc': factorize only symbols in /kwargs['adhoc']/
+            * mode == 'adhoc': factorize only symbols in /kwargs['adhoc']/ (details below)
         :param kwargs:
             * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
                 provided, factorization will be performed only within these trees,
                 rather than within the whole expression
-            * adhoc: a list of symbols that should be factorized. Ignored if
-                ``mode != 'adhoc'``.
+            * adhoc: a list of symbols that can be factorized and, for each symbol,
+                a list of symbols that can be grouped. For example, if we have
+                ``kwargs['adhoc'] = [(A, [B, C]), (D, [E, F, G])]``, and the
+                expression is ``A*B + D*E + A*C + A*F``, the result will be
+                ``A*(B+C) + A*F + D*E``. If the A's list were empty, all of the
+                three symbols B, C, and F would be factorized. Recall that this
+                option is ignored unless ``mode == 'adhoc'``.
         """
 
         if mode == 'standard':
@@ -254,7 +259,7 @@ class ExpressionRewriter(object):
             dimensions = kwargs.get('dimensions', ())
             should_factorize = lambda n: set(dimensions).issubset(set(n.rank))
         elif mode == 'adhoc':
-            adhoc = kwargs.get('adhoc', [])
+            adhoc = kwargs.get('adhoc')
             if not adhoc:
                 return self
             should_factorize = lambda n: n.urepr in adhoc
@@ -1078,6 +1083,18 @@ class ExpressionFactorizer(object):
         else:
             return symbols
 
+    def _filter(self, factorizable_term):
+        o = factorizable_term.operands_ast
+        grp = self.adhoc.get(o.urepr, []) if isinstance(o, Symbol) else []
+        if not grp:
+            return False
+        for f in factorizable_term.factors:
+            retval = FindInstances.default_retval()
+            symbols = FindInstances(Symbol).visit(f, ret=retval)[Symbol]
+            if any(s.urepr in grp for s in symbols):
+                return False
+        return True
+
     def _factorize(self, node, parent):
         if isinstance(node, Symbol):
             return self.Term.process([node], self.should_factorize)
@@ -1118,9 +1135,14 @@ class ExpressionFactorizer(object):
             for t in terms:
                 operand = set([t.operands_ast]) if t.operands else set()
                 factor = set([t.factors_ast]) if t.factors else set([Symbol(1.0)])
-                factorized_term = self.Term(operand, factor, node.__class__)
-                _t = factorized.setdefault(str(t.operands_ast), factorized_term)
-                _t.factors |= factor
+                factorizable_term = self.Term(operand, factor, node.__class__)
+                if self._filter(factorizable_term):
+                    # Skip
+                    factorized[t] = t
+                else:
+                    # Do factorize
+                    _t = factorized.setdefault(str(t.operands_ast), factorizable_term)
+                    _t.factors |= factor
             factorized = [t.generate_ast for t in factorized.values()]
             factorized = ast_make_expr(Sum, sorted(factorized, key=lambda f: str(f)))
             parent.children[parent.children.index(node)] = factorized
@@ -1131,8 +1153,10 @@ class ExpressionFactorizer(object):
 
     def factorize(self, should_factorize, **kwargs):
         expressions = kwargs.get('subexprs', [(self.stmt.rvalue, self.stmt)])
+        adhoc = kwargs.get('adhoc', {})
 
         self.should_factorize = should_factorize
+        self.adhoc = adhoc if any(v for v in adhoc.values()) else {}
 
         for node, parent in expressions:
             self._factorize(node, parent)
