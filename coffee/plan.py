@@ -370,13 +370,13 @@ class ASTKernel(object):
             }
         elif opts.get('O3'):
             params = {
-                'rewrite': 2,
+                'rewrite': 4,
                 'align_pad': True,
                 'dead_ops_elimination': True
             }
         elif opts.get('O2'):
             params = {
-                'rewrite': 2,
+                'rewrite': 4,
                 'align_pad': True
             }
         elif opts.get('O1'):
