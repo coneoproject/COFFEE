@@ -291,41 +291,40 @@ class LoopOptimizer(object):
         ast_update_rank(self.loop, precomputed_syms)
 
     def _min_temporaries(self):
-        """Relieve the memory pressure by removing unnecessary temporaries."""
+        """Remove unnecessary temporaries, thus relieving memory pressure.
+        A temporary is removed iff:
 
-        in_stmt = [count(s, mode='symbol_id', read_only=True) for s in self.exprs.keys()]
-        stmt_occs = dict((k, v) for d in in_stmt for k, v in d.items())
+            * it is written once, AND
+            * it is read once OR it is read n times, but it hosts only a Symbol
+        """
+        occs = count(self.header, mode='symbol_id', read_only=True)
 
         for l in self.hoisted.all_loops:
             info = visit(l)
             l_occs = count(l, read_only=True)
             to_replace, to_remove = {}, []
-            for (symbol, _, _), sym_occs in l_occs.items():
-                # A temporary /symbol/ is removed if any of the following
-                # conditions hold:
-                # - it is read once in /l/ and it is not read any longer (this
-                #   is checked through /stmt_occs/)
-                # - it is read one or more times in /l/, but it actually hosts a
-                #   symbol (this is checked through /sym_occs/)
-                if symbol not in self.hoisted or symbol in stmt_occs:
+            for (temporary, _, _), temporary_occs in l_occs.items():
+                if temporary not in self.hoisted:
                     continue
-                if self.hoisted[symbol].loop is not l:
+                if self.hoisted[temporary].loop is not l:
                     continue
-                decl = self.hoisted[symbol].decl
-                place = self.hoisted[symbol].place
-                expr = self.hoisted[symbol].stmt.rvalue
-                if sym_occs > 1 and explore_operator(expr):
+                if occs.get(temporary) != temporary_occs:
                     continue
-                symbol_refs = info['symbol_refs'][symbol]
+                decl = self.hoisted[temporary].decl
+                place = self.hoisted[temporary].place
+                expr = self.hoisted[temporary].stmt.rvalue
+                if temporary_occs > 1 and explore_operator(expr):
+                    continue
+                temporary_refs = info['symbol_refs'][temporary]
                 syms_mode = info['symbols_mode']
                 # Note: only one write is possible at this point
-                write = [(s, p) for s, p in symbol_refs if syms_mode[s][0] == WRITE][0]
+                write = [(s, p) for s, p in temporary_refs if syms_mode[s][0] == WRITE][0]
                 to_replace[write[0]] = expr
                 to_remove.append(write[1])
                 place.children.remove(decl)
                 # Update trackers
-                self.hoisted.pop(symbol)
-                self.decls.pop(symbol)
+                self.hoisted.pop(temporary)
+                self.decls.pop(temporary)
 
             # Replace temporary symbols and clean up
             l_innermost_body = inner_loops(l)[-1].body
