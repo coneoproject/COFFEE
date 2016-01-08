@@ -227,6 +227,8 @@ class ExpressionRewriter(object):
             * mode == 'constants': factorize symbols independent of any loops enclosing
                 the expression.
             * mode == 'adhoc': factorize only symbols in /kwargs['adhoc']/ (details below)
+            * mode == 'heuristic': no global factorization rule is used; rather, within
+                each Sum tree, factorize the symbols appearing most often in that tree
         :param kwargs:
             * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
                 provided, factorization will be performed only within these trees,
@@ -263,6 +265,9 @@ class ExpressionRewriter(object):
             if not adhoc:
                 return self
             should_factorize = lambda n: n.urepr in adhoc
+        elif mode == 'heuristic':
+            kwargs['heuristic'] = True
+            should_factorize = lambda n: False
         elif mode in ['all', 'domain', 'outdomain', 'constants']:
             info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
             symbols = defaultdict(set)
@@ -454,6 +459,7 @@ class ExpressionRewriter(object):
                             not_aggregate=True, dimensions=n[1])
                 self.factorize(mode='dimensions', subexprs=[e], dimensions=n[1])
                 handled.add(e)
+        self.factorize(mode='heuristic')
         self.licm(mode='only_outdomain')
 
         # Then apply rewrite rules A, B, and C
@@ -1136,6 +1142,33 @@ class ExpressionFactorizer(object):
 
         terms[:] = unique_terms.values()
 
+    def _heuristic_collection(self, terms):
+        if not self.heuristic or any(t.operands for t in terms):
+            return
+        tracker = OrderedDict()
+        for t in terms:
+            symbols = [s for s in t.factors if isinstance(s, Symbol)]
+            for s in symbols:
+                tracker.setdefault(s.urepr, []).append(t)
+        reverse_tracker = OrderedDict()
+        for s, ts in tracker.items():
+            reverse_tracker.setdefault(tuple(ts), []).append(s)
+        # 1) At least one symbol appearing in all terms: use that as operands ...
+        operands = [(ts, s) for ts, s in reverse_tracker.items() if ts == tuple(terms)]
+        # 2) ... Or simply pick operands greedily
+        if not operands:
+            handled = set()
+            for ts, s in reverse_tracker.items():
+                if len(ts) > 1 and all(t not in handled for t in ts):
+                    operands.append((ts, s))
+                    handled |= set(ts)
+        for ts, s in operands:
+            for t in ts:
+                new_operands = {i for i in t.factors if isinstance(i, Symbol)
+                                and i.urepr in s}
+                t.factors -= new_operands
+                t.operands |= new_operands
+
     def _premultiply_symbols(self, symbols):
         floats = [s for s in symbols if isinstance(s.symbol, (int, float))]
         if len(floats) > 1:
@@ -1190,9 +1223,12 @@ class ExpressionFactorizer(object):
             children = explore_operator(node)
             # First try to factorize within /node/'s children
             terms = [self._factorize(n, p) for n, p in children]
-            # Then check if it's possible to aggregate operations
+            # Check if it's possible to aggregate operations
             # Example: replace (a*b)+(a*b) with 2*(a*b)
             self._simplify_sum(terms)
+            # No global factorization rule is used, so just try to maximize
+            # factorization within /this/ Sum/Sub
+            self._heuristic_collection(terms)
             # Finally try to factorize some of the operands composing the operation
             factorized = OrderedDict()
             for t in terms:
@@ -1220,6 +1256,7 @@ class ExpressionFactorizer(object):
 
         self.should_factorize = should_factorize
         self.adhoc = adhoc if any(v for v in adhoc.values()) else {}
+        self.heuristic = kwargs.get('heuristic', False)
 
         for node, parent in expressions:
             self._factorize(node, parent)
