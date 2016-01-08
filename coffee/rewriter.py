@@ -804,7 +804,7 @@ class ExpressionHoister(object):
                     place = expr_dims_loops[dep[0]].children[0]
                     wrap_loop = ()
                     next_loop = place.children[place.children.index(self.stmt)]
-                elif set(dep).issuperset(set(self.expr_info.domain_dims)) and \
+                elif mode == 'aggressive' and set(dep) == set(self.expr_info.dims) and \
                         not any([self.expr_graph.is_written(e) for e in subexprs]):
                     # As n-dimensional vector, where /n == len(dep)/, outside of
                     # the loop nest
