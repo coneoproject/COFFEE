@@ -1042,10 +1042,10 @@ class ExpressionExpander(object):
             # as GROUP): so we can perform the expansion
             groupable = l_exps if l_type == self.GROUP else r_exps
             expandable = r_exps if l_type == self.GROUP else l_exps
-            to_replace = defaultdict(list)
+            to_replace = OrderedDict()
             for exp, grp in itertools.product(expandable, groupable):
                 expansion = self._build(exp, grp)
-                to_replace[exp].append(expansion)
+                to_replace.setdefault(exp, []).append(expansion)
             ast_replace(node, {k: ast_make_expr(Sum, v) for k, v in to_replace.items()},
                         mode='symbol')
             # Update the parent node, since an expression has just been expanded
