@@ -1089,24 +1089,23 @@ class ExpressionExpander(object):
 class ExpressionFactorizer(object):
 
     class Term():
+        """A Term represents a product between 'operands' and 'factors'. In a
+        product /a*(b+c)/, /a/ is the 'operand', while /b/ and /c/ are the 'factors'.
+        The symbol /+/ is the 'op' of the Term.
+        """
 
         def __init__(self, operands, factors=None, op=None):
-            # Example: in the Term /a*(b+c)/, /a/ is an 'operand', /b/ and /c/
-            # are 'factors', and /+/ is the 'op'
             self.operands = operands
-            self.factors = factors or set()
+            self.factors = factors or []
             self.op = op
 
         @property
         def operands_ast(self):
-            # Exploiting associativity, establish an order for the operands
-            operands = sorted(list(self.operands), key=lambda o: str(o))
-            return ast_make_expr(Prod, tuple(operands))
+            return ast_make_expr(Prod, self.operands)
 
         @property
         def factors_ast(self):
-            factors = sorted(list(self.factors), key=lambda f: str(f))
-            return ast_make_expr(self.op, tuple(factors))
+            return ast_make_expr(self.op, self.factors)
 
         @property
         def generate_ast(self):
@@ -1120,10 +1119,30 @@ class ExpressionFactorizer(object):
             else:
                 return Prod(self.operands_ast, self.factors_ast)
 
+        def add_operands(self, operands):
+            for o in operands:
+                if o not in self.operands:
+                    self.operands.append(o)
+
+        def remove_operands(self, operands):
+            for o in operands:
+                if o in self.operands:
+                    self.operands.remove(o)
+
+        def add_factors(self, factors):
+            for f in factors:
+                if f not in self.factors:
+                    self.factors.append(f)
+
+        def remove_factors(self, factors):
+            for f in factors:
+                if f in self.factors:
+                    self.factors.remove(f)
+
         @staticmethod
         def process(symbols, should_factorize, op=None):
-            operands = set(s for s in symbols if should_factorize(s))
-            factors = set(s for s in symbols if not should_factorize(s))
+            operands = [s for s in symbols if should_factorize(s)]
+            factors = [s for s in symbols if not should_factorize(s)]
             return ExpressionFactorizer.Term(operands, factors, op)
 
     def __init__(self, stmt):
@@ -1138,7 +1157,7 @@ class ExpressionFactorizer(object):
             occurrences = len(t_list)
             unique_terms[t_repr] = t_list[0]
             if occurrences > 1:
-                unique_terms[t_repr].operands.add(Symbol(occurrences))
+                unique_terms[t_repr].add_operands([Symbol(occurrences)])
 
         terms[:] = unique_terms.values()
 
@@ -1164,10 +1183,10 @@ class ExpressionFactorizer(object):
                     handled |= set(ts)
         for ts, s in operands:
             for t in ts:
-                new_operands = {i for i in t.factors if isinstance(i, Symbol)
-                                and i.urepr in s}
-                t.factors -= new_operands
-                t.operands |= new_operands
+                new_operands = [i for i in t.factors if isinstance(i, Symbol)
+                                and i.urepr in s]
+                t.remove_factors(new_operands)
+                t.add_operands(new_operands)
 
     def _premultiply_symbols(self, symbols):
         floats = [s for s in symbols if isinstance(s.symbol, (int, float))]
@@ -1203,7 +1222,7 @@ class ExpressionFactorizer(object):
             # "I'm not factorizable any further"
             for n in node.children:
                 self._factorize(n, node)
-            return self.Term(set(), set([node]))
+            return self.Term([], [node])
 
         elif isinstance(node, Prod):
             children = explore_operator(node)
@@ -1213,8 +1232,8 @@ class ExpressionFactorizer(object):
             factorized = self.Term.process(symbols, self.should_factorize, Prod)
             terms = [self._factorize(n, p) for n, p in other_nodes]
             for t in terms:
-                factorized.operands |= t.operands
-                factorized.factors |= t.factors
+                factorized.add_operands(t.operands)
+                factorized.add_factors(t.factors)
             return factorized
 
         # The fundamental case is when /node/ is a Sum (or Sub, equivalently).
@@ -1232,8 +1251,8 @@ class ExpressionFactorizer(object):
             # Finally try to factorize some of the operands composing the operation
             factorized = OrderedDict()
             for t in terms:
-                operand = set([t.operands_ast]) if t.operands else set()
-                factor = set([t.factors_ast]) if t.factors else set([Symbol(1.0)])
+                operand = [t.operands_ast] if t.operands else []
+                factor = [t.factors_ast] if t.factors else [Symbol(1.0)]
                 factorizable_term = self.Term(operand, factor, node.__class__)
                 if self._filter(factorizable_term):
                     # Skip
@@ -1241,11 +1260,11 @@ class ExpressionFactorizer(object):
                 else:
                     # Do factorize
                     _t = factorized.setdefault(str(t.operands_ast), factorizable_term)
-                    _t.factors |= factor
+                    _t.add_factors(factor)
             factorized = [t.generate_ast for t in factorized.values()]
-            factorized = ast_make_expr(Sum, sorted(factorized, key=lambda f: str(f)))
+            factorized = ast_make_expr(Sum, factorized)
             parent.children[parent.children.index(node)] = factorized
-            return self.Term(set(), set([factorized]))
+            return self.Term([], [factorized])
 
         else:
             raise RuntimeError("Factorization error: unknown node: %s" % str(node))
