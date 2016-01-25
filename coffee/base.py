@@ -454,6 +454,12 @@ class Symbol(Expr):
         from utils import is_const_dim
         return all(is_const_dim(r) for r in self.rank)
 
+    @property
+    def urepr(self):
+        """Provide a unique representation of Symbols having same name,
+        iteration space, and offset."""
+        return (self.symbol, self.rank, self.offset)
+
     def gencode(self, not_scope=True, parent=None):
         points = ""
         if not self.offset:
