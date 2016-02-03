@@ -208,7 +208,6 @@ class ASTKernel(object):
                 nests[nest[0]].update({stmt: metaexpr})
             loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
                          for (loop, header), exprs in nests.items()]
-
             # Combining certain optimizations is meaningless/forbidden.
             if unroll and toblas:
                 raise RuntimeError("BLAS forbidden with unrolling")
@@ -249,7 +248,7 @@ class ASTKernel(object):
 
                 # 5) Vectorization
                 if initialized and flatten(loop_opt.expr_domain_loops):
-                    vect = LoopVectorizer(loop_opt)
+                    vect = LoopVectorizer(loop_opt, kernel)
                     if align_pad and not toblas:
                         # Padding and data alignment
                         vect.pad_and_align()

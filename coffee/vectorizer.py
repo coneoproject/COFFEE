@@ -67,7 +67,8 @@ class VectStrategy():
 
 class LoopVectorizer(object):
 
-    def __init__(self, loop_opt):
+    def __init__(self, loop_opt, kernel=None):
+        self.kernel = kernel or loop_opt.header
         self.header = loop_opt.header
         self.decls = loop_opt.decls
         self.exprs = loop_opt.exprs
@@ -121,13 +122,13 @@ class LoopVectorizer(object):
         alignment to (the size in bytes of) the vector length.
         """
         # Aliases
-        info = visit(self.header, info_items=['symbols_dep', 'symbols_mode',
+        info = visit(self.kernel, info_items=['symbols_dep', 'symbols_mode',
                                               'symbol_refs', 'fors'])
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']
         retval = FindInstances.default_retval()
-        to_invert = FindInstances(Invert).visit(self.header, ret=retval)[Invert]
+        to_invert = FindInstances(Invert).visit(self.kernel, ret=retval)[Invert]
         # Vectorization aliases
         vector_length = plan.isa["dp_reg"]
         align = plan.compiler['align'](plan.isa['alignment'])
@@ -155,6 +156,9 @@ class LoopVectorizer(object):
                 # Alignment
                 decl.attr.append(align)
                 continue
+            # Don't try and pad function arguments that are pointer-valued
+            if decl.is_pointer_type:
+                continue
             # Examined symbol is a FunDecl argument, so a buffer might be required
             access_modes, dataspaces = [], []
             p_info = OrderedDict()
@@ -169,7 +173,7 @@ class LoopVectorizer(object):
                 # ... and the iteration and the data spaces
                 loops = tuple(l for l in symbols_dep[s] if l.dim in s.rank)
                 itspace = tuple((l.start, l.end) for l in loops)
-                dataspace = [None for r in s.rank]
+                dataspace = {}
                 for l in loops:
                     # Assume, initially, the dataspace spans the whole dimension,
                     # then try to limit it based on available information
@@ -179,7 +183,8 @@ class LoopVectorizer(object):
                     if not isinstance(offset, str):
                         l_dataspace = (l.start + offset, l.end + offset)
                     dataspace[index] = l_dataspace
-                dataspaces.append(tuple(dataspace))
+                assert len(dataspace) <= len(s.rank)
+                dataspaces.append(tuple(sorted((d[1] for d in dataspace.items()), key=lambda d: d[0])))
                 p_info.setdefault((itspace, p_offset), (loops, []))[1].append(s)
             # B- Check dataspace overlap. Dataspaces ...
             # ... should either completely overlap (will be mapped to the same buffer)
@@ -236,7 +241,7 @@ class LoopVectorizer(object):
                 if first[0] == READ:
                     stmts = [Assign(b, s) for s, b in mapper]
                     copy_back = ItSpace(mode=2).to_for(loops, stmts=stmts)
-                    self.header.children.insert(0, copy_back[0])
+                    insert_at_elem(self.header.children, buffer, copy_back[0], ofs=1)
                 if last[0] == WRITE:
                     # If extra information (a pragma) is present, telling that
                     # the argument does not need to be incremented because it does
@@ -259,11 +264,12 @@ class LoopVectorizer(object):
         for l in inner_loops(self.header):
             should_round, should_vectorize = True, True
             for stmt in l.body:
-                sym, expr = stmt.children
+                sym = stmt.lvalue
+                expr = stmt.rvalue
                 sym_decl = self.decls.get(sym.symbol)
                 # Condition A: all lvalues must have the innermost loop as fastest
                 # varying dimension
-                if not (sym.rank and sym.rank[p_dim] == l.dim):
+                if sym.rank and not sym.rank[p_dim] == l.dim:
                     should_round = False
                     should_vectorize = False
                     break
@@ -281,11 +287,16 @@ class LoopVectorizer(object):
             # should /not/ alter the result.
             lvalues, aligned_l = {}, dcopy(l)
             for stmt in aligned_l.body:
-                sym, expr = stmt.children
+                sym = stmt.lvalue
+                expr = stmt.rvalue
                 lvalues[sym] = (0, 0, False)
                 symbols = [sym] + FindInstances(Symbol).visit(expr)[Symbol]
                 symbols = [s for s in symbols if any(r == l.dim for r in s.rank)]
                 for s in symbols:
+                    if not should_round:
+                        # short circuit
+                        break
+
                     # First of all, we need to be sure we can inspect the symbol
                     # declaration
                     decl = self.decls.get(s.symbol)
@@ -312,6 +323,10 @@ class LoopVectorizer(object):
                     # result because they would access non zero-valued entries
                     extra = range(start, offset) + range(offset + l.end + 1, end + 1)
                     for i in extra:
+                        # Declaration not padded to padded loop bounds
+                        if i > decl.size[p_dim]:
+                            should_round = False
+                            break
                         if i >= decl.core[p_dim]:
                             # In the padded region, safe
                             continue
@@ -327,6 +342,7 @@ class LoopVectorizer(object):
                         # zero-valued region (in case, we are happy and round), or not
                         if any(i in range(k, j + k) for j, k in [j[p_dim] for j in nz]):
                             should_round = False
+                            break
                     # Round down the start point
                     ast_update_ofs(s, {l.dim: start})
                     # Track the rounding in the lvalue and infer if the zero-valued
