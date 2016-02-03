@@ -727,6 +727,10 @@ class Decl(Statement):
         self._scope = val
 
     @property
+    def is_pointer_type(self):
+        return self.typ.find("*") >= 0
+
+    @property
     def nonzero(self):
         """Return the location of non-zero valued blocks, if any."""
         return self.init.nonzero if isinstance(self.init, SparseArrayInit) else ()
