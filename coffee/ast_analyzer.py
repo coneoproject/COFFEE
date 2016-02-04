@@ -145,7 +145,11 @@ class ExpressionGraph(object):
         writes = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
         for type, nodes in writes.items():
             for n in nodes:
-                self.add_dependency(*n.children)
+                lvalue = n.lvalue
+                rvalue = n.rvalue
+                if isinstance(rvalue, EmptyStatement):
+                    continue
+                self.add_dependency(lvalue, rvalue)
 
     def add_dependency(self, sym, expr):
         """Add dependency between ``sym`` and symbols appearing in ``expr``."""

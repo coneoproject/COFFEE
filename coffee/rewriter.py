@@ -1183,8 +1183,8 @@ class ExpressionFactorizer(object):
                     handled |= set(ts)
         for ts, s in operands:
             for t in ts:
-                new_operands = [i for i in t.factors if isinstance(i, Symbol)
-                                and i.urepr in s]
+                new_operands = [i for i in t.factors if
+                                isinstance(i, Symbol) and i.urepr in s]
                 t.remove_factors(new_operands)
                 t.add_operands(new_operands)
 

@@ -642,7 +642,7 @@ class IDiv(AugmentedAssign):
     op = "/="
 
 
-class Decl(Statement):
+class Decl(Writer):
 
     """Declaration of a symbol.
 

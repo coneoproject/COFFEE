@@ -35,6 +35,7 @@ from math import ceil
 from copy import deepcopy as dcopy
 from collections import OrderedDict
 from itertools import product
+import numpy
 
 from base import *
 from utils import *
@@ -146,7 +147,7 @@ class LoopVectorizer(object):
         # 1) Pad arrays by extending the innermost dimension
         buffer = None
         for decl_name, decl in self.decls.items():
-            if not decl.sym.rank:
+            if numpy.prod(decl.sym.rank) == 1:
                 continue
             p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
             if decl.scope == LOCAL:
@@ -172,6 +173,9 @@ class LoopVectorizer(object):
                 p_offset = s.offset[p_dim][1]
                 # ... and the iteration and the data spaces
                 loops = tuple(l for l in symbols_dep[s] if l.dim in s.rank)
+                # Don't bad if we didn't find the reference in a loop
+                if len(loops) == 0:
+                    continue
                 itspace = tuple((l.start, l.end) for l in loops)
                 dataspace = {}
                 for l in loops:
