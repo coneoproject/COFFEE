@@ -35,6 +35,7 @@ from collections import defaultdict, OrderedDict, Counter
 from copy import deepcopy as dcopy
 from warnings import warn as warning
 import itertools
+import operator
 
 from base import *
 from utils import *
@@ -80,82 +81,84 @@ class ExpressionRewriter(object):
                                                 self.expr_graph)
         self.expr_factorizer = ExpressionFactorizer(self.stmt)
 
-    def licm(self, **kwargs):
-        """Perform generalized loop-invariant code motion.
+    def licm(self, mode='normal', **kwargs):
+        """Perform generalized loop-invariant code motion, a transformation
+        detailed in a paper available at:
 
-        Loop-invariant expressions found in the nest are moved "after" the
-        outermost independent loop and "after" the fastest varying dimension
-        loop. Here, "after" means that if the loop nest has two loops ``i``
-        and ``j``, and ``j`` is in the body of ``i``, then ``i`` comes after
-        ``j`` (i.e. the loop nest has to be read from right to left).
+            http://dl.acm.org/citation.cfm?id=2687415
 
-        For example, if a sub-expression ``E`` depends on ``[i, j]`` and the
-        loop nest has three loops ``[i, j, k]``, then ``E`` is hoisted out from
-        the body of ``k`` to the body of ``i``. All hoisted expressions are
-        then wrapped and evaluated in a 'clone' loop in order to promote compiler
-        autovectorization.
-
+        :param mode: drive code motion by specifying what subexpressions should
+            be hoisted
+            * normal: (default) all subexpressions that depend on one loop at most
+            * aggressive: all subexpressions, depending on any number of loops.
+                This may require introducing N-dimensional temporaries.
+            * only_const: only all constant subexpressions
+            * only_domain: only all domain-dependent subexpressions
+            * only_outdomain: only all subexpressions independent of the domain loops
         :param kwargs:
-            * only_domain: hoist all domain-dependent subexpressions, even if
-                they would require ``n``-dimensional temporary arrays (with
-                ``n`` being the number of domain loops).
-            * only_outdomain: hoist all subexpressions independent of the
-                domain loops.
-            * only_const: hoist all constant subexpressions (i.e., no loop
-                dependencies at all).
-            * look_ahead: True if only a projection of the hoistable subexpressions
-                is needed (i.e., the actual expression is not modified)
+            * look_ahead: (default: False) should be set to True if only a projection
+                of the hoistable subexpressions is needed (i.e., hoisting not performed)
+            * max_sharing: (default: False) should be set to True if hoisting should be
+                avoided in case the same set of symbols appears in different hoistable
+                sub-expressions. By not hoisting, factorization opportunities are preserved
+            * iterative: (default: True) should be set to False if interested in
+                hoisting only the smallest subexpressions matching /mode/
         """
-        if kwargs.get('look_ahead'):
-            return self.expr_hoister.extract(**kwargs)
-        elif kwargs.get('only_domain'):
-            # Reassociation can promote more hoisting in /only_domain/ mode
+
+        look_ahead = kwargs.get('look_ahead', False)
+        max_sharing = kwargs.get('max_sharing', False)
+        iterative = kwargs.get('iterative', True)
+
+        if look_ahead:
+            return self.expr_hoister.extract(mode)
+        if mode == 'aggressive':
+            # Reassociation may promote more hoisting in /aggressive/ mode
             self.reassociate()
-        self.expr_hoister.licm(**kwargs)
+        self.expr_hoister.licm(mode, iterative, max_sharing)
         return self
 
     def expand(self, mode='standard', **kwargs):
-        """Expand expressions over other expressions based on different heuristics.
-        In the simplest example one can have: ::
+        """Expand expressions based on different rules. For example: ::
 
             (X[i] + Y[j])*F + ...
 
-        which could be transformed into: ::
+        can be expanded into: ::
 
             (X[i]*F + Y[j]*F) + ...
 
-        When creating the expanded object, if the expanding term had already been
-        hoisted, then the expansion itself is also lifted. For example, if: ::
+        The expanded term could also be lifted. For example, if we have: ::
 
             Y[j] = f(...)
             (X[i]*Y[j])*F + ...
 
-        and we assume it has been decided (see below) the expansion should occur
-        along the loop dimension ``j``, the transformation generates: ::
+        where ``Y`` was produced by code motion, expansion results in: ::
 
             Y[j] = f(...)*F
             (X[i]*Y[j]) + ...
 
-        One may want to expand expressions for several reasons, which include
+        Reasons for expanding expressions include:
 
-        * Exposing factorization opportunities;
-        * Exposing high-level (linear algebra) operations (e.g., matrix multiplies)
-        * Relieving register pressure; when, for example, ``(X[i]*Y[j])`` is
-          computed in a loop L' different than the loop L'' in which ``Y[j]``
-          is evaluated, and ``cost(L') > cost(L'')``;
+        * Exposing factorization opportunities
+        * Exposing higher level operations (e.g., matrix multiplies)
+        * Relieving register pressure
 
-        :param mode: multiple expansion strategies are possible, each exposing
-            different, "hidden" opportunities for later code motion.
-
-            * mode == 'standard': this heuristics consists of expanding along the
-                loop dimension appearing the most in different (i.e., unique).
-                This aims at making factorization more effective.
+        :param mode: multiple expansion strategies are possible
+            * mode == 'standard': expand along the loop dimension appearing most
+                often in different symbols
+            * mode == 'dimensions': expand along the loop dimensions provided in
+                /kwargs['dimensions']/
             * mode == 'all': expand when symbols depend on at least one of the
                 expression's dimensions
             * mode == 'domain': expand when symbols depending on the expressions's
                 domain are encountered.
             * mode == 'outdomain': expand when symbols independent of the
                 expression's domain are encountered.
+        :param kwargs:
+            * not_aggregate: True if should not try to aggregate expanded symbols
+                with previously hoisted expressions
+            * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
+                provided, expansion will be performed only within these trees,
+                rather than within the whole expression
         """
 
         if mode == 'standard':
@@ -173,6 +176,9 @@ class ExpressionRewriter(object):
             # Finally, establish the expansion dimension
             dimension = Counter(occurrences).most_common(1)[0][0]
             should_expand = lambda n: set(dimension).issubset(set(n.rank))
+        elif mode == 'dimensions':
+            dimensions = kwargs.get('dimensions', ())
+            should_expand = lambda n: set(dimensions).issubset(set(n.rank))
         elif mode in ['all', 'domain', 'outdomain']:
             info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
             symbols = defaultdict(set)
@@ -192,10 +198,9 @@ class ExpressionRewriter(object):
             return
 
         # Perform the expansion
-        self.expr_expander.expand(should_expand, kwargs.get('not_aggregate'))
-
-        # Update known declarations
+        self.expr_expander.expand(should_expand, **kwargs)
         self.decls.update(self.expr_expander.expanded_decls)
+
         return self
 
     def factorize(self, mode='standard', **kwargs):
@@ -207,11 +212,13 @@ class ExpressionRewriter(object):
 
             A[i]*(B[j] + C[j]).
 
-        :param mode: multiple factorization strategies are possible, each exposing
-                     different, "hidden" opportunities for code motion.
+        :param mode: multiple factorization strategies are possible. Note that
+                     different strategies may expose different code motion opportunities
 
             * mode == 'standard': factorize symbols along the dimension that appears
                 most often in the expression.
+            * mode == 'dimensions': factorize symbols along the loop dimensions provided
+                in /kwargs['dimensions']/
             * mode == 'all': factorize symbols depending on at least one of the
                 expression's dimensions.
             * mode == 'domain': factorize symbols depending on the expression's domain.
@@ -219,6 +226,20 @@ class ExpressionRewriter(object):
                 domain.
             * mode == 'constants': factorize symbols independent of any loops enclosing
                 the expression.
+            * mode == 'adhoc': factorize only symbols in /kwargs['adhoc']/ (details below)
+            * mode == 'heuristic': no global factorization rule is used; rather, within
+                each Sum tree, factorize the symbols appearing most often in that tree
+        :param kwargs:
+            * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
+                provided, factorization will be performed only within these trees,
+                rather than within the whole expression
+            * adhoc: a list of symbols that can be factorized and, for each symbol,
+                a list of symbols that can be grouped. For example, if we have
+                ``kwargs['adhoc'] = [(A, [B, C]), (D, [E, F, G])]``, and the
+                expression is ``A*B + D*E + A*C + A*F``, the result will be
+                ``A*(B+C) + A*F + D*E``. If the A's list were empty, all of the
+                three symbols B, C, and F would be factorized. Recall that this
+                option is ignored unless ``mode == 'adhoc'``.
         """
 
         if mode == 'standard':
@@ -236,6 +257,17 @@ class ExpressionRewriter(object):
             # Finally, establish the factorization dimension
             dimension = Counter(occurrences).most_common(1)[0][0]
             should_factorize = lambda n: set(dimension).issubset(set(n.rank))
+        elif mode == 'dimensions':
+            dimensions = kwargs.get('dimensions', ())
+            should_factorize = lambda n: set(dimensions).issubset(set(n.rank))
+        elif mode == 'adhoc':
+            adhoc = kwargs.get('adhoc')
+            if not adhoc:
+                return self
+            should_factorize = lambda n: n.urepr in adhoc
+        elif mode == 'heuristic':
+            kwargs['heuristic'] = True
+            should_factorize = lambda n: False
         elif mode in ['all', 'domain', 'outdomain', 'constants']:
             info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
             symbols = defaultdict(set)
@@ -257,7 +289,7 @@ class ExpressionRewriter(object):
             return
 
         # Perform the factorization
-        self.expr_factorizer.factorize(should_factorize)
+        self.expr_factorizer.factorize(should_factorize, **kwargs)
         return self
 
     def reassociate(self, reorder=None):
@@ -313,7 +345,9 @@ class ExpressionRewriter(object):
         to_replace = {}
         for i in divisions:
             if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
-                to_replace[i] = Prod(i.left, Div(1, i.right.symbol))
+                to_replace[i] = Prod(i.left, 1 / i.right.symbol)
+            else:
+                to_replace[i] = Prod(i.left, Div(1, i.right))
         ast_replace(self.stmt.rvalue, to_replace, copy=True, mode='symbol')
         return self
 
@@ -411,10 +445,249 @@ class ExpressionRewriter(object):
             self.header.children.remove(hoisted_loop)
         return self
 
+    def SGrewrite(self):
+        """Apply rewrite rules based on the sharing graph of the expression."""
+
+        # First eliminate sharing "locally", i.e., within Sums
+        sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        handled = set()
+        for n in sgraph.nodes():
+            mapped = mapper.get((n,), [])
+            with_sharing = [e for e in mapped if e and e not in handled]
+            for e in with_sharing:
+                self.expand(mode='dimensions', subexprs=[e],
+                            not_aggregate=True, dimensions=n[1])
+                self.factorize(mode='dimensions', subexprs=[e], dimensions=n[1])
+                handled.add(e)
+        self.factorize(mode='heuristic')
+        self.licm(mode='only_outdomain')
+
+        # Then apply rewrite rules A, B, and C
+        sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        if 'topsum' in mapper:
+            self.expand(mode='domain', subexprs=[mapper['topsum']], not_aggregate=True)
+            sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        while True:
+            if all(sgraph.degree(n) <= 1 for n in sgraph.nodes()):
+                break
+
+            with_terminals = [(n, [i[1] for i in sgraph.edges(n)
+                                   if sgraph.degree(i[1]) == 1]) for n in sgraph.nodes()]
+            with_terminals = [(n, v) for n, v in with_terminals if v]
+            while with_terminals:
+                # Rule A: more than one terminals {t1, ..., tn}, expand and
+                # factorize /n/ such that n(...t1 + ... + ...tn)
+                handling = {n: v for n, v in with_terminals if len(v) > 1}
+                self.factorize(mode='adhoc', adhoc=handling)
+                with_terminals = [t for t in with_terminals if t[0] not in handling]
+                if handling:
+                    self.licm(mode='only_domain')
+                    sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+
+                # Rule B: only one terminal /t/, expand and factorize /n/ such
+                # that n(...t + ...s), where /s/ is a non-terminal adjacent to /n/
+                handling = {n: v[0] for n, v in with_terminals if len(v) == 1}
+                for n, v in handling.items():
+                    adjacent = [s for s in sgraph.edges(n) if s != v]
+                    if len(adjacent) >= 1:
+                        handling[n] = [v, adjacent[0]]
+                    else:
+                        handling.pop(n)
+                self.factorize(mode='adhoc', adhoc=handling)
+                with_terminals = [t for t in with_terminals if t[0] not in handling]
+                if handling:
+                    self.licm(mode='only_domain')
+                    sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+
+            # Rule C: no terminals, take /n/ with highest degree, expand and
+            # factorize /n/ such that n(...s1 + ... + ...sn) and /s1/, ..., /sn/
+            # are the non-terminals adjacent to /n/
+            nodes = [n for n in sgraph.nodes() if sgraph.node[n]['occs'] > 1]
+            nodes = sorted(nodes, key=lambda i: sgraph.degree(i), reverse=True)
+            for n in nodes:
+                self.factorize(mode='adhoc', adhoc={n: []})
+            self.licm()
+            sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+
     @staticmethod
     def reset():
         ExpressionHoister._expr_handled[:] = []
         ExpressionExpander._expr_handled[:] = []
+
+
+class ExpressionExtractor():
+
+    EXT = 0  # expression marker: extract
+    STOP = 1  # expression marker: do not extract
+
+    def __init__(self, stmt, expr_info):
+        self.stmt = stmt
+        self.expr_info = expr_info
+        self.counter = 0
+
+    def _try(self, node, dep):
+        if isinstance(node, Symbol):
+            # Never extract individual symbols
+            return False
+        operands = [o for o, p in explore_operator(node)]
+        should_extract = True
+        if self.mode == 'aggressive':
+            # Do extract everything
+            should_extract = True
+        elif self.mode == 'only_const':
+            # Do not extract unless constant in all loops
+            if set(dep) and set(dep).issubset(set(self.expr_info.dims)):
+                should_extract = False
+        elif all(isinstance(o, Symbol) for o in operands):
+            if len(operands) <= 2:
+                # Do not extract binary/unary operations
+                should_extract = False
+            if len([o for o in operands if any(r in self.expr_info.domain_dims
+                    for r in o.rank)]) == 1:
+                # Do not extract if only one domain-dependent symbol is present
+                should_extract = False
+        elif self.mode == 'only_domain':
+            # Do not extract unless dependent on domain loops
+            if set(dep).issubset(set(self.expr_info.out_domain_dims)):
+                should_extract = False
+        elif self.mode == 'only_outdomain':
+            # Do not extract unless independent of the domain loops
+            if not set(dep).issubset(set(self.expr_info.out_domain_dims)):
+                should_extract = False
+        if should_extract or self.look_ahead:
+            self.extracted.setdefault(dep, []).append(node)
+        return should_extract
+
+    def _soft(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+        if info_l == self.EXT and info_r == self.EXT:
+            if dep_l == dep_r:
+                # E.g. alpha*beta, A[i] + B[i]
+                return (dep_l, self.EXT)
+            elif set(dep_l).issubset(set(dep_r)):
+                # E.g. A[i]*B[i,j]
+                if not self._try(right, dep_r):
+                    return (dep_n, self.EXT)
+            elif set(dep_r).issubset(set(dep_l)):
+                # E.g. A[i,j]*B[i]
+                if not self._try(left, dep_l):
+                    return (dep_n, self.EXT)
+            else:
+                # E.g. A[i]*B[j]
+                self._try(left, dep_l)
+                self._try(right, dep_r)
+        elif info_r == self.EXT:
+            self._try(right, dep_r)
+        elif info_l == self.EXT:
+            self._try(left, dep_l)
+        return (dep_n, self.STOP)
+
+    def _normal(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+        if info_l == self.EXT and info_r == self.EXT:
+            if dep_l == dep_r:
+                # E.g. alpha*beta, A[i] + B[i]
+                return (dep_l, self.EXT)
+            elif not dep_l:
+                # E.g. alpha*A[i,j]
+                if not set(self.expr_info.domain_dims) & set(dep_r) or \
+                        not (self._try(left, dep_l) or self._try(right, dep_r)):
+                    return (dep_r, self.EXT)
+            elif not dep_r:
+                # E.g. A[i,j]*alpha
+                if not set(self.expr_info.domain_dims) & set(dep_l) or \
+                        not (self._try(right, dep_r) or self._try(left, dep_l)):
+                    return (dep_l, self.EXT)
+            elif set(dep_l).issubset(set(dep_r)):
+                # E.g. A[i]*B[i,j]
+                if not self._try(left, dep_l):
+                    return (dep_n, self.EXT)
+            elif set(dep_r).issubset(set(dep_l)):
+                # E.g. A[i,j]*B[i]
+                if not self._try(right, dep_r):
+                    return (dep_n, self.EXT)
+            else:
+                # E.g. A[i]*B[j]
+                self._try(left, dep_l)
+                self._try(right, dep_r)
+        elif info_r == self.EXT:
+            self._try(right, dep_r)
+        elif info_l == self.EXT:
+            self._try(left, dep_l)
+        return (dep_n, self.STOP)
+
+    def _aggressive(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+        if info_l == self.EXT and info_r == self.EXT:
+            if dep_l == dep_r:
+                # E.g. alpha*beta, A[i] + B[i]
+                return (dep_l, self.EXT)
+            elif not dep_l:
+                # E.g. alpha*A[i,j], not hoistable anymore
+                self._try(right, dep_r)
+            elif not dep_r:
+                # E.g. A[i,j]*alpha, not hoistable anymore
+                self._try(left, dep_l)
+            elif set(dep_l).issubset(set(dep_r)):
+                # E.g. A[i]*B[i,j]
+                if not self._try(left, dep_l):
+                    return (dep_n, self.EXT)
+            elif set(dep_r).issubset(set(dep_l)):
+                # E.g. A[i,j]*B[i]
+                if not self._try(right, dep_r):
+                    return (dep_n, self.EXT)
+            else:
+                # E.g. A[i]*B[j], hoistable in TMP[i,j]
+                return (dep_n, self.EXT)
+        elif info_r == self.EXT:
+            self._try(right, dep_r)
+        elif info_l == self.EXT:
+            self._try(left, dep_l)
+        return (dep_n, self.STOP)
+
+    def _extract(self, node):
+        if isinstance(node, Symbol):
+            return (self.symbols[node], self.EXT)
+
+        elif isinstance(node, Par):
+            return self._extract(node.child)
+
+        elif isinstance(node, FunCall):
+            arg_deps = [self._extract(n) for n in node.children]
+            dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
+            info = self.EXT if all(i == self.EXT for _, i in arg_deps) else self.STOP
+            return (dep, info)
+
+        else:
+            # Traverse the expression tree
+            left, right = node.children
+            dep_l, info_l = self._extract(left)
+            dep_r, info_r = self._extract(right)
+
+            # Filter out false dependencies
+            dep_l = tuple(d for d in dep_l if d in self.expr_info.dims)
+            dep_r = tuple(d for d in dep_r if d in self.expr_info.dims)
+            dep_n = dep_l + tuple(d for d in dep_r if d not in dep_l)
+
+            args = left, right, dep_l, dep_r, dep_n, info_l, info_r
+
+            if self.mode in ['normal', 'only_const', 'only_outdomain']:
+                return self._normal(*args)
+            elif self.mode == 'only_domain':
+                return self._soft(*args)
+            elif self.mode == 'aggressive':
+                return self._aggressive(*args)
+            else:
+                raise RuntimeError("licm: unexpected hoisting mode (%s)" % self.mode)
+
+    def __call__(self, mode, look_ahead, symbols):
+        """Extract invariant subexpressions from /self.expr/."""
+
+        self.mode = mode
+        self.look_ahead = look_ahead
+        self.symbols = symbols
+        self.extracted = OrderedDict()
+        self._extract(self.stmt.rvalue)
+
+        self.counter += 1
+        return self.extracted
 
 
 class ExpressionHoister(object):
@@ -432,7 +705,7 @@ class ExpressionHoister(object):
         self.decls = decls
         self.hoisted = hoisted
         self.expr_graph = expr_graph
-        self.counter = 0
+        self.extractor = ExpressionExtractor(self.stmt, self.expr_info)
 
         # Set counters to create meaningful and unique (temporary) variable names
         try:
@@ -441,118 +714,28 @@ class ExpressionHoister(object):
             self._expr_handled.append(stmt)
             self.expr_id = self._expr_handled.index(stmt)
 
-    def _extract(self, node, symbols, **kwargs):
-        """Extract invariant subexpressions from the original expression.
-        Hoistable sub-expressions are stored in ``dep_subexprs``."""
+    def _filter(self, subexprs, make_unique=True, sharing=None):
+        """Filter hoistable subexpressions."""
+        if make_unique:
+            # Uniquify expressions
+            subexprs = uniquify(subexprs)
 
-        # Parameters driving the extraction pass
-        only_domain = kwargs.get('only_domain')
-        only_outdomain = kwargs.get('only_outdomain')
-        only_const = kwargs.get('only_const')
-        look_ahead = kwargs.get('look_ahead')
+        if sharing:
+            # Partition expressions such that expressions sharing the same
+            # set of symbols are in the same partition
+            sharing = [str(s) for s in sharing]
+            finder = FindInstances(Symbol)
+            partitions = defaultdict(list)
+            for e in subexprs:
+                retval = FindInstances.default_retval()
+                symbols = tuple(set(str(s) for s in finder.visit(e, ret=retval)[Symbol]
+                                    if str(s) in sharing))
+                partitions[symbols].append(e)
+            for shared, partition in partitions.items():
+                if len(partition) > len(shared):
+                    subexprs = [e for e in subexprs if e not in partition]
 
-        # Constants used to charaterize sub-expressions:
-        INVARIANT = 0  # expression is loop invariant
-        HOISTED = 1  # expression should not be hoisted any further
-
-        def __try_hoist(node, dep):
-            operands = [o for o, p in explore_operator(node)]
-            should_extract = True
-            if isinstance(node, Symbol):
-                # Never extract individual symbols
-                should_extract = False
-            elif only_domain:
-                # Do extract if all domain-dependent subexpressions are requested
-                should_extract = True
-            elif only_const:
-                # Do not extract unless constant in all loops
-                if set(dep) and set(dep).issubset(set(self.expr_info.dims)):
-                    should_extract = False
-            elif all(isinstance(o, Symbol) for o in operands):
-                if len(operands) <= 2:
-                    # Do not extract binary/unary operations
-                    should_extract = False
-                if len([o for o in operands if any(r in self.expr_info.domain_dims
-                        for r in o.rank)]) == 1:
-                    # Do not extract if only one domain-dependent symbol is present
-                    should_extract = False
-            elif only_outdomain:
-                # Do not extract unless independent of the domain loops
-                if not set(dep).issubset(set(self.expr_info.out_domain_dims)):
-                    should_extract = False
-            if should_extract or look_ahead:
-                dep_subexprs[dep].append(node)
-            return should_extract
-
-        def __extract(node, dep_subexprs):
-            if isinstance(node, Symbol):
-                return (symbols[node], INVARIANT)
-
-            elif isinstance(node, Par):
-                return (__extract(node.child, dep_subexprs))
-
-            elif isinstance(node, FunCall):
-                arg_deps = [__extract(n, dep_subexprs) for n in node.children]
-                dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
-                info = INVARIANT if all([i == INVARIANT for _, i in arg_deps]) else HOISTED
-                return (dep, info)
-
-            else:
-                # Traverse the expression tree
-                left, right = node.children
-                dep_l, info_l = __extract(left, dep_subexprs)
-                dep_r, info_r = __extract(right, dep_subexprs)
-
-                # Filter out false dependencies
-                dep_l = tuple(d for d in dep_l if d in self.expr_info.dims)
-                dep_r = tuple(d for d in dep_r if d in self.expr_info.dims)
-                dep_n = dep_l + tuple(d for d in dep_r if d not in dep_l)
-
-                if info_l == INVARIANT and info_r == INVARIANT:
-                    if dep_l == dep_r:
-                        # E.g. alpha*beta, A[i] + B[i]
-                        return (dep_l, INVARIANT)
-                    elif not dep_l and not only_domain:
-                        # E.g. alpha*A[i,j]
-                        if not set(self.expr_info.domain_dims) & set(dep_r) or \
-                                not (__try_hoist(left, dep_l) or __try_hoist(right, dep_r)):
-                            return (dep_r, INVARIANT)
-                    elif not dep_r and not only_domain:
-                        # E.g. A[i,j]*alpha
-                        if not set(self.expr_info.domain_dims) & set(dep_l) or \
-                                not (__try_hoist(right, dep_r) or __try_hoist(left, dep_l)):
-                            return (dep_l, INVARIANT)
-                    elif not dep_l and only_domain:
-                        # E.g. alpha*A[i,j], not hoistable anymore
-                        __try_hoist(right, dep_r)
-                    elif not dep_r and only_domain:
-                        # E.g. A[i,j]*alpha, not hoistable anymore
-                        __try_hoist(left, dep_l)
-                    elif set(dep_l).issubset(set(dep_r)):
-                        # E.g. A[i]*B[i,j]
-                        if not __try_hoist(left, dep_l):
-                            return (dep_n, INVARIANT)
-                    elif set(dep_r).issubset(set(dep_l)):
-                        # E.g. A[i,j]*B[i]
-                        if not __try_hoist(right, dep_r):
-                            return (dep_n, INVARIANT)
-                    elif only_domain:
-                        # E.g. A[i]*B[j], hoistable in TMP[i,j]
-                        return (dep_n, INVARIANT)
-                    else:
-                        # E.g. A[i]*B[j]
-                        __try_hoist(left, dep_l)
-                        __try_hoist(right, dep_r)
-                elif info_r == INVARIANT:
-                    __try_hoist(right, dep_r)
-                elif info_l == INVARIANT:
-                    __try_hoist(left, dep_l)
-                return (dep_n, HOISTED)
-
-        dep_subexprs = defaultdict(list)
-        __extract(node, dep_subexprs)
-        self.counter += 1
-        return dep_subexprs
+        return subexprs
 
     def _check_loops(self, loops):
         """Ensures hoisting is legal. As long as all inner loops are perfect,
@@ -560,36 +743,43 @@ class ExpressionHoister(object):
         always is a legal transformation."""
         return all([is_perfect_loop(l) for l in loops[1:]])
 
-    def extract(self, **kwargs):
+    def _symbols(self):
+        symbols = visit(self.expr_info.outermost_parent,
+                        info_items=['symbols_dep'])['symbols_dep']
+        symbols = dict((s, tuple(l.dim for l in dep)) for s, dep in symbols.items())
+        return symbols
+
+    def extract(self, mode):
         """Return a dictionary of hoistable subexpressions."""
         if not self._check_loops(self.expr_info.loops):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
             return
+        return self.extractor(mode, True, self._symbols())
 
-        symbols = visit(self.expr_info.outermost_parent)['symbols_dep']
-        symbols = dict((s, [l.dim for l in dep]) for s, dep in symbols.items())
-        return self._extract(self.stmt.rvalue, symbols, **kwargs)
-
-    def licm(self, **kwargs):
+    def licm(self, mode, iterative=True, max_sharing=False):
         """Perform generalized loop-invariant code motion."""
         if not self._check_loops(self.expr_info.loops):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
             return
 
-        symbols = visit(self.header, info_items=['symbols_dep'])['symbols_dep']
-        symbols = dict((s, [l.dim for l in dep]) for s, dep in symbols.items())
-
-        extracted = True
+        inv_dep = {}
+        symbols = self._symbols()
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
-        inv_dep = {}
-        while extracted:
-            extracted = self._extract(self.stmt.rvalue, symbols, **kwargs)
-            for dep, subexprs in extracted.items():
-                # -1) Remove identical subexpressions
-                subexprs = uniquify(subexprs)
 
-                # 0) Determine the loop nest level where invariant expressions
+        extracted = True
+        while extracted:
+            extracted = self.extractor(mode, False, symbols)
+            for dep, subexprs in extracted.items():
+                # 1) Filter subexpressions that will be hoisted
+                sharing = []
+                if max_sharing:
+                    sharing = uniquify([s for s, d in symbols.items() if d == dep])
+                subexprs = self._filter(subexprs, sharing=sharing)
+                if not subexprs:
+                    continue
+
+                # 2) Determine the loop nest level where invariant expressions
                 # should be hoisted. The goal is to hoist them as far as possible
                 # in the loop nest, while minimising temporary storage.
                 # We distinguish six hoisting cases:
@@ -614,7 +804,7 @@ class ExpressionHoister(object):
                     place = expr_dims_loops[dep[0]].children[0]
                     wrap_loop = ()
                     next_loop = place.children[place.children.index(self.stmt)]
-                elif set(dep).issuperset(set(self.expr_info.domain_dims)) and \
+                elif mode == 'aggressive' and set(dep) == set(self.expr_info.dims) and \
                         not any([self.expr_graph.is_written(e) for e in subexprs]):
                     # As n-dimensional vector, where /n == len(dep)/, outside of
                     # the loop nest
@@ -627,45 +817,48 @@ class ExpressionHoister(object):
                     wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, len(dep)))
                     next_loop = od_find_next(expr_dims_loops, dep[0])
 
-                # 1) Create the new invariant temporary symbols
+                # 3) Create the new invariant temporary symbols
                 loop_size = tuple([l.size for l in wrap_loop])
                 loop_dim = tuple([l.dim for l in wrap_loop])
                 inv_syms = [Symbol(self._hoisted_sym % {
                     'loop_dep': '_'.join(dep).upper() if dep else 'CONST',
                     'expr_id': self.expr_id,
-                    'round': self.counter,
+                    'round': self.extractor.counter,
                     'i': i
                 }, loop_size) for i in range(len(subexprs))]
                 inv_decls = [Decl(self.expr_info.type, s) for s in inv_syms]
                 inv_syms = [Symbol(s.symbol, loop_dim) for s in inv_syms]
 
-                # 2) Keep track of new declarations for later easy access
+                # 4) Keep track of new declarations for later easy access
                 for d in inv_decls:
                     d.scope = LOCAL
                     self.decls[d.sym.symbol] = d
 
-                # 3) Replace invariant subtrees with the proper temporary
+                # 5) Replace invariant subtrees with the proper temporary
                 to_replace = dict(zip(subexprs, inv_syms))
                 n_replaced = ast_replace(self.stmt.rvalue, to_replace)
 
-                # 4) Update symbol dependencies
+                # 6) Update symbol dependencies
                 for s, e in zip(inv_syms, subexprs):
                     self.expr_graph.add_dependency(s, e)
                     if n_replaced[str(s)] > 1:
                         self.expr_graph.add_dependency(s, s)
                     symbols[s] = dep
 
-                # 5) Create the body containing invariant statements
+                # 7) Create the body containing invariant statements
                 subexprs = [dcopy(e) for e in subexprs]
                 inv_stmts = [Assign(s, e) for s, e in zip(dcopy(inv_syms), subexprs)]
 
-                # 6) Track necessary information for AST construction
+                # 8) Track necessary information for AST construction
                 inv_info = (loop_dim, place, next_loop, wrap_loop)
                 if inv_info not in inv_dep:
                     inv_dep[inv_info] = (inv_decls, inv_stmts)
                 else:
                     inv_dep[inv_info][0].extend(inv_decls)
                     inv_dep[inv_info][1].extend(inv_stmts)
+
+            if not iterative:
+                break
 
         for inv_info, (inv_decls, inv_stmts) in sorted(inv_dep.items()):
             loop_dim, place, next_loop, wrap_loop = inv_info
@@ -849,10 +1042,10 @@ class ExpressionExpander(object):
             # as GROUP): so we can perform the expansion
             groupable = l_exps if l_type == self.GROUP else r_exps
             expandable = r_exps if l_type == self.GROUP else l_exps
-            to_replace = defaultdict(list)
+            to_replace = OrderedDict()
             for exp, grp in itertools.product(expandable, groupable):
                 expansion = self._build(exp, grp)
-                to_replace[exp].append(expansion)
+                to_replace.setdefault(exp, []).append(expansion)
             ast_replace(node, {k: ast_make_expr(Sum, v) for k, v in to_replace.items()},
                         mode='symbol')
             # Update the parent node, since an expression has just been expanded
@@ -873,48 +1066,46 @@ class ExpressionExpander(object):
         else:
             raise RuntimeError("Expansion error: unknown node: %s" % str(node))
 
-    def expand(self, should_expand, not_aggregate=False):
-        """Perform the expansion of the expression rooted in ``self.stmt``.
-        Symbols for which the lambda function ``should_expand`` returns
-        True are expansion candidates."""
-        self.expansions = []
+    def expand(self, should_expand, **kwargs):
+        not_aggregate = kwargs.get('not_aggregate')
+        expressions = kwargs.get('subexprs', [(self.stmt.rvalue, self.stmt)])
+
         self.should_expand = should_expand
 
-        # Expand according to the /should_expand/ heuristic
-        self._expand(self.stmt.rvalue, self.stmt)
+        for node, parent in expressions:
+            self.expansions = []
+            self._expand(node, parent)
 
-        # Try to aggregate expanded terms with hoisted expressions (if any)
-        if not_aggregate:
-            return
-        info = visit(self.expr_info.outermost_loop) if self.expr_info else visit(self.stmt)
-        for expansion in self.expansions:
-            hoisted = self._hoist(expansion, info)
-            if hoisted:
-                ast_replace(self.stmt, hoisted, copy=True, mode='symbol')
-                ast_remove(self.stmt, expansion.right, mode='symbol')
+            if not_aggregate:
+                continue
+            info = visit(self.expr_info.outermost_loop) if self.expr_info else visit(parent)
+            for expansion in self.expansions:
+                hoisted = self._hoist(expansion, info)
+                if hoisted:
+                    ast_replace(parent, hoisted, copy=True, mode='symbol')
+                    ast_remove(parent, expansion.right, mode='symbol')
 
 
 class ExpressionFactorizer(object):
 
     class Term():
+        """A Term represents a product between 'operands' and 'factors'. In a
+        product /a*(b+c)/, /a/ is the 'operand', while /b/ and /c/ are the 'factors'.
+        The symbol /+/ is the 'op' of the Term.
+        """
 
         def __init__(self, operands, factors=None, op=None):
-            # Example: in the Term /a*(b+c)/, /a/ is an 'operand', /b/ and /c/
-            # are 'factors', and /+/ is the 'op'
             self.operands = operands
-            self.factors = factors or set()
+            self.factors = factors or []
             self.op = op
 
         @property
         def operands_ast(self):
-            # Exploiting associativity, establish an order for the operands
-            operands = sorted(list(self.operands), key=lambda o: str(o))
-            return ast_make_expr(Prod, tuple(operands))
+            return ast_make_expr(Prod, self.operands)
 
         @property
         def factors_ast(self):
-            factors = sorted(list(self.factors), key=lambda f: str(f))
-            return ast_make_expr(self.op, tuple(factors))
+            return ast_make_expr(self.op, self.factors)
 
         @property
         def generate_ast(self):
@@ -928,10 +1119,30 @@ class ExpressionFactorizer(object):
             else:
                 return Prod(self.operands_ast, self.factors_ast)
 
+        def add_operands(self, operands):
+            for o in operands:
+                if o not in self.operands:
+                    self.operands.append(o)
+
+        def remove_operands(self, operands):
+            for o in operands:
+                if o in self.operands:
+                    self.operands.remove(o)
+
+        def add_factors(self, factors):
+            for f in factors:
+                if f not in self.factors:
+                    self.factors.append(f)
+
+        def remove_factors(self, factors):
+            for f in factors:
+                if f in self.factors:
+                    self.factors.remove(f)
+
         @staticmethod
         def process(symbols, should_factorize, op=None):
-            operands = set(s for s in symbols if should_factorize(s))
-            factors = set(s for s in symbols if not should_factorize(s))
+            operands = [s for s in symbols if should_factorize(s)]
+            factors = [s for s in symbols if not should_factorize(s)]
             return ExpressionFactorizer.Term(operands, factors, op)
 
     def __init__(self, stmt):
@@ -946,9 +1157,58 @@ class ExpressionFactorizer(object):
             occurrences = len(t_list)
             unique_terms[t_repr] = t_list[0]
             if occurrences > 1:
-                unique_terms[t_repr].operands.add(Symbol(occurrences))
+                unique_terms[t_repr].add_operands([Symbol(occurrences)])
 
         terms[:] = unique_terms.values()
+
+    def _heuristic_collection(self, terms):
+        if not self.heuristic or any(t.operands for t in terms):
+            return
+        tracker = OrderedDict()
+        for t in terms:
+            symbols = [s for s in t.factors if isinstance(s, Symbol)]
+            for s in symbols:
+                tracker.setdefault(s.urepr, []).append(t)
+        reverse_tracker = OrderedDict()
+        for s, ts in tracker.items():
+            reverse_tracker.setdefault(tuple(ts), []).append(s)
+        # 1) At least one symbol appearing in all terms: use that as operands ...
+        operands = [(ts, s) for ts, s in reverse_tracker.items() if ts == tuple(terms)]
+        # 2) ... Or simply pick operands greedily
+        if not operands:
+            handled = set()
+            for ts, s in reverse_tracker.items():
+                if len(ts) > 1 and all(t not in handled for t in ts):
+                    operands.append((ts, s))
+                    handled |= set(ts)
+        for ts, s in operands:
+            for t in ts:
+                new_operands = [i for i in t.factors if isinstance(i, Symbol)
+                                and i.urepr in s]
+                t.remove_factors(new_operands)
+                t.add_operands(new_operands)
+
+    def _premultiply_symbols(self, symbols):
+        floats = [s for s in symbols if isinstance(s.symbol, (int, float))]
+        if len(floats) > 1:
+            other_symbols = [s for s in symbols if s not in floats]
+            prem = reduce(operator.mul, [s.symbol for s in floats], 1.0)
+            prem = [Symbol(prem)] if prem not in [1, 1.0] else []
+            return prem + other_symbols
+        else:
+            return symbols
+
+    def _filter(self, factorizable_term):
+        o = factorizable_term.operands_ast
+        grp = self.adhoc.get(o.urepr, []) if isinstance(o, Symbol) else []
+        if not grp:
+            return False
+        for f in factorizable_term.factors:
+            retval = FindInstances.default_retval()
+            symbols = FindInstances(Symbol).visit(f, ret=retval)[Symbol]
+            if any(s.urepr in grp for s in symbols):
+                return False
+        return True
 
     def _factorize(self, node, parent):
         if isinstance(node, Symbol):
@@ -962,16 +1222,19 @@ class ExpressionFactorizer(object):
             # "I'm not factorizable any further"
             for n in node.children:
                 self._factorize(n, node)
-            return self.Term(set([node]))
+            return self.Term([], [node])
 
         elif isinstance(node, Prod):
             children = explore_operator(node)
             symbols = [n for n, _ in children if isinstance(n, Symbol)]
             other_nodes = [(n, p) for n, p in children if n not in symbols]
-            term = self.Term.process(symbols, self.should_factorize, Prod)
-            for n, p in other_nodes:
-                term.operands |= self._factorize(n, p).operands
-            return term
+            symbols = self._premultiply_symbols(symbols)
+            factorized = self.Term.process(symbols, self.should_factorize, Prod)
+            terms = [self._factorize(n, p) for n, p in other_nodes]
+            for t in terms:
+                factorized.add_operands(t.operands)
+                factorized.add_factors(t.factors)
+            return factorized
 
         # The fundamental case is when /node/ is a Sum (or Sub, equivalently).
         # Here, we try to factorize the terms composing the operation
@@ -979,25 +1242,40 @@ class ExpressionFactorizer(object):
             children = explore_operator(node)
             # First try to factorize within /node/'s children
             terms = [self._factorize(n, p) for n, p in children]
-            # Then check if it's possible to aggregate operations
+            # Check if it's possible to aggregate operations
             # Example: replace (a*b)+(a*b) with 2*(a*b)
             self._simplify_sum(terms)
+            # No global factorization rule is used, so just try to maximize
+            # factorization within /this/ Sum/Sub
+            self._heuristic_collection(terms)
             # Finally try to factorize some of the operands composing the operation
             factorized = OrderedDict()
             for t in terms:
-                operand = set([t.operands_ast]) if t.operands else set()
-                factor = set([t.factors_ast]) if t.factors else set([Symbol(1.0)])
-                factorized_term = self.Term(operand, factor, node.__class__)
-                _t = factorized.setdefault(str(t.operands_ast), factorized_term)
-                _t.factors |= factor
+                operand = [t.operands_ast] if t.operands else []
+                factor = [t.factors_ast] if t.factors else [Symbol(1.0)]
+                factorizable_term = self.Term(operand, factor, node.__class__)
+                if self._filter(factorizable_term):
+                    # Skip
+                    factorized[t] = t
+                else:
+                    # Do factorize
+                    _t = factorized.setdefault(str(t.operands_ast), factorizable_term)
+                    _t.add_factors(factor)
             factorized = [t.generate_ast for t in factorized.values()]
-            factorized = ast_make_expr(Sum, sorted(factorized, key=lambda f: str(f)))
+            factorized = ast_make_expr(Sum, factorized)
             parent.children[parent.children.index(node)] = factorized
-            return self.Term(set([factorized]))
+            return self.Term([], [factorized])
 
         else:
             raise RuntimeError("Factorization error: unknown node: %s" % str(node))
 
-    def factorize(self, should_factorize):
+    def factorize(self, should_factorize, **kwargs):
+        expressions = kwargs.get('subexprs', [(self.stmt.rvalue, self.stmt)])
+        adhoc = kwargs.get('adhoc', {})
+
         self.should_factorize = should_factorize
-        self._factorize(self.stmt.rvalue, self.stmt)
+        self.adhoc = adhoc if any(v for v in adhoc.values()) else {}
+        self.heuristic = kwargs.get('heuristic', False)
+
+        for node, parent in expressions:
+            self._factorize(node, parent)
