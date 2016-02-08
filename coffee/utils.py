@@ -488,8 +488,8 @@ def check_type(stmt, decls):
                   the name of a symbol) to Decl nodes
     """
     v = SymbolReferences()
-    lhs_symbol = v.visit(stmt.children[0], parent=stmt, ret=v.default_retval()).keys()[0]
-    rhs_symbols = v.visit(stmt.children[1], parent=stmt, ret=v.default_retval()).keys()
+    lhs_symbol = v.visit(stmt.lvalue, parent=stmt, ret=v.default_retval()).keys()[0]
+    rhs_symbols = v.visit(stmt.rvalue, parent=stmt, ret=v.default_retval()).keys()
 
     lhs_decl = decls[lhs_symbol]
     rhs_decls = [decls[s] for s in rhs_symbols if s in decls]

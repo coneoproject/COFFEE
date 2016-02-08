@@ -273,7 +273,7 @@ class FindCoffeeExpressions(Visitor):
                 continue
             if opts[1] == "coffee" and opts[2] == "expression":
                 # (parent, loop-nest, rank)
-                ret[o] = (parent, None, o.children[0].rank)
+                ret[o] = (parent, None, o.lvalue.rank)
                 return ret
         return ret
 

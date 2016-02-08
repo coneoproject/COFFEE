@@ -649,7 +649,7 @@ class ExpressionExtractor():
         elif isinstance(node, Par):
             return self._extract(node.child)
 
-        elif isinstance(node, FunCall):
+        elif isinstance(node, (FunCall, Ternary)):
             arg_deps = [self._extract(n) for n in node.children]
             dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
             info = self.EXT if all(i == self.EXT for _, i in arg_deps) else self.STOP
@@ -1267,6 +1267,7 @@ class ExpressionFactorizer(object):
             return self.Term([], [factorized])
 
         else:
+            return self.Term([], [node])
             raise RuntimeError("Factorization error: unknown node: %s" % str(node))
 
     def factorize(self, should_factorize, **kwargs):

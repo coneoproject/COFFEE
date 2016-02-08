@@ -657,10 +657,11 @@ class Decl(Writer):
     def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None, pragma=None):
         super(Decl, self).__init__(pragma=pragma)
         self.typ = typ
-        self.sym = as_symbol(sym)
+        sym = as_symbol(sym)
         self.qual = qualifiers or []
         self.attr = attributes or []
-        self.init = as_symbol(init) if init is not None else EmptyStatement()
+        init = as_symbol(init) if init is not None else EmptyStatement()
+        self.children = [sym, init]
         self._core = self.sym.rank
 
     def operands(self):
@@ -670,16 +671,28 @@ class Decl(Writer):
         self.sym.rank = rank
 
     @property
+    def sym(self):
+        return self.children[0]
+
+    @property
+    def init(self):
+        return self.children[1]
+
+    @init.setter
+    def init(self, val):
+        self.children[1] = val
+
+    @property
     def lvalue(self):
-        return self.sym
+        return self.children[0]
 
     @property
     def rvalue(self):
-        return self.init
+        return self.children[1]
 
     @rvalue.setter
     def rvalue(self, val):
-        self.init = val
+        self.children[1] = val
 
     @property
     def size(self):
