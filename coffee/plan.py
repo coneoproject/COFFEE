@@ -496,7 +496,7 @@ def _init_compiler(compiler):
             'align': lambda o: '__attribute__((aligned(%s)))' % o,
             'align_forloop': '#pragma vector aligned',
             'force_simdization': '#pragma simd',
-            'AVX': '-xAVX',
+            'AVX': '',
             'SSE': '-xSSE',
             'ipo': '-ip',
             'native_opt': '-xHost',
