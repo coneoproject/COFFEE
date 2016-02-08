@@ -596,8 +596,13 @@ class Assign(Statement, Writer):
         self.children[1] = val
 
     def gencode(self, not_scope=False):
-        return assign(self.children[0].gencode(),
-                      self.children[1].gencode()) + semicolon(not_scope)
+        prefix = ""
+        if self.pragma:
+            prefix = "\n".join(p for p in self.pragma) + "\n"
+        return prefix + \
+            assign(self.children[0].gencode(),
+                   self.children[1].gencode()) + \
+            semicolon(not_scope)
 
 
 class AugmentedAssign(Statement, Writer):
@@ -619,7 +624,10 @@ class AugmentedAssign(Statement, Writer):
 
     def gencode(self, not_scope=False):
         sym, exp = self.children
-        return "%s %s %s%s" % (sym.gencode(), type(self).op, exp.gencode(), semicolon(not_scope))
+        prefix = ""
+        if self.pragma:
+            prefix = "\n".join(p for p in self.pragma) + "\n"
+        return "%s%s %s %s%s" % (prefix, sym.gencode(), type(self).op, exp.gencode(), semicolon(not_scope))
 
 
 class Incr(AugmentedAssign):
@@ -749,12 +757,15 @@ class Decl(Writer):
         return self.init.nonzero if isinstance(self.init, SparseArrayInit) else ()
 
     def gencode(self, not_scope=False):
+        prefix = ""
+        if self.pragma:
+            prefix = "\n".join(p for p in self.pragma) + "\n"
         if isinstance(self.init, EmptyStatement):
-            return decl(spacer(self.qual), self.typ, self.sym.gencode(),
-                        spacer(self.attr)) + semicolon(not_scope)
+            return prefix + decl(spacer(self.qual), self.typ, self.sym.gencode(),
+                                 spacer(self.attr)) + semicolon(not_scope)
         else:
-            return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                             spacer(self.attr), self.init.gencode(parent=self)) +\
+            return prefix + decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
+                                      spacer(self.attr), self.init.gencode(parent=self)) + \
                 semicolon(not_scope)
 
 
