@@ -46,7 +46,7 @@ from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
 from autotuner import Autotuner
 from expression import MetaExpr
-from coffee.visitors import FindInstances
+from coffee.visitors import FindInstances, Flattener
 
 from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict
@@ -225,6 +225,10 @@ class ASTKernel(object):
                 warning("Switching to rewrite mode=4")
                 rewrite = 4
 
+            # HACK: flatten pointer args
+            if kwargs.get('flatten'):
+                Flattener().visit(kernel)
+
             ### Optimization pipeline ###
             for loop_opt in loop_opts:
                 # 0) Expression Rewriting
@@ -374,6 +378,8 @@ class ASTKernel(object):
                 'align_pad': True,
                 'dead_ops_elimination': True
             }
+            if opts.get('flatten'):
+                params['flatten'] = True
         elif opts.get('O2'):
             params = {
                 'rewrite': 4,

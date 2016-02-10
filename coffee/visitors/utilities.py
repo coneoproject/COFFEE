@@ -13,7 +13,7 @@ from coffee.utils import ItSpace, flatten
 
 
 __all__ = ["ReplaceSymbols", "CheckUniqueness", "Uniquify", "Evaluate",
-           "EstimateFlops", "ProjectExpansion", "SharingGraph"]
+           "EstimateFlops", "ProjectExpansion", "SharingGraph", "Flattener"]
 
 
 class ReplaceSymbols(Visitor):
@@ -473,3 +473,47 @@ class SharingGraph(Visitor):
             except:
                 G.add_node(o.urepr, occs=1)
         return ret
+
+
+class Flattener(Visitor):
+
+    def __init__(self):
+        super(Flattener, self).__init__()
+        self.found = []
+
+    def visit_object(self, o, *args, **kwargs):
+        return
+
+    def visit_Node(self, o, ret=None, parent=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            self.visit(op)
+
+    def visit_list(self, o, *args, **kwargs):
+        for entry in o:
+            self.visit(entry, *args, **kwargs)
+
+    def visit_FunDecl(self, o, *args, **kwargs):
+        double_pointer_args = [i for i in o.args if '**' in i.typ]
+        for i in o.args:
+            if '**' in i.typ and 'w' in i.lvalue.symbol:
+                i.typ = i.typ.replace('**', '*')
+                self.found.append(i.lvalue.symbol)
+        ops, _ = o.operands()
+        for op in o.children:
+            self.visit(op)
+
+    def visit_Decl(self, o, *args, **kwargs):
+        found = None
+        for i in self.found:
+            if i in o.lvalue.symbol:
+                found = i
+                o.typ = o.typ.replace('*', '')
+                break
+        if found:
+            self.found.remove(found)
+
+    def visit_Symbol(self, o, *args, **kwargs):
+        if o.symbol in self.found:
+            o.rank = o.rank[:-1]
+            o.offset = o.offset[:-1]
