@@ -36,6 +36,7 @@ from copy import deepcopy as dcopy
 from warnings import warn as warning
 import itertools
 import operator
+import pulp as ilp
 
 from base import *
 from utils import *
@@ -448,7 +449,7 @@ class ExpressionRewriter(object):
     def SGrewrite(self):
         """Apply rewrite rules based on the sharing graph of the expression."""
 
-        # First eliminate sharing "locally", i.e., within Sums
+        # First, eliminate sharing "locally", i.e., within Sums
         sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
         handled = set()
         for n in sgraph.nodes():
@@ -462,52 +463,49 @@ class ExpressionRewriter(object):
         self.factorize(mode='heuristic')
         self.licm(mode='only_outdomain')
 
-        # Then apply rewrite rules A, B, and C
+        # Then, apply rewrite rules A, B, and C
         sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
         if 'topsum' in mapper:
             self.expand(mode='domain', subexprs=[mapper['topsum']], not_aggregate=True)
             sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
-        while True:
-            if all(sgraph.degree(n) <= 1 for n in sgraph.nodes()):
-                break
 
-            with_terminals = [(n, [i[1] for i in sgraph.edges(n)
-                                   if sgraph.degree(i[1]) == 1]) for n in sgraph.nodes()]
-            with_terminals = [(n, v) for n, v in with_terminals if v]
-            while with_terminals:
-                # Rule A: more than one terminals {t1, ..., tn}, expand and
-                # factorize /n/ such that n(...t1 + ... + ...tn)
-                handling = {n: v for n, v in with_terminals if len(v) > 1}
-                self.factorize(mode='adhoc', adhoc=handling)
-                with_terminals = [t for t in with_terminals if t[0] not in handling]
-                if handling:
-                    self.licm(mode='only_domain')
-                    sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        # Now set the ILP problem:
+        nodes, edges = sgraph.nodes(), sgraph.edges()
+        if not edges:
+            return
 
-                # Rule B: only one terminal /t/, expand and factorize /n/ such
-                # that n(...t + ...s), where /s/ is a non-terminal adjacent to /n/
-                handling = {n: v[0] for n, v in with_terminals if len(v) == 1}
-                for n, v in handling.items():
-                    adjacent = [s for s in sgraph.edges(n) if s != v]
-                    if len(adjacent) >= 1:
-                        handling[n] = [v, adjacent[0]]
-                    else:
-                        handling.pop(n)
-                self.factorize(mode='adhoc', adhoc=handling)
-                with_terminals = [t for t in with_terminals if t[0] not in handling]
-                if handling:
-                    self.licm(mode='only_domain')
-                    sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        # ... declare variables
+        x = ilp.LpVariable.dicts('x', nodes, 0, 1, ilp.LpBinary)
+        y = ilp.LpVariable.dicts('y', [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
+                                 0, 1, ilp.LpBinary)
+        limits = defaultdict(int)
+        for i, j in edges:
+            limits[i] += 1
+            limits[j] += 1
 
-            # Rule C: no terminals, take /n/ with highest degree, expand and
-            # factorize /n/ such that n(...s1 + ... + ...sn) and /s1/, ..., /sn/
-            # are the non-terminals adjacent to /n/
-            nodes = [n for n in sgraph.nodes() if sgraph.node[n]['occs'] > 1]
-            nodes = sorted(nodes, key=lambda i: sgraph.degree(i), reverse=True)
-            for n in nodes:
-                self.factorize(mode='adhoc', adhoc={n: []})
-            self.licm()
-            sgraph, _ = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        # ... define the problem
+        prob = ilp.LpProblem("Factorizer", ilp.LpMinimize)
+
+        # ... define the constraints
+        for i in nodes:
+            prob += ilp.lpSum(y[(i, j)] for j in nodes if (i, j) in y) <= limits[i]*x[i]
+
+        for i, j in edges:
+            prob += y[(i, j)] + y[(j, i)] == 1
+
+        # ... define the objective function (min number of factorizations)
+        prob += ilp.lpSum(x[i] for i in nodes)
+
+        # ... solve the problem
+        status = prob.solve(ilp.GLPK(msg=0))
+
+        # Finally, factorize and hoist (note: the order in which factorizations are carried
+        # out is crucial)
+        nodes = [n for n, v in x.items() if v.value() == 1]
+        other_nodes = [n for n, v in x.items() if n not in nodes]
+        for n in nodes + other_nodes:
+            self.factorize(mode='adhoc', adhoc={n: []})
+        self.licm()
 
     @staticmethod
     def reset():
