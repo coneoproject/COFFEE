@@ -712,7 +712,7 @@ class ExpressionHoister(object):
             self._expr_handled.append(stmt)
             self.expr_id = self._expr_handled.index(stmt)
 
-    def _filter(self, subexprs, make_unique=True, sharing=None):
+    def _filter(self, dep, subexprs, make_unique=True, sharing=None):
         """Filter hoistable subexpressions."""
         if make_unique:
             # Uniquify expressions
@@ -721,6 +721,8 @@ class ExpressionHoister(object):
         if sharing:
             # Partition expressions such that expressions sharing the same
             # set of symbols are in the same partition
+            if dep == self.expr_info.dims:
+                return []
             sharing = [str(s) for s in sharing]
             finder = FindInstances(Symbol)
             partitions = defaultdict(list)
@@ -773,7 +775,7 @@ class ExpressionHoister(object):
                 sharing = []
                 if max_sharing:
                     sharing = uniquify([s for s, d in symbols.items() if d == dep])
-                subexprs = self._filter(subexprs, sharing=sharing)
+                subexprs = self._filter(dep, subexprs, sharing=sharing)
                 if not subexprs:
                     continue
 
