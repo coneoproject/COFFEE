@@ -805,6 +805,7 @@ class ZeroRemover(LoopScheduler):
                 # Set the shrunk values ...
                 decl.init.values = values
                 decl.sym.rank = values.shape
+                decl.core = values.shape
                 # ... changes any relevant offsets
                 s_references = [s[0] for s in references[symbol] if s[0] is not decl.sym]
                 for s in s_references:
