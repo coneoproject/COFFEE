@@ -44,6 +44,7 @@ from copy import deepcopy as dcopy
 from base import *
 from utils import *
 from expression import copy_metaexpr
+from rewriter import ExpressionRewriter
 from coffee.visitors import FindLoopNests
 
 
@@ -490,16 +491,18 @@ class ZeroRemover(LoopScheduler):
     admitted.
     """
 
-    def __init__(self, exprs, decls, hoisted):
+    def __init__(self, exprs, decls, hoisted, expr_graph):
         """Initialize the ZeroRemover.
 
         :param exprs: the expressions for which zero removal is performed.
         :param decls: lists of declarations visible to ``exprs``.
         :param hoisted: dictionary that tracks hoisted sub-expressions
+        :param expr_graph: expression graph that tracks symbol dependencies
         """
         self.exprs = exprs
         self.decls = decls
         self.hoisted = hoisted
+        self.expr_graph = expr_graph
 
     def _track_nz_expr(self, node, nz_syms, nest):
         """For the expression rooted in ``node``, return iteration space and
@@ -859,6 +862,12 @@ class ZeroRemover(LoopScheduler):
                 # Update the tracked expressions, if necessary
                 if all(i in self.exprs for i in stmts):
                     new_exprs[stmt] = self.exprs[i]
+
+        for stmt, expr_info in new_exprs.items():
+            ew = ExpressionRewriter(stmt, expr_info, self.decls,
+                                    expr_info.outermost_parent,
+                                    self.hoisted, self.expr_graph)
+            ew.factorize('heuristic')
 
         self.exprs.clear()
         self.exprs.update(new_exprs)
