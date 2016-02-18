@@ -171,7 +171,7 @@ class LoopOptimizer(object):
         in statically initialized arrays."""
 
         if any([d.nonzero for d in self.decls.values()]):
-            zls = ZeroRemover(self.exprs, self.decls, self.hoisted)
+            zls = ZeroRemover(self.exprs, self.decls, self.hoisted, self.expr_graph)
             self.nz_syms = zls.reschedule(self.header)
 
     def precompute(self, mode='perfect'):
