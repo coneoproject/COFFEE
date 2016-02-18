@@ -207,9 +207,6 @@ class LoopVectorizer(object):
                 if isinstance(p_offset, str):
                     # Dangerous to pad since can't resolve the offset value
                     continue
-                if not (p_rank != decl.sym.rank or vect_roundup(p_offset) > p_offset):
-                    # Useless to pad in this case
-                    continue
                 mapped = set()
                 for s in syms:
                     original_s = dcopy(s)
