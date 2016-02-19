@@ -256,7 +256,7 @@ class ASTKernel(object):
                     vect = LoopVectorizer(loop_opt)
                     if align_pad and not toblas:
                         # Padding and data alignment
-                        vect.pad_and_align()
+                        vect.autovectorize()
                     if v_type and v_type != VectStrategy.AUTO:
                         if isa['inst_set'] == 'SSE':
                             raise RuntimeError("SSE vectorization not supported")
