@@ -662,10 +662,12 @@ class Decl(Writer):
 
         static const double FE0[3][3] __attribute__(align(32)) = {{...}};"""
 
-    def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None, pragma=None):
+    def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None,
+                 pointers=None, pragma=None):
         super(Decl, self).__init__(pragma=pragma)
         self.typ = typ
         sym = as_symbol(sym)
+        self.pointers = pointers or []
         self.qual = qualifiers or []
         self.attr = attributes or []
         init = as_symbol(init) if init is not None else EmptyStatement()
@@ -749,7 +751,7 @@ class Decl(Writer):
 
     @property
     def is_pointer_type(self):
-        return self.typ.find("*") >= 0
+        return len(self.pointers) > 0
 
     @property
     def nonzero(self):
@@ -757,14 +759,15 @@ class Decl(Writer):
         return self.init.nonzero if isinstance(self.init, SparseArrayInit) else ()
 
     def gencode(self, not_scope=False):
+        pointers = " " + " ".join(['*' + ' '.join(i) for i in self.pointers])
         prefix = ""
         if self.pragma:
             prefix = "\n".join(p for p in self.pragma) + "\n"
         if isinstance(self.init, EmptyStatement):
-            return prefix + decl(spacer(self.qual), self.typ, self.sym.gencode(),
+            return prefix + decl(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
                                  spacer(self.attr)) + semicolon(not_scope)
         else:
-            return prefix + decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
+            return prefix + decl_init(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
                                       spacer(self.attr), self.init.gencode(parent=self)) + \
                 semicolon(not_scope)
 
