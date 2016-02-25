@@ -396,6 +396,7 @@ class ASTKernel(object):
 
             # Post processing of the AST ensures higher-quality code
             postprocess(kernel)
+        print self.ast
 
     def gencode(self):
         """Generate a string representation of the AST."""
