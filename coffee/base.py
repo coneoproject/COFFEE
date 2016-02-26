@@ -108,6 +108,10 @@ class Node(object):
     def pragma(self):
         return self._pragma
 
+    @property
+    def has_children(self):
+        return bool(self.children)
+
     @pragma.setter
     def pragma(self, _pragma):
         self._pragma = self._format_pragma(_pragma)
@@ -117,7 +121,7 @@ class Root(Node):
 
     """Root of the AST."""
 
-    def gencode(self):
+    def gencode(self, scope=True):
         header = '// This code is generated visiting a COFFEE AST\n\n'
         return header + Node.gencode(self)
 
@@ -335,6 +339,38 @@ class Par(UnaryExpr):
         return wrap(self.children[0].gencode(not_scope, self))
 
 
+class Deref(UnaryExpr):
+
+    """Dereference an address."""
+
+    def gencode(self):
+        return "*%s" % wrap(self.children[0].gencode())
+
+
+class Cast(UnaryExpr):
+
+    """Cast a variable to a different type."""
+
+    def __init__(self, cast_type, expr):
+        super(Cast, self).__init__(expr)
+        self.cast_type = as_symbol(cast_type)
+
+    def __deepcopy__(self, memo):
+        """This copy method allows the passing in of a cast type."""
+        return self.__class__(self.cast_type, dcopy(self.children[0]))
+
+    def gencode(self, scope=True):
+        return "(%s) %s" % (str(self.cast_type), wrap(self.children[0].gencode()))
+
+
+class Addr(UnaryExpr):
+
+    """Get the address."""
+
+    def gencode(self):
+        return "&%s" % wrap(self.children[0].gencode())
+
+
 class Sum(BinExpr):
     """Binary sum."""
     op = "+"
@@ -353,6 +389,14 @@ class Prod(BinExpr):
 class Div(BinExpr):
     """Binary division."""
     op = "/"
+
+
+class Mod(BinExpr):
+
+    """Modulo operation."""
+
+    def __init__(self, expr1, expr2):
+        super(Mod, self).__init__(expr1, expr2, "%")
 
 
 class Eq(BinExpr):
@@ -869,14 +913,21 @@ class Switch(Statement):
 
 
 class If(Statement):
-    """If-else construct.
+    """If-then-else construct.
 
     :param if_expr: The expression driving the jump
-    :param branches: A 2-tuple of AST nodes, respectively the 'if' and the 'else'
+    :param branches: A 2-tuple of AST nodes, respectively the 'then' and the 'else'
                      branches
     """
 
     def __init__(self, if_expr, branches):
+        self.then_body = branches[0]
+        if not isinstance(branches[0], Node):
+            self.then_body = Block(branches[0], open_scope=True)
+        if len(branches) == 2:
+            self.else_body = branches[1]
+            if not isinstance(branches[1], Node):
+                self.else_body = Block(branches[1], open_scope=True)
         super(If, self).__init__(branches)
         self.if_expr = if_expr
 
@@ -889,8 +940,8 @@ class If(Statement):
     def gencode(self, not_scope=False):
         else_branch = ""
         if len(self.children) == 2:
-            else_branch = "else %s" % str(self.children[1])
-        return "if (%s) %s %s" % (self.if_expr, str(self.children[0]), else_branch)
+            else_branch = "else %s" % str(self.else_body)
+        return "if (%s) %s %s" % (str(self.if_expr), str(self.then_body), else_branch)
 
 
 class FunDecl(Statement):
