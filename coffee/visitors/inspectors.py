@@ -397,9 +397,10 @@ class SymbolDependencies(Visitor):
     visit_EmptyStatement = visit_object
 
     def visit_Decl(self, o, ret=None, *args, **kwargs):
+        write = kwargs.pop("write")
+        ret = self.visit(o.sym, ret=ret, write=True, *args, **kwargs)
         # Declaration init could have symbol access
-        for op in [o.sym, o.init]:
-            ret = self.visit(op, ret=ret, *args, **kwargs)
+        ret = self.visit(o.init, ret=ret, write=write, *args, **kwargs)
         return ret
 
     visit_FunCall = visit_Node
