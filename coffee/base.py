@@ -862,6 +862,10 @@ class For(Statement):
     def body(self):
         return self.children[0].children
 
+    @property
+    def is_linear(self):
+        return '#pragma coffee linear loop' in self.pragma
+
     @body.setter
     def body(self, new_body):
         self.children[0].children = new_body

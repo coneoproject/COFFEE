@@ -37,11 +37,13 @@ from warnings import warn as warning
 import itertools
 import operator
 import pulp as ilp
+from sys import maxint
 
 from base import *
 from utils import *
 from ast_analyzer import ExpressionGraph, StmtTracker
 from coffee.visitors import *
+from expression import MetaExpr
 
 
 class ExpressionRewriter(object):
@@ -527,6 +529,14 @@ class ExpressionRewriter(object):
         for n in nodes + other_nodes:
             self.factorize(mode='adhoc', adhoc={n: []})
         self.licm()
+
+    def unpickCSE(self):
+        """Search for factorization opportunities across temporaries created by
+        common sub-expression elimination. If a gain in operation count is detected,
+        unpick CSE and apply factorization + code motion."""
+        cse_unpicker = CSEUnpicker(self.stmt, self.expr_info, self.header, self.hoisted,
+                                   self.decls, self.expr_graph)
+        cse_unpicker.unpick()
 
     @staticmethod
     def reset():
@@ -1287,3 +1297,291 @@ class ExpressionFactorizer(object):
 
         for node, parent in expressions:
             self._factorize(node, parent)
+
+
+class CSEUnpicker(object):
+
+    class Temporary():
+
+        def __init__(self, node, reads_costs=None):
+            self.level = -1
+            self.node = node
+            self.reads_costs = reads_costs or {}
+            self.is_read = []
+            self.cost = EstimateFlops().visit(node)
+            self.dependencies = [s.urepr for s in self.reads]
+
+        @property
+        def symbol(self):
+            if isinstance(self.node, Writer):
+                return self.node.lvalue
+            elif isinstance(self.node, Symbol):
+                return self.node
+            else:
+                return None
+
+        @property
+        def expr(self):
+            if isinstance(self.node, Writer):
+                return self.node.rvalue
+            else:
+                return None
+
+        @property
+        def urepr(self):
+            return self.symbol.urepr
+
+        @property
+        def reads(self):
+            return self.reads_costs.keys() if self.reads_costs else []
+
+        @property
+        def project(self):
+            return len(self.reads)
+
+        def dependson(self, other):
+            # TODO: to be completeley removed in favor of is_read
+            return other.urepr in self.dependencies
+
+        def reconstruct(self):
+            temporary = CSEUnpicker.Temporary(self.node, dict(self.reads_costs))
+            temporary.level = self.level
+            temporary.is_read = list(self.is_read)
+            return temporary
+
+        def __str__(self):
+            return "%s: level=%d, cost=%d, reads=[%s], isread=[%s]" % \
+                (self.symbol, self.level, self.cost,
+                 ", ".join([str(i) for i in self.reads]),
+                 ", ".join([str(i) for i in self.is_read]))
+
+    def __init__(self, stmt, expr_info, header, hoisted, decls, expr_graph):
+        self.stmt = stmt
+        self.expr_info = expr_info
+        self.header = header
+        self.hoisted = hoisted
+        self.decls = decls
+        self.expr_graph = expr_graph
+
+    def _push_temporaries(self, levels, level, loop, trace):
+        assert [i in levels.keys() for i in [level-1, level]]
+
+        # Remove temporaries being pushed
+        for t in levels[level-1]:
+            if t.node in loop.body and t.is_read:
+                loop.body.remove(t.node)
+
+        # Track temporaries to be pushed from /level-1/ into the later /level/s
+        to_replace, modified_temporaries = {}, OrderedDict()
+        for t in levels[level-1]:
+            to_replace[t.symbol] = t.expr or t.symbol
+            for ir in t.is_read:
+                modified_temporaries[ir.urepr] = trace[ir.urepr]
+
+        # Update the temporaries
+        replaced = [t.urepr for t in to_replace.keys()]
+        for t in modified_temporaries.values():
+            ast_replace(t.node, to_replace, copy=True)
+            for r, c in t.reads_costs.items():
+                if r.urepr in replaced:
+                    t.reads_costs.pop(r)
+                    for p, p_c in trace[r.urepr].reads_costs.items() or [(r, 0)]:
+                        t.reads_costs[p] = c + p_c
+
+    def _transform_temporaries(self, temporaries, loop, nest):
+        # Expand + Factorize
+        info = visit(self.header, info_items=['symbols_dep'])
+        symbols_dep = defaultdict(set)
+        for s, dep in info['symbols_dep'].items():
+            symbols_dep[s.symbol] |= {l.dim for l in dep}
+        rewriters = OrderedDict()
+        for t in temporaries:
+            expr_info = MetaExpr(self.expr_info.type, loop.children[0], nest, (loop.dim,))
+            ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
+                                    self.hoisted, self.expr_graph)
+            ew.replacediv()
+            ew.expand(mode='all', not_aggregate=True, symbols_dep=symbols_dep)
+            ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.reads},
+                         symbols_dep=symbols_dep)
+            ew.factorize(mode='heuristic')
+            rewriters[t] = ew
+
+        # Code motion
+        info = visit(self.header, info_items=['symbols_dep'])
+        symbols_dep = defaultdict(set)
+        for s, dep in info['symbols_dep'].items():
+            symbols_dep[s] |= {l.dim for l in dep}
+        for t, ew in rewriters.items():
+            ew.licm(mode='only_outdomain', symbols_dep=symbols_dep)
+
+    def _analyze_expr(self, expr, loop, deps):
+        finder = FindInstances(Symbol)
+        syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
+        syms = [s for s in syms if loop in deps[s]]
+
+        syms_costs = defaultdict(int)
+
+        def wrapper(node, found=0):
+            if isinstance(node, Symbol):
+                if node in syms:
+                    syms_costs[node] += found
+                return
+            elif isinstance(node, (Prod, Div)):
+                found += 1
+            operands = zip(*explore_operator(node))[0]
+            for o in operands:
+                wrapper(o, found)
+        wrapper(expr)
+
+        return syms_costs
+
+    def _analyze_loop(self, loop):
+        trace = OrderedDict()
+        deps = SymbolDependencies().visit(loop,
+                                          ret=SymbolDependencies.default_retval(),
+                                          **SymbolDependencies.default_args)
+        for stmt in loop.body:
+            if not isinstance(stmt, Writer):
+                continue
+            syms_costs = self._analyze_expr(stmt.rvalue, loop, deps)
+            for s in syms_costs.keys():
+                temporary = trace.setdefault(s.urepr, CSEUnpicker.Temporary(s))
+                temporary.is_read.append(stmt.lvalue)
+            temporary = CSEUnpicker.Temporary(stmt, syms_costs)
+            temporary.level = max([trace[s.urepr].level for s in temporary.reads]) + 1
+            trace[stmt.lvalue.urepr] = temporary
+
+        return trace
+
+    def _analyze_cross_loops(self, mapper):
+        for loop1, (trace1, levels1) in mapper.items():
+            # subsequent = mapper.values()[mapper.values().index()] ...
+            for trace2, levels2 in mapper.values()[mapper:]
+                # ...
+
+    def _group_by_level(self, trace):
+        levels = defaultdict(list)
+        for temporary in trace.values():
+            levels[temporary.level].append(temporary)
+        return levels
+
+    def _cost_cse(self, loop, levels, keys=None):
+        if keys is not None:
+            levels = {k: levels[k] for k in keys}
+        cost = 0
+        for level, temporaries in levels.items():
+            cost += sum(t.cost for t in temporaries)
+        return cost*loop.size
+
+    def _cost_fact(self, loop, mapper, bounds=None):
+        trace, levels = mapper[loop]
+        if not levels:
+            return
+
+        # Check parameters
+        bounds = bounds or (min(levels.keys()), max(levels.keys()))
+        assert len(bounds) == 2 and bounds[1] >= bounds[0]
+        assert [i in levels.keys() for i in bounds]
+        fact_levels = OrderedDict([(k, v) for k, v in levels.items()
+                                   if k > bounds[0] and k <= bounds[1]])
+
+        # Cost of levels that won't be factorized
+        cse_cost = self._cost_cse(loop, levels, range(min(levels.keys()), bounds[0] + 1))
+
+        # We are going to modify a copy of the temporaries dict
+        new_trace = OrderedDict()
+        for s, t in trace.items():
+            new_trace[s] = t.reconstruct()
+
+        # This is going to be useful later for computing the exact cost
+        # TODO: to be somehow moved to cross_loop_analyze
+        # other_loops = mapper.keys()[mapper.keys().index(loop)+1:]
+        # other_temporaries = [mapper[l][0].values() for l in other_loops]
+        # other_temporaries = list(flatten(other_temporaries))
+
+        best = (bounds[0], bounds[0], maxint)
+        total_outloop_cost = 0
+        for level, temporaries in sorted(fact_levels.items(), key=lambda (i, j): i):
+            level_inloop_cost = 0
+            for t in temporaries:
+
+                # Calculate the operation count for /t/ if we applied expansion + fact
+                reads = []
+                for read, cost in t.reads_costs.items():
+                    reads.extend(new_trace[read.urepr].reads or [read.urepr])
+                    # The number of operations induced outside /loop/ (after hoisting)
+                    total_outloop_cost += new_trace[read.urepr].project*cost
+
+                # Factorization will kill duplicates and increase the number of sums
+                # in the outer loop
+                fact_syms = {s.urepr if isinstance(s, Symbol) else s for s in reads}
+                total_outloop_cost += len(reads) - len(fact_syms)
+
+                # The operation count, after factorization, within /loop/, induced by /t/
+                # Note: if n=len(fact_syms), then we'll have n prods, n-1 sums
+                level_inloop_cost += 2*len(fact_syms) - 1
+
+                # Update the trace because we want to track the cost after "pushing" the
+                # temporaries on which /t/ depends into /t/ itself
+                new_trace[t.urepr].reads_costs = {s: 1 for s in fact_syms}
+
+            # Some temporaries at levels < /i/ may also appear in:
+            # 1) levels beyond /i/
+            # 2) subsequent loops
+            for t1 in list(flatten([levels[j] for j in range(level)])):
+                if any(new_trace[ir.urepr].level > level for ir in t1.is_read) or \
+                        any(t2.dependson(t1) for t2 in other_temporaries):
+                    # TODO: second condition to be changed into any(i not in trace for i in t1.is_read)
+                    # which would imply: since it's in not in this trace, must come from later traces
+                    level_inloop_cost += t1.cost
+
+            # Total cost = cost_after_fact_up_to_level + cost_inloop_cse
+            #            = cost_hoisted_subexprs + cost_inloop_fact + cost_inloop_cse
+            uptolevel_cost = cse_cost + total_outloop_cost + loop.size*level_inloop_cost
+            uptolevel_cost += self._cost_cse(loop, fact_levels, range(level + 1, bounds[1] + 1))
+
+            # Update the best alternative
+            if uptolevel_cost < best[2]:
+                best = (bounds[0], level, uptolevel_cost)
+
+            cse = self._cost_cse(loop, fact_levels, range(level + 1, bounds[1] + 1))
+            print "Cost after pushing up to level", level, ":", uptolevel_cost, \
+                "(", cse_cost, "+", total_outloop_cost, "+", loop.size*level_inloop_cost, "+", cse, ")"
+        print "************************"
+
+        return best
+
+    def unpick(self):
+        # Collect all loops to be analyzed
+        nests = OrderedDict()
+        for nest in FindLoopNests().visit(self.header):
+            for loop, parent in nest:
+                if loop.is_linear:
+                    nests[loop] = nest
+
+        # Local analysis of loops
+        mapper = OrderedDict()
+        for loop in nests.keys():
+            trace = self._analyze_loop(loop)
+            if not trace:
+                continue
+            levels = self._group_by_level(trace)
+            mapper[loop] = (trace, levels)
+            print loop
+
+        # Cross-loop analysis
+        self._analyze_cross_loops(mapper)
+
+        for loop, (trace, levels) in mapper.items():
+            # Compute the best cost alternative
+            min_level, max_level = min(levels.keys()), max(levels.keys())
+            global_best = (min_level, max_level, maxint)
+            for i in sorted(levels.keys()):
+                local_best = self._cost_fact(loop, mapper, (i, max_level))
+                if local_best[2] < global_best[2]:
+                    global_best = local_best
+
+            # Transform the loop
+            for i in range(global_best[0] + 1, global_best[1] + 1):
+                self._push_temporaries(levels, i, loop, trace)
+                self._transform_temporaries(levels[i], loop, nests[loop])

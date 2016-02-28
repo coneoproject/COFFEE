@@ -46,7 +46,7 @@ from loop_scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
-from coffee.visitors import MaxLoopDepth, FindInstances, ProjectExpansion
+from coffee.visitors import MaxLoopDepth, FindInstances, ProjectExpansion, EstimateFlops
 
 
 class LoopOptimizer(object):
@@ -113,18 +113,9 @@ class LoopOptimizer(object):
                     ew.licm()
 
             elif expr_info.mode == 2:
-                if expr_info.dimension == 0:
-                    ew.licm(mode='only_outdomain')
-                elif expr_info.dimension == 1:
-                    ew.licm(mode='only_outdomain')
-                    ew.expand(mode='domain')
-                    ew.factorize(mode='domain')
-                    ew.licm(mode='only_outdomain')
-                else:
-                    ew.licm()
-                    ew.expand()
-                    ew.factorize()
-                    ew.licm()
+                ew.unpickCSE()
+                if expr_info.dimension > 0:
+                    ew.SGrewrite()
 
             elif expr_info.mode == 3:
                 ew.expand(mode='all')
