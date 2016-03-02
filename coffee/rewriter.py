@@ -345,11 +345,14 @@ class ExpressionRewriter(object):
         divisions = FindInstances(Div).visit(self.stmt.rvalue, ret=retval)[Div]
         to_replace = {}
         for i in divisions:
-            if isinstance(i.right, Symbol) and isinstance(i.right.symbol, float):
-                to_replace[i] = Prod(i.left, 1 / i.right.symbol)
-            else:
-                to_replace[i] = Prod(i.left, Div(1, i.right))
-        ast_replace(self.stmt.rvalue, to_replace, copy=True, mode='symbol')
+            if isinstance(i.right, Symbol):
+                if isinstance(i.right.symbol, (int, float)):
+                    to_replace[i] = Prod(i.left, 1.0 / i.right.symbol)
+                elif isinstance(i.right.symbol, str) and i.right.symbol.isdigit():
+                    to_replace[i] = Prod(i.left, 1.0 / float(i.right.symbol))
+                else:
+                    to_replace[i] = Prod(i.left, Div(1.0, i.right))
+        ast_replace(self.stmt, to_replace, copy=True, mode='symbol')
         return self
 
     def preevaluate(self):
