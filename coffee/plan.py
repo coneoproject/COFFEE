@@ -375,8 +375,7 @@ class ASTKernel(object):
             }
         elif opts.get('O2'):
             params = {
-                'rewrite': 2,
-                'align_pad': True
+                'rewrite': 2
             }
         elif opts.get('O1'):
             params = {
@@ -390,12 +389,17 @@ class ASTKernel(object):
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
+        from coffee.visitors import EstimateFlops
+        cost_before = EstimateFlops().visit(self.ast)
         for kernel in kernels:
             # Generate a specific code version
             _generate_cpu_code(self, kernel, **params)
 
             # Post processing of the AST ensures higher-quality code
             postprocess(kernel)
+        print self.ast
+
+        print self.ast, "BEFORE: ", cost_before, "; COST: ", EstimateFlops().visit(self.ast)
 
     def gencode(self):
         """Generate a string representation of the AST."""

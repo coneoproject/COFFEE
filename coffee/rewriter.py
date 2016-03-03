@@ -104,18 +104,22 @@ class ExpressionRewriter(object):
                 sub-expressions. By not hoisting, factorization opportunities are preserved
             * iterative: (default: True) should be set to False if interested in
                 hoisting only the smallest subexpressions matching /mode/
+            * symbols_dep: a dictionary from symbols to loop dependencies. If provided,
+                data dependency analysis can be avoided, thus speeding up the
+                transformation.
         """
 
         look_ahead = kwargs.get('look_ahead', False)
         max_sharing = kwargs.get('max_sharing', False)
         iterative = kwargs.get('iterative', True)
+        symbols_dep = kwargs.get('symbols_dep', None)
 
         if look_ahead:
             return self.expr_hoister.extract(mode)
         if mode == 'aggressive':
             # Reassociation may promote more hoisting in /aggressive/ mode
             self.reassociate()
-        self.expr_hoister.licm(mode, iterative, max_sharing)
+        self.expr_hoister.licm(mode, iterative, max_sharing, symbols_dep)
         return self
 
     def expand(self, mode='standard', **kwargs):
@@ -156,10 +160,13 @@ class ExpressionRewriter(object):
                 expression's domain are encountered.
         :param kwargs:
             * not_aggregate: True if should not try to aggregate expanded symbols
-                with previously hoisted expressions
+                with previously hoisted expressions.
             * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
                 provided, expansion will be performed only within these trees,
-                rather than within the whole expression
+                rather than within the whole expression.
+            * symbols_dep: a dictionary from symbols to loop dependencies. If provided,
+                data dependency analysis can be avoided, thus speeding up the
+                transformation.
         """
 
         if mode == 'standard':
@@ -181,19 +188,21 @@ class ExpressionRewriter(object):
             dimensions = kwargs.get('dimensions', ())
             should_expand = lambda n: set(dimensions).issubset(set(n.rank))
         elif mode in ['all', 'domain', 'outdomain']:
-            info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
-            symbols = defaultdict(set)
-            for s, dep in info['symbols_dep'].items():
-                symbols[s.symbol] |= {l.dim for l in dep}
+            symbols_dep = kwargs.get('symbols_dep')
+            if not symbols_dep:
+                info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
+                symbols_dep = defaultdict(set)
+                for s, dep in info['symbols_dep'].items():
+                    symbols_dep[s.symbol] |= {l.dim for l in dep}
             if mode == 'all':
-                should_expand = lambda n: symbols.get(n.symbol) and \
-                    any(r in self.expr_info.dims for r in symbols[n.symbol])
+                should_expand = lambda n: symbols_dep.get(n.symbol) and \
+                    any(r in self.expr_info.dims for r in symbols_dep[n.symbol])
             elif mode == 'domain':
-                should_expand = lambda n: symbols.get(n.symbol) and \
-                    any(r in self.expr_info.domain_dims for r in symbols[n.symbol])
+                should_expand = lambda n: symbols_dep.get(n.symbol) and \
+                    any(r in self.expr_info.domain_dims for r in symbols_dep[n.symbol])
             elif mode == 'outdomain':
-                should_expand = lambda n: symbols.get(n.symbol) and \
-                    not symbols[n.symbol].issubset(set(self.expr_info.domain_dims))
+                should_expand = lambda n: symbols_dep.get(n.symbol) and \
+                    not symbols_dep[n.symbol].issubset(set(self.expr_info.domain_dims))
         else:
             warning('Unknown expansion strategy. Skipping.')
             return
@@ -241,6 +250,9 @@ class ExpressionRewriter(object):
                 ``A*(B+C) + A*F + D*E``. If the A's list were empty, all of the
                 three symbols B, C, and F would be factorized. Recall that this
                 option is ignored unless ``mode == 'adhoc'``.
+            * symbols_dep: a dictionary from symbols to loop dependencies. If provided,
+                data dependency analysis can be avoided, thus speeding up the
+                transformation.
         """
 
         if mode == 'standard':
@@ -270,21 +282,23 @@ class ExpressionRewriter(object):
             kwargs['heuristic'] = True
             should_factorize = lambda n: False
         elif mode in ['all', 'domain', 'outdomain', 'constants']:
-            info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
-            symbols = defaultdict(set)
-            for s, dep in info['symbols_dep'].items():
-                symbols[s.symbol] |= {l.dim for l in dep}
+            symbols_dep = kwargs.get('symbols_dep')
+            if not symbols_dep:
+                info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
+                symbols_dep = defaultdict(set)
+                for s, dep in info['symbols_dep'].items():
+                    symbols_dep[s.symbol] |= {l.dim for l in dep}
             if mode == 'all':
-                should_factorize = lambda n: symbols.get(n.symbol) and \
-                    any(r in self.expr_info.dims for r in symbols[n.symbol])
+                should_factorize = lambda n: symbols_dep.get(n.symbol) and \
+                    any(r in self.expr_info.dims for r in symbols_dep[n.symbol])
             elif mode == 'domain':
-                should_factorize = lambda n: symbols.get(n.symbol) and \
-                    any(r in self.expr_info.domain_dims for r in symbols[n.symbol])
+                should_factorize = lambda n: symbols_dep.get(n.symbol) and \
+                    any(r in self.expr_info.domain_dims for r in symbols_dep[n.symbol])
             elif mode == 'outdomain':
-                should_factorize = lambda n: symbols.get(n.symbol) and \
-                    not symbols[n.symbol].issubset(set(self.expr_info.domain_dims))
+                should_factorize = lambda n: symbols_dep.get(n.symbol) and \
+                    not symbols_dep[n.symbol].issubset(set(self.expr_info.domain_dims))
             elif mode == 'constants':
-                should_factorize = lambda n: not symbols.get(n.symbol)
+                should_factorize = lambda n: not symbols_dep.get(n.symbol)
         else:
             warning('Unknown factorization strategy. Skipping.')
             return
@@ -649,7 +663,7 @@ class ExpressionExtractor():
 
     def _extract(self, node):
         if isinstance(node, Symbol):
-            return (self.symbols[node], self.EXT)
+            return (self.symbols_dep[node], self.EXT)
 
         elif isinstance(node, Par):
             return self._extract(node.child)
@@ -682,12 +696,12 @@ class ExpressionExtractor():
             else:
                 raise RuntimeError("licm: unexpected hoisting mode (%s)" % self.mode)
 
-    def __call__(self, mode, look_ahead, symbols):
+    def __call__(self, mode, look_ahead, symbols_dep):
         """Extract invariant subexpressions from /self.expr/."""
 
         self.mode = mode
         self.look_ahead = look_ahead
-        self.symbols = symbols
+        self.symbols_dep = symbols_dep
         self.extracted = OrderedDict()
         self._extract(self.stmt.rvalue)
 
@@ -750,38 +764,39 @@ class ExpressionHoister(object):
         always is a legal transformation."""
         return all([is_perfect_loop(l) for l in loops[1:]])
 
-    def _symbols(self):
-        symbols = visit(self.expr_info.outermost_parent,
-                        info_items=['symbols_dep'])['symbols_dep']
-        symbols = dict((s, tuple(l.dim for l in dep)) for s, dep in symbols.items())
-        return symbols
+    def _symbols_dep(self):
+        symbols_dep = visit(self.expr_info.outermost_parent,
+                            info_items=['symbols_dep'])['symbols_dep']
+        symbols_dep = dict((s, tuple(l.dim for l in dep))
+                           for s, dep in symbols_dep.items())
+        return symbols_dep
 
     def extract(self, mode):
         """Return a dictionary of hoistable subexpressions."""
         if not self._check_loops(self.expr_info.loops):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
             return
-        return self.extractor(mode, True, self._symbols())
+        return self.extractor(mode, True, self._symbols_dep())
 
-    def licm(self, mode, iterative=True, max_sharing=False):
+    def licm(self, mode, iterative=True, max_sharing=False, symbols_dep=None):
         """Perform generalized loop-invariant code motion."""
         if not self._check_loops(self.expr_info.loops):
             warning("Loop nest unsuitable for generalized licm. Skipping.")
             return
 
         inv_dep = {}
-        symbols = self._symbols()
+        symbols_dep = symbols_dep or self._symbols_dep()
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
 
         extracted = True
         while extracted:
-            extracted = self.extractor(mode, False, symbols)
+            extracted = self.extractor(mode, False, symbols_dep)
             for dep, subexprs in extracted.items():
                 # 1) Filter subexpressions that will be hoisted
                 sharing = []
                 if max_sharing:
-                    sharing = uniquify([s for s, d in symbols.items() if d == dep])
+                    sharing = uniquify([s for s, d in symbols_dep.items() if d == dep])
                 subexprs = self._filter(dep, subexprs, sharing=sharing)
                 if not subexprs:
                     continue
@@ -850,7 +865,7 @@ class ExpressionHoister(object):
                     self.expr_graph.add_dependency(s, e)
                     if n_replaced[str(s)] > 1:
                         self.expr_graph.add_dependency(s, s)
-                    symbols[s] = dep
+                    symbols_dep[s] = dep
 
                 # 7) Create the body containing invariant statements
                 subexprs = [dcopy(e) for e in subexprs]
