@@ -557,14 +557,6 @@ class ExpressionExtractor():
             # Do not extract unless constant in all loops
             if set(dep) and set(dep).issubset(set(self.expr_info.dims)):
                 should_extract = False
-        elif all(isinstance(o, Symbol) for o in operands):
-            if len(operands) <= 2:
-                # Do not extract binary/unary operations
-                should_extract = False
-            if len([o for o in operands if any(r in self.expr_info.domain_dims
-                    for r in o.rank)]) == 1:
-                # Do not extract if only one domain-dependent symbol is present
-                should_extract = False
         elif self.mode == 'only_domain':
             # Do not extract unless dependent on domain loops
             if set(dep).issubset(set(self.expr_info.out_domain_dims)):
