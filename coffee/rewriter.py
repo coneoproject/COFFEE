@@ -1303,13 +1303,13 @@ class CSEUnpicker(object):
 
     class Temporary():
 
-        def __init__(self, node, reads_costs=None):
+        def __init__(self, node, loop, reads_costs=None):
             self.level = -1
             self.node = node
+            self.loop = loop
             self.reads_costs = reads_costs or {}
             self.is_read = []
             self.cost = EstimateFlops().visit(node)
-            self.dependencies = [s.urepr for s in self.reads]
 
         @property
         def symbol(self):
@@ -1339,12 +1339,15 @@ class CSEUnpicker(object):
         def project(self):
             return len(self.reads)
 
+        @property
+        def dependencies(self):
+            return [s.urepr for s in self.reads]
+
         def dependson(self, other):
-            # TODO: to be completeley removed in favor of is_read
             return other.urepr in self.dependencies
 
         def reconstruct(self):
-            temporary = CSEUnpicker.Temporary(self.node, dict(self.reads_costs))
+            temporary = CSEUnpicker.Temporary(self.node, self.loop, dict(self.reads_costs))
             temporary.level = self.level
             temporary.is_read = list(self.is_read)
             return temporary
@@ -1363,20 +1366,20 @@ class CSEUnpicker(object):
         self.decls = decls
         self.expr_graph = expr_graph
 
-    def _push_temporaries(self, levels, level, loop, trace):
-        assert [i in levels.keys() for i in [level-1, level]]
+    def _push_temporaries(self, trace, levels, loop, cur_level, global_trace):
+        assert [i in levels.keys() for i in [cur_level-1, cur_level]]
 
         # Remove temporaries being pushed
-        for t in levels[level-1]:
-            if t.node in loop.body and t.is_read:
-                loop.body.remove(t.node)
+        for t in levels[cur_level-1]:
+            if t.node in t.loop.body and all(ir.urepr in trace for ir in t.is_read):
+                t.loop.body.remove(t.node)
 
         # Track temporaries to be pushed from /level-1/ into the later /level/s
         to_replace, modified_temporaries = {}, OrderedDict()
-        for t in levels[level-1]:
+        for t in levels[cur_level-1]:
             to_replace[t.symbol] = t.expr or t.symbol
             for ir in t.is_read:
-                modified_temporaries[ir.urepr] = trace[ir.urepr]
+                modified_temporaries[ir.urepr] = global_trace[ir.urepr]
 
         # Update the temporaries
         replaced = [t.urepr for t in to_replace.keys()]
@@ -1385,7 +1388,7 @@ class CSEUnpicker(object):
             for r, c in t.reads_costs.items():
                 if r.urepr in replaced:
                     t.reads_costs.pop(r)
-                    for p, p_c in trace[r.urepr].reads_costs.items() or [(r, 0)]:
+                    for p, p_c in global_trace[r.urepr].reads_costs.items() or [(r, 0)]:
                         t.reads_costs[p] = c + p_c
 
     def _transform_temporaries(self, temporaries, loop, nest):
@@ -1414,10 +1417,11 @@ class CSEUnpicker(object):
         for t, ew in rewriters.items():
             ew.licm(mode='only_outdomain', symbols_dep=symbols_dep)
 
-    def _analyze_expr(self, expr, loop, deps):
+    def _analyze_expr(self, expr, loop, symbols_dep):
         finder = FindInstances(Symbol)
         syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
-        syms = [s for s in syms if loop in deps[s]]
+        syms = [s for s in syms
+                if any(l.dim in self.expr_info.domain_dims for l in symbols_dep[s])]
 
         syms_costs = defaultdict(int)
 
@@ -1435,32 +1439,32 @@ class CSEUnpicker(object):
 
         return syms_costs
 
-    def _analyze_loop(self, loop):
+    def _analyze_loop(self, loop, symbols_dep, global_trace):
         trace = OrderedDict()
-        deps = SymbolDependencies().visit(loop,
-                                          ret=SymbolDependencies.default_retval(),
-                                          **SymbolDependencies.default_args)
+
         for stmt in loop.body:
             if not isinstance(stmt, Writer):
                 continue
-            syms_costs = self._analyze_expr(stmt.rvalue, loop, deps)
+            syms_costs = self._analyze_expr(stmt.rvalue, loop, symbols_dep)
             for s in syms_costs.keys():
-                temporary = trace.setdefault(s.urepr, CSEUnpicker.Temporary(s))
-                temporary.is_read.append(stmt.lvalue)
-            temporary = CSEUnpicker.Temporary(stmt, syms_costs)
-            temporary.level = max([trace[s.urepr].level for s in temporary.reads]) + 1
-            trace[stmt.lvalue.urepr] = temporary
+                if s.urepr in global_trace:
+                    temporary = global_trace[s.urepr]
+                    temporary.is_read.append(stmt.lvalue)
+                    temporary = temporary.reconstruct()
+                    temporary.level = -1
+                    trace[s.urepr] = temporary
+                else:
+                    temporary = trace.setdefault(s.urepr, CSEUnpicker.Temporary(s, loop))
+                    temporary.is_read.append(stmt.lvalue)
+            new_temporary = CSEUnpicker.Temporary(stmt, loop, syms_costs)
+            new_temporary.level = max([trace[s.urepr].level for s in new_temporary.reads]) + 1
+            trace[stmt.lvalue.urepr] = new_temporary
 
         return trace
 
-    def _analyze_cross_loops(self, mapper):
-        for loop1, (trace1, levels1) in mapper.items():
-            # subsequent = mapper.values()[mapper.values().index()] ...
-            for trace2, levels2 in mapper.values()[mapper:]
-                # ...
-
     def _group_by_level(self, trace):
         levels = defaultdict(list)
+            
         for temporary in trace.values():
             levels[temporary.level].append(temporary)
         return levels
@@ -1473,11 +1477,7 @@ class CSEUnpicker(object):
             cost += sum(t.cost for t in temporaries)
         return cost*loop.size
 
-    def _cost_fact(self, loop, mapper, bounds=None):
-        trace, levels = mapper[loop]
-        if not levels:
-            return
-
+    def _cost_fact(self, trace, levels, loop, bounds):
         # Check parameters
         bounds = bounds or (min(levels.keys()), max(levels.keys()))
         assert len(bounds) == 2 and bounds[1] >= bounds[0]
@@ -1492,12 +1492,6 @@ class CSEUnpicker(object):
         new_trace = OrderedDict()
         for s, t in trace.items():
             new_trace[s] = t.reconstruct()
-
-        # This is going to be useful later for computing the exact cost
-        # TODO: to be somehow moved to cross_loop_analyze
-        # other_loops = mapper.keys()[mapper.keys().index(loop)+1:]
-        # other_temporaries = [mapper[l][0].values() for l in other_loops]
-        # other_temporaries = list(flatten(other_temporaries))
 
         best = (bounds[0], bounds[0], maxint)
         total_outloop_cost = 0
@@ -1526,14 +1520,15 @@ class CSEUnpicker(object):
                 new_trace[t.urepr].reads_costs = {s: 1 for s in fact_syms}
 
             # Some temporaries at levels < /i/ may also appear in:
-            # 1) levels beyond /i/
-            # 2) subsequent loops
-            for t1 in list(flatten([levels[j] for j in range(level)])):
-                if any(new_trace[ir.urepr].level > level for ir in t1.is_read) or \
-                        any(t2.dependson(t1) for t2 in other_temporaries):
-                    # TODO: second condition to be changed into any(i not in trace for i in t1.is_read)
-                    # which would imply: since it's in not in this trace, must come from later traces
-                    level_inloop_cost += t1.cost
+            # 1) subsequent loops
+            # 2) levels beyond /i/
+            for t in list(flatten([levels[j] for j in range(level)])):
+                if any(ir.urepr not in new_trace for ir in t.is_read) or \
+                        any(new_trace[ir.urepr].level > level for ir in t.is_read):
+                    # Note: condition 1) is basically saying "if I'm read from
+                    # a temporary that is not in this loop's trace, then I must
+                    # be read in some other loops".
+                    level_inloop_cost += t.cost
 
             # Total cost = cost_after_fact_up_to_level + cost_inloop_cse
             #            = cost_hoisted_subexprs + cost_inloop_fact + cost_inloop_cse
@@ -1552,36 +1547,47 @@ class CSEUnpicker(object):
         return best
 
     def unpick(self):
+        info = visit(self.header, info_items=['symbols_dep', 'fors'])
+        symbols_dep, fors = info['symbols_dep'], info['fors']
+
         # Collect all loops to be analyzed
         nests = OrderedDict()
-        for nest in FindLoopNests().visit(self.header):
+        for nest in fors:
             for loop, parent in nest:
                 if loop.is_linear:
                     nests[loop] = nest
 
-        # Local analysis of loops
+        # Analysis of loops
+        global_trace = OrderedDict()
         mapper = OrderedDict()
         for loop in nests.keys():
-            trace = self._analyze_loop(loop)
-            if not trace:
+            trace = self._analyze_loop(loop, symbols_dep, global_trace)
+            if trace:
+                mapper[loop] = trace
+                global_trace.update(trace)
+
+        for loop, trace in mapper.items():
+            # Do not attempt to transform the main loop nest
+            nest = nests[loop]
+            if self.expr_info.loops_info == nest:
                 continue
-            levels = self._group_by_level(trace)
-            mapper[loop] = (trace, levels)
-            print loop
 
-        # Cross-loop analysis
-        self._analyze_cross_loops(mapper)
-
-        for loop, (trace, levels) in mapper.items():
             # Compute the best cost alternative
+            levels = self._group_by_level(trace)
             min_level, max_level = min(levels.keys()), max(levels.keys())
             global_best = (min_level, max_level, maxint)
             for i in sorted(levels.keys()):
-                local_best = self._cost_fact(loop, mapper, (i, max_level))
+                local_best = self._cost_fact(trace, levels, loop, (i, max_level))
                 if local_best[2] < global_best[2]:
                     global_best = local_best
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):
-                self._push_temporaries(levels, i, loop, trace)
-                self._transform_temporaries(levels[i], loop, nests[loop])
+                self._push_temporaries(trace, levels, loop, i, global_trace)
+                self._transform_temporaries(levels[i], loop, nest)
+
+        # Clean up
+        for transformed_loop, nest in reversed(nests.items()):
+            for loop, parent in nest:
+                if loop == transformed_loop and not loop.body:
+                    parent.children.remove(loop)
