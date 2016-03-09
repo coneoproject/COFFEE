@@ -832,7 +832,7 @@ class ExpressionHoister(object):
                 loop_size = tuple([l.size for l in wrap_loop])
                 loop_dim = tuple([l.dim for l in wrap_loop])
                 inv_syms = [Symbol(self._hoisted_sym % {
-                    'loop_dep': '_'.join(dep).upper() if dep else 'CONST',
+                    'loop_dep': '_'.join(dep) if dep else 'c',
                     'expr_id': self.expr_id,
                     'round': self.extractor.counter,
                     'i': i
