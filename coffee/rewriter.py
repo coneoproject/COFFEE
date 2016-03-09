@@ -530,8 +530,8 @@ class ExpressionRewriter(object):
 
     @staticmethod
     def reset():
-        ExpressionHoister._expr_handled[:] = []
-        ExpressionExpander._expr_handled[:] = []
+        ExpressionHoister._handled = 0
+        ExpressionExpander._handled = 0
 
 
 class ExpressionExtractor():
@@ -703,8 +703,8 @@ class ExpressionExtractor():
 
 class ExpressionHoister(object):
 
-    # Track all expressions to which LICM has been applied
-    _expr_handled = []
+    # How many times the hoister was invoked
+    _handled = 0
     # Temporary variables template
     _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
 
@@ -718,12 +718,9 @@ class ExpressionHoister(object):
         self.expr_graph = expr_graph
         self.extractor = ExpressionExtractor(self.stmt, self.expr_info)
 
-        # Set counters to create meaningful and unique (temporary) variable names
-        try:
-            self.expr_id = self._expr_handled.index(stmt)
-        except ValueError:
-            self._expr_handled.append(stmt)
-            self.expr_id = self._expr_handled.index(stmt)
+        # Increment counters for unique variable names
+        self.expr_id = ExpressionHoister._handled
+        ExpressionHoister._handled += 1
 
     def _filter(self, dep, subexprs, make_unique=True, sharing=None):
         """Filter hoistable subexpressions."""
@@ -903,8 +900,8 @@ class ExpressionExpander(object):
     GROUP = 0  # Expression /will/ not trigger expansion
     EXPAND = 1  # Expression /could/ be expanded
 
-    # Track all expanded expressions
-    _expr_handled = []
+    # How many times the expander was invoked
+    _handled = 0
     # Temporary variables template
     _expanded_sym = "%(loop_dep)s_EXP_%(expr_id)d_%(i)d"
 
@@ -941,16 +938,12 @@ class ExpressionExpander(object):
         self.expr_info = expr_info
         self.hoisted = hoisted
         self.expr_graph = expr_graph
-
-        # Set counters to create meaningful and unique (temporary) variable names
-        try:
-            self.expr_id = self._expr_handled.index(stmt)
-        except ValueError:
-            self._expr_handled.append(stmt)
-            self.expr_id = self._expr_handled.index(stmt)
-
         self.expanded_decls = {}
         self.cache = self.Cache()
+
+        # Increment counters for unique variable names
+        self.expr_id = ExpressionExpander._handled
+        ExpressionExpander._handled += 1
 
     def _hoist(self, expansion, info):
         """Try to aggregate an expanded expression E with a previously hoisted
