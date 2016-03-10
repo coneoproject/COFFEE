@@ -395,8 +395,9 @@ class SharingGraph(Visitor):
         which the sharing graph is built.
     """
 
-    def __init__(self, expr_info):
+    def __init__(self, expr_info, symbols_dep):
         self.expr_info = expr_info
+        self.symbols_dep = symbols_dep
         super(SharingGraph, self).__init__()
 
     def _update_mapper(self, mapper, loc_syms, pointer=None):
@@ -464,7 +465,8 @@ class SharingGraph(Visitor):
 
     def visit_Symbol(self, o, ret=None, syms=None, *args, **kwargs):
         G, _ = ret
-        if any(i in self.expr_info.domain_dims for i in o.rank) and syms is not None:
+        deps = [d for d in self.symbols_dep[o.symbol]]
+        if syms is not None and any(i in self.expr_info.domain_dims for i in deps):
             syms.add((o.urepr,))
             try:
                 G.node[o.urepr]['occs'] += 1

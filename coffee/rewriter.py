@@ -467,9 +467,14 @@ class ExpressionRewriter(object):
 
     def SGrewrite(self):
         """Apply rewrite rules based on the sharing graph of the expression."""
+        info = visit(self.expr_info.domain_loops[0], info_items=['symbols_dep'])
+        symbols_dep = defaultdict(set)
+        for s, dep in info['symbols_dep'].items():
+            symbols_dep[s.symbol] |= {l.dim for l in dep}
+        sg_visitor = SharingGraph(self.expr_info, symbols_dep)
 
         # First, eliminate sharing "locally", i.e., within Sums
-        sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
         handled = set()
         for n in sgraph.nodes():
             mapped = mapper.get((n,), [])
@@ -483,10 +488,10 @@ class ExpressionRewriter(object):
         self.licm(mode='only_outdomain')
 
         # Then, apply rewrite rules A, B, and C
-        sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+        sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
         if 'topsum' in mapper:
             self.expand(mode='domain', subexprs=[mapper['topsum']], not_aggregate=True)
-            sgraph, mapper = SharingGraph(self.expr_info).visit(self.stmt.rvalue)
+            sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
 
         # Now set the ILP problem:
         nodes, edges = sgraph.nodes(), sgraph.edges()
