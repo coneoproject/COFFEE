@@ -762,12 +762,6 @@ class ExpressionHoister(object):
 
         return subexprs
 
-    def _check_loops(self, loops):
-        """Ensures hoisting is legal. As long as all inner loops are perfect,
-        hoisting at the bottom of the possibly non-perfect outermost loop
-        always is a legal transformation."""
-        return all([is_perfect_loop(l) for l in loops[1:]])
-
     def _symbols_dep(self):
         symbols_dep = visit(self.expr_info.outermost_parent,
                             info_items=['symbols_dep'])['symbols_dep']
@@ -777,17 +771,10 @@ class ExpressionHoister(object):
 
     def extract(self, mode):
         """Return a dictionary of hoistable subexpressions."""
-        if not self._check_loops(self.expr_info.loops):
-            warning("Loop nest unsuitable for generalized licm. Skipping.")
-            return
         return self.extractor(mode, True, self._symbols_dep())
 
     def licm(self, mode, iterative=True, max_sharing=False, symbols_dep=None):
         """Perform generalized loop-invariant code motion."""
-        if not self._check_loops(self.expr_info.loops):
-            warning("Loop nest unsuitable for generalized licm. Skipping.")
-            return
-
         inv_dep = {}
         symbols_dep = symbols_dep or self._symbols_dep()
         expr_dims_loops = self.expr_info.loops_from_dims
@@ -837,6 +824,11 @@ class ExpressionHoister(object):
                     place = self.header
                     wrap_loop = tuple(expr_dims_loops.values())
                     next_loop = expr_outermost_loop
+                elif not is_perfect_loop(expr_dims_loops[dep[-1]]):
+                    # As scalar, within the closest loop imporsing the dependency
+                    place = expr_dims_loops[dep[-1]].children[0]
+                    wrap_loop = ()
+                    next_loop = od_find_next(expr_dims_loops, dep[-1])
                 else:
                     # As vector, within the outermost loop imposing the dependency
                     place = expr_dims_loops[dep[0]].children[0]
