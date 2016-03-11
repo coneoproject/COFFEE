@@ -53,7 +53,7 @@ class LoopOptimizer(object):
         """Initialize the LoopOptimizer.
 
         :param loop: root AST node of a loop nest
-        :param header: parent AST node of ``loop``
+        :param header: the kernel's top node
         :param decls: list of Decl objects accessible in ``loop``
         :param exprs: list of expressions to be optimized
         """
