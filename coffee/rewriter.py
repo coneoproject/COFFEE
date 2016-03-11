@@ -1364,7 +1364,8 @@ class CSEUnpicker(object):
         for t in levels[cur_level-1]:
             to_replace[t.symbol] = t.expr or t.symbol
             for ir in t.is_read:
-                modified_temporaries[ir.urepr] = global_trace[ir.urepr]
+                modified_temporaries[ir.urepr] = trace.get(ir.urepr,
+                                                           global_trace[ir.urepr])
 
         # Update the temporaries
         replaced = [t.urepr for t in to_replace.keys()]
@@ -1395,7 +1396,7 @@ class CSEUnpicker(object):
 
         # Code motion
         for t, ew in rewriters.items():
-            ew.licm(mode='only_outdomain', lda=lda)
+            ew.licm(mode='only_outdomain', lda=lda, global_cse=True)
 
     def _analyze_expr(self, expr, loop, lda):
         finder = FindInstances(Symbol)
