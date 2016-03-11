@@ -44,18 +44,8 @@ from base import *
 from coffee.visitors import FindInstances
 
 
-class StmtInfo():
-    """Simple container class defining ``StmtTracker`` values."""
-
-    INFO = ['stmt', 'decl', 'loop', 'place']
-
-    def __init__(self, **kwargs):
-        for k, v in kwargs.iteritems():
-            assert(k in self.__class__.INFO)
-            setattr(self, k, v)
-
-
 class StmtTracker(OrderedDict):
+
 
     """Track the location of generic statements in an abstract syntax tree.
 
@@ -73,11 +63,26 @@ class StmtTracker(OrderedDict):
         * The parent of the closest loop
     """
 
+    class StmtInfo():
+        """Simple container class defining ``StmtTracker`` values."""
+
+        INFO = ['stmt', 'decl', 'loop', 'place']
+
+        def __init__(self, **kwargs):
+            for k, v in kwargs.iteritems():
+                assert(k in self.__class__.INFO)
+                setattr(self, k, v)
+
+    def __init__(self):
+        super(StmtTracker, self).__init__()
+        self.byvalue = OrderedDict()
+
     def __setitem__(self, key, value):
-        if not isinstance(value, StmtInfo):
+        if not isinstance(value, self.StmtInfo):
             if not isinstance(value, tuple):
                 raise RuntimeError("StmtTracker accepts tuple or StmtInfo objects")
-            value = StmtInfo(**dict(zip(StmtInfo.INFO, value)))
+            value = self.StmtInfo(**dict(zip(self.StmtInfo.INFO, value)))
+        self.byvalue[value.stmt.rvalue.urepr] = key
         return OrderedDict.__setitem__(self, key, value)
 
     def update_stmt(self, sym, **kwargs):
@@ -93,7 +98,7 @@ class StmtTracker(OrderedDict):
         if sym not in self:
             return None
         for k, v in kwargs.iteritems():
-            assert(k in StmtInfo.INFO)
+            assert(k in self.StmtInfo.INFO)
             setattr(self[sym], k, v)
 
     def update_loop(self, loop_a, loop_b):
@@ -102,6 +107,11 @@ class StmtTracker(OrderedDict):
         for sym, sym_info in self.items():
             if sym_info.loop == loop_a:
                 self.update_stmt(sym, **{'loop': loop_b})
+
+    def get_symbol(self, value):
+        """Return the key associated to the provided ``value``, or None if not
+        present."""
+        return self.byvalue.get(value.urepr)
 
     @property
     def stmt(self, sym):
