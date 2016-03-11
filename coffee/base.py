@@ -105,6 +105,11 @@ class Node(object):
             raise TypeError("Type '%s' cannot be used as Node pragma" % type(pragma))
 
     @property
+    def urepr(self):
+        """A unique representation for this node."""
+        return self.gencode()
+
+    @property
     def pragma(self):
         return self._pragma
 
