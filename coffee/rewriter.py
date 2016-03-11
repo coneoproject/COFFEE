@@ -41,7 +41,6 @@ from sys import maxint
 
 from base import *
 from utils import *
-from ast_analyzer import ExpressionGraph, StmtTracker
 from coffee.visitors import *
 from expression import MetaExpr
 

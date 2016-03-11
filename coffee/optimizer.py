@@ -42,9 +42,8 @@ import plan
 from base import *
 from utils import *
 from expression import MetaExpr
-from loop_scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
+from scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from rewriter import ExpressionRewriter
-from ast_analyzer import ExpressionGraph, StmtTracker
 from coffee.visitors import MaxLoopDepth, FindInstances, ProjectExpansion, EstimateFlops
 
 

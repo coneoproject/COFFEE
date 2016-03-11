@@ -47,11 +47,8 @@ from vectorizer import LoopVectorizer, VectStrategy
 from expression import MetaExpr
 from coffee.visitors import FindInstances
 
-from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict
 from warnings import warn as warning
-import itertools
-import operator
 import sys
 
 
@@ -63,77 +60,6 @@ class ASTKernel(object):
         self.ast = ast
         self.include_dirs = include_dirs or []
         self.blas = False
-
-    def plan_gpu(self):
-        """Transform the kernel suitably for GPU execution.
-
-        Loops decorated with a ``pragma coffee itspace`` are hoisted out of
-        the kernel. The list of arguments in the function signature is
-        enriched by adding iteration variables of hoisted loops. The size of any
-        kernel's non-constant tensor is modified accordingly.
-
-        For example, consider the following function: ::
-
-            void foo (int A[3]) {
-              int B[3] = {...};
-              #pragma coffee itspace
-              for (int i = 0; i < 3; i++)
-                A[i] = B[i];
-            }
-
-        plan_gpu modifies its AST such that the resulting output code is ::
-
-            void foo(int A[1], int i) {
-              A[0] = B[i];
-            }
-        """
-
-        # The optimization passes are performed individually (i.e., "locally") for
-        # each function (or "kernel") found in the provided AST
-        retval = FindInstances.default_retval()
-        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast,
-                                                                     ret=retval)[FunDecl]
-        for kernel in kernels:
-            info = visit(kernel, info_items=['decls', 'exprs'])
-            decls = info['decls']
-            # Structure up expressions and related metadata
-            nests = defaultdict(OrderedDict)
-            for stmt, expr_info in info['exprs'].items():
-                parent, nest, domain = expr_info
-                if not nest:
-                    continue
-                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, domain)
-                nests[nest[0]].update({stmt: metaexpr})
-
-            loop_opts = [GPULoopOptimizer(l, header, decls) for l, header in nests]
-            for loop_opt in loop_opts:
-                itspace_vrs, accessed_vrs = loop_opt.extract()
-
-                for v in accessed_vrs:
-                    # Change declaration of non-constant iteration space-dependent
-                    # parameters by shrinking the size of the iteration space
-                    # dimension to 1
-                    decl = set(
-                        [d for d in kernel.args if d.sym.symbol == v.symbol])
-                    dsym = decl.pop().sym if len(decl) > 0 else None
-                    if dsym and dsym.rank:
-                        dsym.rank = tuple([1 if i in itspace_vrs else j
-                                           for i, j in zip(v.rank, dsym.rank)])
-
-                    # Remove indices of all iteration space-dependent and
-                    # kernel-dependent variables that are accessed in an itspace
-                    v.rank = tuple([0 if i in itspace_vrs and dsym else i
-                                    for i in v.rank])
-
-                # Add iteration space arguments
-                kernel.args.extend([Decl("int", Symbol("%s" % i)) for i in itspace_vrs])
-
-            # Clean up the kernel removing variable qualifiers like 'static'
-            for decl in decls.values():
-                d, place = decl
-                d.qual = [q for q in d.qual if q not in ['static', 'const']]
-
-            kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
 
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
@@ -260,6 +186,77 @@ class ASTKernel(object):
         print self.ast
 
         print self.ast, "BEFORE: ", cost_before, "; COST: ", EstimateFlops().visit(self.ast)
+
+    def plan_gpu(self):
+        """Transform the kernel suitably for GPU execution.
+
+        Loops decorated with a ``pragma coffee itspace`` are hoisted out of
+        the kernel. The list of arguments in the function signature is
+        enriched by adding iteration variables of hoisted loops. The size of any
+        kernel's non-constant tensor is modified accordingly.
+
+        For example, consider the following function: ::
+
+            void foo (int A[3]) {
+              int B[3] = {...};
+              #pragma coffee itspace
+              for (int i = 0; i < 3; i++)
+                A[i] = B[i];
+            }
+
+        plan_gpu modifies its AST such that the resulting output code is ::
+
+            void foo(int A[1], int i) {
+              A[0] = B[i];
+            }
+        """
+
+        # The optimization passes are performed individually (i.e., "locally") for
+        # each function (or "kernel") found in the provided AST
+        retval = FindInstances.default_retval()
+        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast,
+                                                                     ret=retval)[FunDecl]
+        for kernel in kernels:
+            info = visit(kernel, info_items=['decls', 'exprs'])
+            decls = info['decls']
+            # Structure up expressions and related metadata
+            nests = defaultdict(OrderedDict)
+            for stmt, expr_info in info['exprs'].items():
+                parent, nest, domain = expr_info
+                if not nest:
+                    continue
+                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, domain)
+                nests[nest[0]].update({stmt: metaexpr})
+
+            loop_opts = [GPULoopOptimizer(l, header, decls) for l, header in nests]
+            for loop_opt in loop_opts:
+                itspace_vrs, accessed_vrs = loop_opt.extract()
+
+                for v in accessed_vrs:
+                    # Change declaration of non-constant iteration space-dependent
+                    # parameters by shrinking the size of the iteration space
+                    # dimension to 1
+                    decl = set(
+                        [d for d in kernel.args if d.sym.symbol == v.symbol])
+                    dsym = decl.pop().sym if len(decl) > 0 else None
+                    if dsym and dsym.rank:
+                        dsym.rank = tuple([1 if i in itspace_vrs else j
+                                           for i, j in zip(v.rank, dsym.rank)])
+
+                    # Remove indices of all iteration space-dependent and
+                    # kernel-dependent variables that are accessed in an itspace
+                    v.rank = tuple([0 if i in itspace_vrs and dsym else i
+                                    for i in v.rank])
+
+                # Add iteration space arguments
+                kernel.args.extend([Decl("int", Symbol("%s" % i)) for i in itspace_vrs])
+
+            # Clean up the kernel removing variable qualifiers like 'static'
+            for decl in decls.values():
+                d, place = decl
+                d.qual = [q for q in d.qual if q not in ['static', 'const']]
+
+            kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
 
     def gencode(self):
         """Generate a string representation of the AST."""
