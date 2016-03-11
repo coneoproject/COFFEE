@@ -44,7 +44,6 @@ from base import *
 from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
-from autotuner import Autotuner
 from expression import MetaExpr
 from coffee.visitors import FindInstances
 
@@ -58,18 +57,11 @@ import sys
 
 class ASTKernel(object):
 
-    """Manipulate the kernel's Abstract Syntax Tree.
+    """Manipulate the kernel's Abstract Syntax Tree."""
 
-    The single functionality present at the moment is provided by the
-    :meth:`plan_gpu` method, which transforms the AST for GPU execution.
-    """
-
-    def __init__(self, ast, include_dirs=[]):
-        # Abstract syntax tree of the kernel
+    def __init__(self, ast, include_dirs=None):
         self.ast = ast
-        # Used in case of autotuning
-        self.include_dirs = include_dirs
-        # True if successful conversion to blas operations
+        self.include_dirs = include_dirs or []
         self.blas = False
 
     def plan_gpu(self):
@@ -77,9 +69,8 @@ class ASTKernel(object):
 
         Loops decorated with a ``pragma coffee itspace`` are hoisted out of
         the kernel. The list of arguments in the function signature is
-        enriched by adding iteration variables of hoisted loops. Size of
-        kernel's non-constant tensors modified in hoisted loops are modified
-        accordingly.
+        enriched by adding iteration variables of hoisted loops. The size of any
+        kernel's non-constant tensor is modified accordingly.
 
         For example, consider the following function: ::
 
@@ -146,32 +137,6 @@ class ASTKernel(object):
 
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
-
-        # The higher, the more precise and costly is autotuning
-        autotune_resolution = 100000000
-        # Kernel variants tested when autotuning is enabled
-        autotune_min = [('rewrite', {'rewrite': 1, 'align_pad': True}),
-                        ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
-                        ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 1)})]
-        autotune_all = [('base', {}),
-                        ('base', {'rewrite': 1, 'align_pad': True}),
-                        ('rewrite', {'rewrite': 2, 'align_pad': True}),
-                        ('rewrite', {'rewrite': 2, 'align_pad': True,
-                                     'precompute': 'noloops'}),
-                        ('rewrite_full', {'rewrite': 2, 'align_pad': True,
-                                          'dead_ops_elimination': True}),
-                        ('rewrite_full', {'rewrite': 2, 'align_pad': True,
-                                          'precompute': 'noloops',
-                                          'dead_ops_elimination': True}),
-                        ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
-                        ('split', {'rewrite': 2, 'align_pad': True, 'split': 4}),
-                        ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 1)}),
-                        ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2)}),
-                        ('vect', {'rewrite': 2, 'align_pad': True,
-                                  'vectorize': (VectStrategy.SPEC_UAJ_PADD, 3)})]
 
         def _generate_cpu_code(self, kernel, **kwargs):
             """Generate kernel code according to the various optimization options."""
@@ -248,45 +213,8 @@ class ASTKernel(object):
         retval = FindInstances.default_retval()
         kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast,
                                                                      ret=retval)[FunDecl]
-        if opts.get('autotune'):
-            if not (compiler and isa):
-                raise RuntimeError("Must initialize COFFEE prior to autotuning")
-            if len(kernels) > 1:
-                raise RuntimeError("Cannot autotune if multiple functions are present")
-            # Set granularity of autotuning
-            resolution = autotune_resolution
-            autotune_configs = autotune_all
-            if opts['autotune'] == 'minimal':
-                resolution = 1
-                autotune_configs = autotune_min
-            variants = []
-            autotune_configs_uf = []
-            tunable = True
-            original_ast = dcopy(self.ast)
-            for opt, params in autotune_configs:
-                # Generate basic kernel variants
-                loop_opts = _generate_cpu_code(self, self.ast, **params)
-                if not loop_opts:
-                    # No expressions, nothing to tune
-                    tunable = False
-                    break
-                # Increase the stack size, if needed
-                increase_stack(loop_opts)
-                # Add the base variant to the autotuning process
-                variants.append((self.ast, params))
-                self.ast = dcopy(original_ast)
 
-            if tunable:
-                # Determine the fastest kernel implementation
-                autotuner = Autotuner(variants, self.include_dirs, compiler, isa, blas)
-                fastest = autotuner.tune(resolution)
-                all_params = autotune_configs + autotune_configs_uf
-                name, params = all_params[fastest]
-            else:
-                # The kernel does not get transformed since it does not contain any
-                # optimizable expression
-                params = {}
-        elif opts.get('Ofast'):
+        if opts.get('Ofast'):
             params = {
                 'rewrite': 2,
                 'align_pad': True,
