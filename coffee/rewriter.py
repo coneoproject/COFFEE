@@ -1159,7 +1159,7 @@ class ExpressionFactorizer(object):
             occurrences = len(t_list)
             unique_terms[t_repr] = t_list[0]
             if occurrences > 1:
-                unique_terms[t_repr].add_operands([Symbol(occurrences)])
+                unique_terms[t_repr].add_factors([Symbol(occurrences)])
 
         terms[:] = unique_terms.values()
 
