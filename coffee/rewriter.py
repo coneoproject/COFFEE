@@ -189,8 +189,8 @@ class ExpressionRewriter(object):
             dimensions = kwargs.get('dimensions', ())
             should_expand = lambda n: set(dimensions).issubset(set(n.rank))
         elif mode in ['all', 'domain', 'outdomain']:
-            lda = kwargs.get('lda', ldanalysis(self.expr_info.outermost_loop,
-                                               key='symbol', value='dim'))
+            lda = kwargs.get('lda') or ldanalysis(self.expr_info.outermost_loop,
+                                                  key='symbol', value='dim')
             if mode == 'all':
                 should_expand = lambda n: lda.get(n.symbol) and \
                     any(r in self.expr_info.dims for r in lda[n.symbol])
@@ -280,8 +280,8 @@ class ExpressionRewriter(object):
             kwargs['heuristic'] = True
             should_factorize = lambda n: False
         elif mode in ['all', 'domain', 'outdomain', 'constants']:
-            lda = kwargs.get('lda', ldanalysis(self.expr_info.outermost_loop,
-                                               key='symbol', value='dim'))
+            lda = kwargs.get('lda') or ldanalysis(self.expr_info.outermost_loop,
+                                                  key='symbol', value='dim')
             if mode == 'all':
                 should_factorize = lambda n: lda.get(n.symbol) and \
                     any(r in self.expr_info.dims for r in lda[n.symbol])
@@ -753,14 +753,14 @@ class ExpressionHoister(object):
 
     def extract(self, mode, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
-        lda = kwargs.get('lda', ldanalysis(self.header, value='dim'))
+        lda = kwargs.get('lda') or ldanalysis(self.header, value='dim')
         return self.extractor(mode, True, lda)
 
     def licm(self, mode, **kwargs):
         """Perform generalized loop-invariant code motion."""
         max_sharing = kwargs.get('max_sharing', False)
         iterative = kwargs.get('iterative', True)
-        lda = kwargs.get('lda', ldanalysis(self.header, value='dim'))
+        lda = kwargs.get('lda') or ldanalysis(self.header, value='dim')
         global_cse = kwargs.get('global_cse', False)
 
         expr_dims_loops = self.expr_info.loops_from_dims
