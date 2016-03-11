@@ -109,19 +109,17 @@ class ExpressionRewriter(object):
             * lda: an up-to-date loop dependence analysis, as returned by a call
                 to ``ldanalysis(node, 'dim'). By providing this information, loop
                 dependence analysis can be avoided, thus speeding up the transformation.
+            * global_cse: (default: False) search for common sub-expressions across
+                all previously hoisted terms. Note that no data dependency analysis is
+                performed, so this is at caller's risk.
         """
 
-        look_ahead = kwargs.get('look_ahead', False)
-        max_sharing = kwargs.get('max_sharing', False)
-        iterative = kwargs.get('iterative', True)
-        lda = kwargs.get('lda', None)
-
-        if look_ahead:
-            return self.expr_hoister.extract(mode)
+        if kwargs.get('look_ahead'):
+            return self.expr_hoister.extract(mode, **kwargs)
         if mode == 'aggressive':
             # Reassociation may promote more hoisting in /aggressive/ mode
             self.reassociate()
-        self.expr_hoister.licm(mode, iterative, max_sharing, lda)
+        self.expr_hoister.licm(mode, **kwargs)
         return self
 
     def expand(self, mode='standard', **kwargs):
@@ -753,18 +751,22 @@ class ExpressionHoister(object):
 
         return subexprs
 
-    def extract(self, mode, lda=None):
+    def extract(self, mode, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
-        lda = lda or ldanalysis(self.header, value='dim')
+        lda = kwargs.get('lda', ldanalysis(self.header, value='dim'))
         return self.extractor(mode, True, lda)
 
-    def licm(self, mode, iterative=True, max_sharing=False, lda=None):
+    def licm(self, mode, **kwargs):
         """Perform generalized loop-invariant code motion."""
-        inv_dep = {}
-        lda = lda or ldanalysis(self.header, value='dim')
+        max_sharing = kwargs.get('max_sharing', False)
+        iterative = kwargs.get('iterative', True)
+        lda = kwargs.get('lda', ldanalysis(self.header, value='dim'))
+        global_cse = kwargs.get('global_cse', False)
+
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
 
+        mapper = {}
         extracted = True
         while extracted:
             extracted = self.extractor(mode, False, lda)
@@ -820,66 +822,67 @@ class ExpressionHoister(object):
                     wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, len(dep)))
                     next_loop = od_find_next(expr_dims_loops, dep[0])
 
-                # 3) Create the new invariant temporary symbols
                 loop_size = tuple([l.size for l in wrap_loop])
                 loop_dim = tuple([l.dim for l in wrap_loop])
-                inv_syms = [Symbol(self._hoisted_sym % {
-                    'loop_dep': '_'.join(dep) if dep else 'c',
-                    'expr_id': self.expr_id,
-                    'round': self.extractor.counter,
-                    'i': i
-                }, loop_size) for i in range(len(subexprs))]
-                inv_decls = [Decl(self.expr_info.type, s) for s in inv_syms]
-                inv_syms = [Symbol(s.symbol, loop_dim) for s in inv_syms]
 
-                # 4) Keep track of new declarations for later easy access
-                for d in inv_decls:
-                    d.scope = LOCAL
-                    self.decls[d.sym.symbol] = d
+                # 3) Create the required new AST nodes
+                symbols, decls, stmts = [], [], []
+                for i, e in enumerate(subexprs):
+                    if global_cse and self.hoisted.get_symbol(e):
+                        name = self.hoisted.get_symbol(e)
+                    else:
+                        name = self._hoisted_sym % {
+                            'loop_dep': '_'.join(dep) if dep else 'c',
+                            'expr_id': self.expr_id,
+                            'round': self.extractor.counter,
+                            'i': i
+                        }
+                        stmts.append(Assign(Symbol(name, loop_dim), dcopy(e)))
+                        decl = Decl(self.expr_info.type, Symbol(name, loop_size))
+                        decl.scope = LOCAL
+                        decls.append(decl)
+                        self.decls[name] = decl
+                    symbols.append(Symbol(name, loop_dim))
 
-                # 5) Replace invariant subtrees with the proper temporary
-                to_replace = dict(zip(subexprs, inv_syms))
+                # 4) Replace invariant sub-expressions with temporaries
+                to_replace = dict(zip(subexprs, symbols))
                 n_replaced = ast_replace(self.stmt.rvalue, to_replace)
 
-                # 6) Update symbol dependencies
-                for s, e in zip(inv_syms, subexprs):
+                # 5) Update data dependencies
+                for s, e in zip(symbols, subexprs):
                     self.expr_graph.add_dependency(s, e)
                     if n_replaced[str(s)] > 1:
                         self.expr_graph.add_dependency(s, s)
                     lda[s] = dep
 
-                # 7) Create the body containing invariant statements
-                subexprs = [dcopy(e) for e in subexprs]
-                inv_stmts = [Assign(s, e) for s, e in zip(dcopy(inv_syms), subexprs)]
-
-                # 8) Track necessary information for AST construction
-                inv_info = (loop_dim, place, next_loop, wrap_loop)
-                if inv_info not in inv_dep:
-                    inv_dep[inv_info] = (inv_decls, inv_stmts)
+                # 6) Track necessary information for AST construction
+                info = (loop_dim, place, next_loop, wrap_loop)
+                if info not in mapper:
+                    mapper[info] = (decls, stmts)
                 else:
-                    inv_dep[inv_info][0].extend(inv_decls)
-                    inv_dep[inv_info][1].extend(inv_stmts)
+                    mapper[info][0].extend(decls)
+                    mapper[info][1].extend(stmts)
 
             if not iterative:
                 break
 
-        for inv_info, (inv_decls, inv_stmts) in sorted(inv_dep.items()):
-            loop_dim, place, next_loop, wrap_loop = inv_info
+        for info, (decls, stmts) in sorted(mapper.items()):
+            loop_dim, place, next_loop, wrap_loop = info
             # Create the hoisted code
             if wrap_loop:
-                outer_wrap_loop = ast_make_for(inv_stmts, wrap_loop[-1])
+                outer_wrap_loop = ast_make_for(stmts, wrap_loop[-1])
                 for l in reversed(wrap_loop[:-1]):
                     outer_wrap_loop = ast_make_for([outer_wrap_loop], l)
-                code = inv_decls + [outer_wrap_loop]
+                code = decls + [outer_wrap_loop]
                 wrap_loop = outer_wrap_loop
             else:
-                code = inv_decls + inv_stmts
+                code = decls + stmts
                 wrap_loop = None
             # Insert the new nodes at the right level in the loop nest
             ofs = place.children.index(next_loop)
             place.children[ofs:ofs] = code + [FlatBlock("\n")]
             # Track hoisted symbols
-            for i, j in zip(inv_stmts, inv_decls):
+            for i, j in zip(stmts, decls):
                 self.hoisted[j.sym.symbol] = (i, j, wrap_loop, place)
 
         # Finally, make sure symbols are unique in the AST
