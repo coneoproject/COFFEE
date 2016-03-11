@@ -147,13 +147,6 @@ class ASTKernel(object):
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
 
-        # Unrolling thresholds when autotuning
-        autotune_unroll_ths = {
-            'default': 10,
-            'minimal': 4,
-            'hoisted>20': 4,
-            'hoisted>40': 1
-        }
         # The higher, the more precise and costly is autotuning
         autotune_resolution = 100000000
         # Kernel variants tested when autotuning is enabled
@@ -188,7 +181,6 @@ class ASTKernel(object):
             v_type, v_param = vectorize if vectorize else (None, None)
             align_pad = kwargs.get('align_pad')
             split = kwargs.get('split')
-            unroll = kwargs.get('unroll')
             precompute = kwargs.get('precompute')
             dead_ops_elimination = kwargs.get('dead_ops_elimination')
 
@@ -209,8 +201,6 @@ class ASTKernel(object):
                 raise RuntimeError("Split forbidden with zero-valued blocks avoidance")
             if dead_ops_elimination and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("SIMDization forbidden with zero-valued blocks avoidance")
-            if unroll and v_type and v_type != VectStrategy.AUTO:
-                raise RuntimeError("SIMDization forbidden with unrolling")
             if rewrite == 'auto' and len(info['exprs']) > 1:
                 warning("Rewrite mode=auto not supported with multiple expressions")
                 warning("Switching to rewrite mode=4")
@@ -234,11 +224,7 @@ class ASTKernel(object):
                 if precompute:
                     loop_opt.precompute(precompute)
 
-                # 4) Unroll/Unroll-and-jam
-                if unroll:
-                    loop_opt.unroll(dict(unroll))
-
-                # 5) Vectorization
+                # 4) Vectorization
                 if initialized and flatten(loop_opt.expr_domain_loops):
                     vect = LoopVectorizer(loop_opt, kernel)
                     if align_pad:
@@ -287,36 +273,6 @@ class ASTKernel(object):
                 # Increase the stack size, if needed
                 increase_stack(loop_opts)
                 # Add the base variant to the autotuning process
-                variants.append((self.ast, params))
-                self.ast = dcopy(original_ast)
-
-                # Calculate variants characterized by different unroll factors,
-                # determined heuristically
-                loop_opt = loop_opts[0]
-                if opt in ['rewrite', 'split']:
-                    # Set the unroll threshold
-                    if opts['autotune'] == 'minimal':
-                        unroll_ths = autotune_unroll_ths['minimal']
-                    elif len(loop_opt.hoisted) > 40:
-                        unroll_ths = autotune_unroll_ths['hoisted>40']
-                    elif len(loop_opt.hoisted) > 20:
-                        unroll_ths = autotune_unroll_ths['hoisted>20']
-                    else:
-                        unroll_ths = autotune_unroll_ths['default']
-                    expr_loops = loop_opt.expr_loops
-                    if not expr_loops:
-                        continue
-                    loops_uf = unroll_factors(flatten(expr_loops))
-                    all_uf = [bind(k, v) for k, v in loops_uf.items()]
-                    all_uf = [uf for uf in list(itertools.product(*all_uf))
-                              if reduce(operator.mul, zip(*uf)[1]) <= unroll_ths]
-                    for uf in all_uf:
-                        params_uf = dict(params.items() + [('unroll', uf)])
-                        autotune_configs_uf.append((opt, params_uf))
-
-            # On top of some of the basic kernel variants, apply unroll/unroll-and-jam
-            for _, params in autotune_configs_uf:
-                loop_opts = _generate_cpu_code(self, self.ast, **params)
                 variants.append((self.ast, params))
                 self.ast = dcopy(original_ast)
 

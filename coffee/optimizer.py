@@ -661,43 +661,6 @@ class CPULoopOptimizer(LoopOptimizer):
 
     """Loop optimizer for CPU architectures."""
 
-    def unroll(self, loop_uf):
-        """Unroll loops enclosing expressions as specified by ``loop_uf``.
-
-        :param loop_uf: dictionary from iteration spaces to unroll factors."""
-
-        def update_expr(node, var, factor):
-            """Add an offset ``factor`` to every iteration variable ``var`` in
-            ``node``."""
-            if isinstance(node, Symbol):
-                new_ofs = []
-                node.offset = node.offset or ((1, 0) for i in range(len(node.rank)))
-                for r, ofs in zip(node.rank, node.offset):
-                    new_ofs.append((ofs[0], ofs[1] + factor) if r == var else ofs)
-                node.offset = tuple(new_ofs)
-            else:
-                for n in node.children:
-                    update_expr(n, var, factor)
-
-        unrolled_loops = set()
-        for itspace, uf in loop_uf.items():
-            new_exprs = OrderedDict()
-            for stmt, expr_info in self.exprs.items():
-                loop = [l for l in expr_info.perfect_loops if l.dim == itspace]
-                if not loop:
-                    # Unroll only loops in a perfect loop nest
-                    continue
-                loop = loop[0]  # Only one loop possibly found
-                for i in range(uf-1):
-                    new_stmt = dcopy(stmt)
-                    update_expr(new_stmt, itspace, i+1)
-                    expr_info.parent.children.append(new_stmt)
-                    new_exprs.update({new_stmt: expr_info})
-                if loop not in unrolled_loops:
-                    loop.incr.children[1].symbol += uf-1
-                    unrolled_loops.add(loop)
-            self.exprs.update(new_exprs)
-
     def split(self, cut=1):
         """Split expressions into multiple chunks exploiting sum's associativity.
         Each chunk will have ``cut`` summands.
