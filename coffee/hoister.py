@@ -40,60 +40,82 @@ class Extractor():
     EXT = 0  # expression marker: extract
     STOP = 1  # expression marker: do not extract
 
-    def __init__(self, stmt, expr_info):
+    @staticmethod
+    def factory(mode, stmt, expr_info):
+        if mode == 'normal':
+            should_extract = lambda d: True
+            return MainExtractor(stmt, expr_info, should_extract)
+        elif mode == 'only_const':
+            # Do not extract unless constant in all loops
+            should_extract = lambda d: not (d and d.issubset(set(expr_info.dims)))
+            return MainExtractor(stmt, expr_info, should_extract)
+        elif mode == 'only_outdomain':
+            should_extract = lambda d: d.issubset(set(expr_info.out_domain_dims))
+            return MainExtractor(stmt, expr_info, should_extract)
+        elif mode == 'only_domain':
+            should_extract = lambda d: not (d.issubset(set(expr_info.out_domain_dims)))
+            return SoftExtractor(stmt, expr_info, should_extract)
+        elif mode == 'aggressive':
+            should_extract = lambda d: True
+            return AggressiveExtractor(stmt, expr_info, should_extract)
+        else:
+            raise RuntimeError("Requested an invalud Extractor (%s)" % mode)
+
+    def __init__(self, stmt, expr_info, should_extract):
         self.stmt = stmt
         self.expr_info = expr_info
-        self.counter = 0
+        self.should_extract = should_extract
+
+    def _handle_expr(*args):
+        raise NotImplementedError("Extractor is an abstract class")
 
     def _try(self, node, dep):
         if isinstance(node, Symbol):
-            # Never extract individual symbols
             return False
-        should_extract = True
-        if self.mode == 'aggressive':
-            # Do extract everything
-            should_extract = True
-        elif self.mode == 'only_const':
-            # Do not extract unless constant in all loops
-            if dep and dep.issubset(set(self.expr_info.dims)):
-                should_extract = False
-        elif self.mode == 'only_domain':
-            # Do not extract unless dependent on domain loops
-            if dep.issubset(set(self.expr_info.out_domain_dims)):
-                should_extract = False
-        elif self.mode == 'only_outdomain':
-            # Do not extract unless independent of the domain loops
-            if not dep.issubset(set(self.expr_info.out_domain_dims)):
-                should_extract = False
+        should_extract = self.should_extract(dep)
         if should_extract or self.look_ahead:
             dep = sorted(dep, key=lambda i: self.expr_info.dims.index(i))
             self.extracted.setdefault(tuple(dep), []).append(node)
         return should_extract
 
-    def _soft(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
-        if info_l == self.EXT and info_r == self.EXT:
-            if dep_l == dep_r:
-                # E.g. alpha*beta, A[i] + B[i]
-                return (dep_l, self.EXT)
-            elif dep_l.issubset(dep_r):
-                # E.g. A[i]*B[i,j]
-                if not self._try(right, dep_r):
-                    return (dep_n, self.EXT)
-            elif dep_r.issubset(dep_l):
-                # E.g. A[i,j]*B[i]
-                if not self._try(left, dep_l):
-                    return (dep_n, self.EXT)
-            else:
-                # E.g. A[i]*B[j]
-                self._try(left, dep_l)
-                self._try(right, dep_r)
-        elif info_r == self.EXT:
-            self._try(right, dep_r)
-        elif info_l == self.EXT:
-            self._try(left, dep_l)
-        return (dep_n, self.STOP)
+    def _visit(self, node):
+        if isinstance(node, Symbol):
+            return (self.lda[node], self.EXT)
 
-    def _normal(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+        elif isinstance(node, Par):
+            return self._visit(node.child)
+
+        elif isinstance(node, (FunCall, Ternary)):
+            arg_deps = [self._visit(n) for n in node.children]
+            dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
+            info = self.EXT if all(i == self.EXT for _, i in arg_deps) else self.STOP
+            return (dep, info)
+
+        else:
+            left, right = node.children
+            dep_l, info_l = self._visit(left)
+            dep_r, info_r = self._visit(right)
+
+            dep_l = {d for d in dep_l if d in self.expr_info.dims}
+            dep_r = {d for d in dep_r if d in self.expr_info.dims}
+            dep_n = dep_l | dep_r
+
+            return self._handle_expr(left, right, dep_l, dep_r, dep_n, info_l, info_r)
+
+    def extract(self, look_ahead, lda):
+        """Extract invariant subexpressions from /self.expr/."""
+        self.lda = lda
+        self.look_ahead = look_ahead
+        self.extracted = OrderedDict()
+
+        self._visit(self.stmt.rvalue)
+
+        return self.extracted
+
+
+class MainExtractor(Extractor):
+
+    def _handle_expr(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
         if info_l == self.EXT and info_r == self.EXT:
             if dep_l == dep_r:
                 # E.g. alpha*beta, A[i] + B[i]
@@ -126,7 +148,36 @@ class Extractor():
             self._try(left, dep_l)
         return (dep_n, self.STOP)
 
-    def _aggressive(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+
+class SoftExtractor(Extractor):
+
+    def _handle_expr(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
+        if info_l == self.EXT and info_r == self.EXT:
+            if dep_l == dep_r:
+                # E.g. alpha*beta, A[i] + B[i]
+                return (dep_l, self.EXT)
+            elif dep_l.issubset(dep_r):
+                # E.g. A[i]*B[i,j]
+                if not self._try(right, dep_r):
+                    return (dep_n, self.EXT)
+            elif dep_r.issubset(dep_l):
+                # E.g. A[i,j]*B[i]
+                if not self._try(left, dep_l):
+                    return (dep_n, self.EXT)
+            else:
+                # E.g. A[i]*B[j]
+                self._try(left, dep_l)
+                self._try(right, dep_r)
+        elif info_r == self.EXT:
+            self._try(right, dep_r)
+        elif info_l == self.EXT:
+            self._try(left, dep_l)
+        return (dep_n, self.STOP)
+
+
+class AggressiveExtractor(Extractor):
+
+    def _handle_expr(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
         if info_l == self.EXT and info_r == self.EXT:
             if dep_l == dep_r:
                 # E.g. alpha*beta, A[i] + B[i]
@@ -154,53 +205,6 @@ class Extractor():
             self._try(left, dep_l)
         return (dep_n, self.STOP)
 
-    def _extract(self, node):
-        if isinstance(node, Symbol):
-            return (self.lda[node], self.EXT)
-
-        elif isinstance(node, Par):
-            return self._extract(node.child)
-
-        elif isinstance(node, (FunCall, Ternary)):
-            arg_deps = [self._extract(n) for n in node.children]
-            dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
-            info = self.EXT if all(i == self.EXT for _, i in arg_deps) else self.STOP
-            return (dep, info)
-
-        else:
-            # Traverse the expression tree
-            left, right = node.children
-            dep_l, info_l = self._extract(left)
-            dep_r, info_r = self._extract(right)
-
-            # Filter out false dependencies
-            dep_l = {d for d in dep_l if d in self.expr_info.dims}
-            dep_r = {d for d in dep_r if d in self.expr_info.dims}
-            dep_n = dep_l | dep_r
-
-            args = left, right, dep_l, dep_r, dep_n, info_l, info_r
-
-            if self.mode in ['normal', 'only_const', 'only_outdomain']:
-                return self._normal(*args)
-            elif self.mode == 'only_domain':
-                return self._soft(*args)
-            elif self.mode == 'aggressive':
-                return self._aggressive(*args)
-            else:
-                raise RuntimeError("licm: unexpected hoisting mode (%s)" % self.mode)
-
-    def __call__(self, mode, look_ahead, lda):
-        """Extract invariant subexpressions from /self.expr/."""
-
-        self.mode = mode
-        self.look_ahead = look_ahead
-        self.lda = lda
-        self.extracted = OrderedDict()
-        self._extract(self.stmt.rvalue)
-
-        self.counter += 1
-        return self.extracted
-
 
 class Hoister():
 
@@ -217,9 +221,9 @@ class Hoister():
         self.decls = decls
         self.hoisted = hoisted
         self.expr_graph = expr_graph
-        self.extractor = Extractor(self.stmt, self.expr_info)
 
         # Increment counters for unique variable names
+        self.nextracted = 0
         self.expr_id = Hoister._handled
         Hoister._handled += 1
 
@@ -251,7 +255,8 @@ class Hoister():
     def extract(self, mode, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
         lda = kwargs.get('lda') or ldanalysis(self.header, value='dim')
-        return self.extractor(mode, True, lda)
+        extractor = Extractor.factory(mode, self.stmt, self.expr_info)
+        return extractor.extract(True, lda)
 
     def licm(self, mode, **kwargs):
         """Perform generalized loop-invariant code motion."""
@@ -262,11 +267,12 @@ class Hoister():
 
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
+        extractor = Extractor.factory(mode, self.stmt, self.expr_info)
 
         mapper = {}
         extracted = True
         while extracted:
-            extracted = self.extractor(mode, False, lda)
+            extracted = extractor.extract(False, lda)
             for dep, subexprs in extracted.items():
                 # 1) Filter subexpressions that will be hoisted
                 sharing = []
@@ -331,7 +337,7 @@ class Hoister():
                         name = self._hoisted_sym % {
                             'loop_dep': '_'.join(dep) if dep else 'c',
                             'expr_id': self.expr_id,
-                            'round': self.extractor.counter,
+                            'round': self.nextracted,
                             'i': i
                         }
                         stmts.append(Assign(Symbol(name, loop_dim), dcopy(e)))
@@ -360,6 +366,7 @@ class Hoister():
                     mapper[info][0].extend(decls)
                     mapper[info][1].extend(stmts)
 
+            self.nextracted += 1
             if not iterative:
                 break
 
