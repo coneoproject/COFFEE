@@ -413,6 +413,40 @@ def visit(node, parent=None, info_items=None):
     return info
 
 
+def ldanalysis(node, key='default', value='default'):
+    """Perform loop dependence analysis in the AST rooted in ``node``. Return
+    a dictionary mapping symbols to loops they depend on.
+
+    :arg key: any value in ['default', 'urepr', 'symbol']. With 'urepr' and
+        'symbol' different instances of the same Symbol are represented by
+        a single entry in the returned dictionary.
+    :arg value: any value in ['default', 'dim']. If 'dim' is specified, then
+        loop iteration dimensions are used in place of the actual object.
+    """
+
+    if key == 'default':
+        gen_key = lambda s: s
+    elif key == 'urepr':
+        gen_key = lambda s: s.urepr
+    elif key == 'symbol':
+        gen_key = lambda s: s.symbol
+    else:
+        raise RuntimeError("Illegal key=%s for loop dependence analysis" % key)
+
+    if value == 'default':
+        gen_value = lambda d: set(d)
+    elif value == 'dim':
+        gen_value = lambda d: {l.dim for l in d}
+    else:
+        raise RuntimeError("Illegal value=%s for loop dependence analysis" % value)
+
+    symbols_dep = visit(node, info_items=['symbols_dep'])['symbols_dep']
+    lda = defaultdict(set)
+    for s, dep in symbols_dep.items():
+        lda[gen_key(s)] |= gen_value(dep)
+
+    return lda
+
 def explore_operator(node):
     """Return a list of the operands composing the operation whose root is
     ``node``."""

@@ -106,22 +106,22 @@ class ExpressionRewriter(object):
                 sub-expressions. By not hoisting, factorization opportunities are preserved
             * iterative: (default: True) should be set to False if interested in
                 hoisting only the smallest subexpressions matching /mode/
-            * symbols_dep: a dictionary from symbols to loop dependencies. If provided,
-                data dependency analysis can be avoided, thus speeding up the
-                transformation.
+            * lda: an up-to-date loop dependence analysis, as returned by a call
+                to ``ldanalysis(node, 'dim'). By providing this information, loop
+                dependence analysis can be avoided, thus speeding up the transformation.
         """
 
         look_ahead = kwargs.get('look_ahead', False)
         max_sharing = kwargs.get('max_sharing', False)
         iterative = kwargs.get('iterative', True)
-        symbols_dep = kwargs.get('symbols_dep', None)
+        lda = kwargs.get('lda', None)
 
         if look_ahead:
             return self.expr_hoister.extract(mode)
         if mode == 'aggressive':
             # Reassociation may promote more hoisting in /aggressive/ mode
             self.reassociate()
-        self.expr_hoister.licm(mode, iterative, max_sharing, symbols_dep)
+        self.expr_hoister.licm(mode, iterative, max_sharing, lda)
         return self
 
     def expand(self, mode='standard', **kwargs):
@@ -166,8 +166,9 @@ class ExpressionRewriter(object):
             * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
                 provided, expansion will be performed only within these trees,
                 rather than within the whole expression.
-            * symbols_dep: a dictionary from symbols to loop dependencies. If provided,
-                data dependency analysis can be avoided, thus speeding up the
+            * lda: an up-to-date loop dependence analysis, as returned by a call
+                to ``ldanalysis(node, 'symbol', 'dim'). By providing this information,
+                loop dependence analysis can be avoided, thus speeding up the
                 transformation.
         """
 
@@ -190,21 +191,17 @@ class ExpressionRewriter(object):
             dimensions = kwargs.get('dimensions', ())
             should_expand = lambda n: set(dimensions).issubset(set(n.rank))
         elif mode in ['all', 'domain', 'outdomain']:
-            symbols_dep = kwargs.get('symbols_dep')
-            if not symbols_dep:
-                info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
-                symbols_dep = defaultdict(set)
-                for s, dep in info['symbols_dep'].items():
-                    symbols_dep[s.symbol] |= {l.dim for l in dep}
+            lda = kwargs.get('lda', ldanalysis(self.expr_info.outermost_loop,
+                                               key='symbol', value='dim'))
             if mode == 'all':
-                should_expand = lambda n: symbols_dep.get(n.symbol) and \
-                    any(r in self.expr_info.dims for r in symbols_dep[n.symbol])
+                should_expand = lambda n: lda.get(n.symbol) and \
+                    any(r in self.expr_info.dims for r in lda[n.symbol])
             elif mode == 'domain':
-                should_expand = lambda n: symbols_dep.get(n.symbol) and \
-                    any(r in self.expr_info.domain_dims for r in symbols_dep[n.symbol])
+                should_expand = lambda n: lda.get(n.symbol) and \
+                    any(r in self.expr_info.domain_dims for r in lda[n.symbol])
             elif mode == 'outdomain':
-                should_expand = lambda n: symbols_dep.get(n.symbol) and \
-                    not symbols_dep[n.symbol].issubset(set(self.expr_info.domain_dims))
+                should_expand = lambda n: lda.get(n.symbol) and \
+                    not lda[n.symbol].issubset(set(self.expr_info.domain_dims))
         else:
             warning('Unknown expansion strategy. Skipping.')
             return
@@ -252,8 +249,9 @@ class ExpressionRewriter(object):
                 ``A*(B+C) + A*F + D*E``. If the A's list were empty, all of the
                 three symbols B, C, and F would be factorized. Recall that this
                 option is ignored unless ``mode == 'adhoc'``.
-            * symbols_dep: a dictionary from symbols to loop dependencies. If provided,
-                data dependency analysis can be avoided, thus speeding up the
+            * lda: an up-to-date loop dependence analysis, as returned by a call
+                to ``ldanalysis(node, 'symbol', 'dim'). By providing this information,
+                loop dependence analysis can be avoided, thus speeding up the
                 transformation.
         """
 
@@ -284,23 +282,19 @@ class ExpressionRewriter(object):
             kwargs['heuristic'] = True
             should_factorize = lambda n: False
         elif mode in ['all', 'domain', 'outdomain', 'constants']:
-            symbols_dep = kwargs.get('symbols_dep')
-            if not symbols_dep:
-                info = visit(self.expr_info.outermost_loop, info_items=['symbols_dep'])
-                symbols_dep = defaultdict(set)
-                for s, dep in info['symbols_dep'].items():
-                    symbols_dep[s.symbol] |= {l.dim for l in dep}
+            lda = kwargs.get('lda', ldanalysis(self.expr_info.outermost_loop,
+                                               key='symbol', value='dim'))
             if mode == 'all':
-                should_factorize = lambda n: symbols_dep.get(n.symbol) and \
-                    any(r in self.expr_info.dims for r in symbols_dep[n.symbol])
+                should_factorize = lambda n: lda.get(n.symbol) and \
+                    any(r in self.expr_info.dims for r in lda[n.symbol])
             elif mode == 'domain':
-                should_factorize = lambda n: symbols_dep.get(n.symbol) and \
-                    any(r in self.expr_info.domain_dims for r in symbols_dep[n.symbol])
+                should_factorize = lambda n: lda.get(n.symbol) and \
+                    any(r in self.expr_info.domain_dims for r in lda[n.symbol])
             elif mode == 'outdomain':
-                should_factorize = lambda n: symbols_dep.get(n.symbol) and \
-                    not symbols_dep[n.symbol].issubset(set(self.expr_info.domain_dims))
+                should_factorize = lambda n: lda.get(n.symbol) and \
+                    not lda[n.symbol].issubset(set(self.expr_info.domain_dims))
             elif mode == 'constants':
-                should_factorize = lambda n: not symbols_dep.get(n.symbol)
+                should_factorize = lambda n: not lda.get(n.symbol)
         else:
             warning('Unknown factorization strategy. Skipping.')
             return
@@ -467,11 +461,8 @@ class ExpressionRewriter(object):
 
     def SGrewrite(self):
         """Apply rewrite rules based on the sharing graph of the expression."""
-        info = visit(self.expr_info.domain_loops[0], info_items=['symbols_dep'])
-        symbols_dep = defaultdict(set)
-        for s, dep in info['symbols_dep'].items():
-            symbols_dep[s.symbol] |= {l.dim for l in dep}
-        sg_visitor = SharingGraph(self.expr_info, symbols_dep)
+        lda = ldanalysis(self.expr_info.domain_loops[0], key='symbol', value='dim')
+        sg_visitor = SharingGraph(self.expr_info, lda)
 
         # First, eliminate sharing "locally", i.e., within Sums
         sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
@@ -563,25 +554,25 @@ class ExpressionExtractor():
         if isinstance(node, Symbol):
             # Never extract individual symbols
             return False
-        operands = [o for o, p in explore_operator(node)]
         should_extract = True
         if self.mode == 'aggressive':
             # Do extract everything
             should_extract = True
         elif self.mode == 'only_const':
             # Do not extract unless constant in all loops
-            if set(dep) and set(dep).issubset(set(self.expr_info.dims)):
+            if dep and dep.issubset(set(self.expr_info.dims)):
                 should_extract = False
         elif self.mode == 'only_domain':
             # Do not extract unless dependent on domain loops
-            if set(dep).issubset(set(self.expr_info.out_domain_dims)):
+            if dep.issubset(set(self.expr_info.out_domain_dims)):
                 should_extract = False
         elif self.mode == 'only_outdomain':
             # Do not extract unless independent of the domain loops
-            if not set(dep).issubset(set(self.expr_info.out_domain_dims)):
+            if not dep.issubset(set(self.expr_info.out_domain_dims)):
                 should_extract = False
         if should_extract or self.look_ahead:
-            self.extracted.setdefault(dep, []).append(node)
+            dep = sorted(dep, key=lambda i: self.expr_info.dims.index(i))
+            self.extracted.setdefault(tuple(dep), []).append(node)
         return should_extract
 
     def _soft(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
@@ -589,11 +580,11 @@ class ExpressionExtractor():
             if dep_l == dep_r:
                 # E.g. alpha*beta, A[i] + B[i]
                 return (dep_l, self.EXT)
-            elif set(dep_l).issubset(set(dep_r)):
+            elif dep_l.issubset(dep_r):
                 # E.g. A[i]*B[i,j]
                 if not self._try(right, dep_r):
                     return (dep_n, self.EXT)
-            elif set(dep_r).issubset(set(dep_l)):
+            elif dep_r.issubset(dep_l):
                 # E.g. A[i,j]*B[i]
                 if not self._try(left, dep_l):
                     return (dep_n, self.EXT)
@@ -614,19 +605,19 @@ class ExpressionExtractor():
                 return (dep_l, self.EXT)
             elif not dep_l:
                 # E.g. alpha*A[i,j]
-                if not set(self.expr_info.domain_dims) & set(dep_r) or \
+                if not set(self.expr_info.domain_dims) & dep_r or \
                         not (self._try(left, dep_l) or self._try(right, dep_r)):
                     return (dep_r, self.EXT)
             elif not dep_r:
                 # E.g. A[i,j]*alpha
-                if not set(self.expr_info.domain_dims) & set(dep_l) or \
+                if not set(self.expr_info.domain_dims) & dep_l or \
                         not (self._try(right, dep_r) or self._try(left, dep_l)):
                     return (dep_l, self.EXT)
-            elif set(dep_l).issubset(set(dep_r)):
+            elif dep_l.issubset(dep_r):
                 # E.g. A[i]*B[i,j]
                 if not self._try(left, dep_l):
                     return (dep_n, self.EXT)
-            elif set(dep_r).issubset(set(dep_l)):
+            elif dep_r.issubset(dep_l):
                 # E.g. A[i,j]*B[i]
                 if not self._try(right, dep_r):
                     return (dep_n, self.EXT)
@@ -651,11 +642,11 @@ class ExpressionExtractor():
             elif not dep_r:
                 # E.g. A[i,j]*alpha, not hoistable anymore
                 self._try(left, dep_l)
-            elif set(dep_l).issubset(set(dep_r)):
+            elif dep_l.issubset(dep_r):
                 # E.g. A[i]*B[i,j]
                 if not self._try(left, dep_l):
                     return (dep_n, self.EXT)
-            elif set(dep_r).issubset(set(dep_l)):
+            elif dep_r.issubset(dep_l):
                 # E.g. A[i,j]*B[i]
                 if not self._try(right, dep_r):
                     return (dep_n, self.EXT)
@@ -670,7 +661,7 @@ class ExpressionExtractor():
 
     def _extract(self, node):
         if isinstance(node, Symbol):
-            return (self.symbols_dep[node], self.EXT)
+            return (self.lda[node], self.EXT)
 
         elif isinstance(node, Par):
             return self._extract(node.child)
@@ -688,9 +679,9 @@ class ExpressionExtractor():
             dep_r, info_r = self._extract(right)
 
             # Filter out false dependencies
-            dep_l = tuple(d for d in dep_l if d in self.expr_info.dims)
-            dep_r = tuple(d for d in dep_r if d in self.expr_info.dims)
-            dep_n = dep_l + tuple(d for d in dep_r if d not in dep_l)
+            dep_l = {d for d in dep_l if d in self.expr_info.dims}
+            dep_r = {d for d in dep_r if d in self.expr_info.dims}
+            dep_n = dep_l | dep_r
 
             args = left, right, dep_l, dep_r, dep_n, info_l, info_r
 
@@ -703,12 +694,12 @@ class ExpressionExtractor():
             else:
                 raise RuntimeError("licm: unexpected hoisting mode (%s)" % self.mode)
 
-    def __call__(self, mode, look_ahead, symbols_dep):
+    def __call__(self, mode, look_ahead, lda):
         """Extract invariant subexpressions from /self.expr/."""
 
         self.mode = mode
         self.look_ahead = look_ahead
-        self.symbols_dep = symbols_dep
+        self.lda = lda
         self.extracted = OrderedDict()
         self._extract(self.stmt.rvalue)
 
@@ -762,32 +753,26 @@ class ExpressionHoister(object):
 
         return subexprs
 
-    def _symbols_dep(self):
-        symbols_dep = visit(self.expr_info.outermost_parent,
-                            info_items=['symbols_dep'])['symbols_dep']
-        symbols_dep = dict((s, tuple(l.dim for l in dep))
-                           for s, dep in symbols_dep.items())
-        return symbols_dep
-
-    def extract(self, mode):
+    def extract(self, mode, lda=None):
         """Return a dictionary of hoistable subexpressions."""
-        return self.extractor(mode, True, self._symbols_dep())
+        lda = lda or ldanalysis(self.header, value='dim')
+        return self.extractor(mode, True, lda)
 
-    def licm(self, mode, iterative=True, max_sharing=False, symbols_dep=None):
+    def licm(self, mode, iterative=True, max_sharing=False, lda=None):
         """Perform generalized loop-invariant code motion."""
         inv_dep = {}
-        symbols_dep = symbols_dep or self._symbols_dep()
+        lda = lda or ldanalysis(self.header, value='dim')
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
 
         extracted = True
         while extracted:
-            extracted = self.extractor(mode, False, symbols_dep)
+            extracted = self.extractor(mode, False, lda)
             for dep, subexprs in extracted.items():
                 # 1) Filter subexpressions that will be hoisted
                 sharing = []
                 if max_sharing:
-                    sharing = uniquify([s for s, d in symbols_dep.items() if d == dep])
+                    sharing = uniquify([s for s, d in lda.items() if d == dep])
                 subexprs = self._filter(dep, subexprs, sharing=sharing)
                 if not subexprs:
                     continue
@@ -861,7 +846,7 @@ class ExpressionHoister(object):
                     self.expr_graph.add_dependency(s, e)
                     if n_replaced[str(s)] > 1:
                         self.expr_graph.add_dependency(s, s)
-                    symbols_dep[s] = dep
+                    lda[s] = dep
 
                 # 7) Create the body containing invariant statements
                 subexprs = [dcopy(e) for e in subexprs]
@@ -1389,36 +1374,31 @@ class CSEUnpicker(object):
                         t.reads_costs[p] = c + p_c
 
     def _transform_temporaries(self, temporaries, loop, nest):
+        lda = ldanalysis(self.header, key='symbol', value='dim')
+
         # Expand + Factorize
-        info = visit(self.header, info_items=['symbols_dep'])
-        symbols_dep = defaultdict(set)
-        for s, dep in info['symbols_dep'].items():
-            symbols_dep[s.symbol] |= {l.dim for l in dep}
         rewriters = OrderedDict()
         for t in temporaries:
             expr_info = MetaExpr(self.expr_info.type, loop.children[0], nest, (loop.dim,))
             ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
-            ew.expand(mode='all', not_aggregate=True, symbols_dep=symbols_dep)
-            ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.reads},
-                         symbols_dep=symbols_dep)
+            ew.expand(mode='all', not_aggregate=True, lda=lda)
+            ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.reads}, lda=lda)
             ew.factorize(mode='heuristic')
             rewriters[t] = ew
 
-        # Code motion
-        info = visit(self.header, info_items=['symbols_dep'])
-        symbols_dep = defaultdict(set)
-        for s, dep in info['symbols_dep'].items():
-            symbols_dep[s] |= {l.dim for l in dep}
-        for t, ew in rewriters.items():
-            ew.licm(mode='only_outdomain', symbols_dep=symbols_dep)
+        lda = ldanalysis(self.header, value='dim')
 
-    def _analyze_expr(self, expr, loop, symbols_dep):
+        # Code motion
+        for t, ew in rewriters.items():
+            ew.licm(mode='only_outdomain', lda=lda)
+
+    def _analyze_expr(self, expr, loop, lda):
         finder = FindInstances(Symbol)
         syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
         syms = [s for s in syms
-                if any(l.dim in self.expr_info.domain_dims for l in symbols_dep[s])]
+                if any(l in self.expr_info.domain_dims for l in lda[s])]
 
         syms_costs = defaultdict(int)
 
@@ -1436,13 +1416,13 @@ class CSEUnpicker(object):
 
         return syms_costs
 
-    def _analyze_loop(self, loop, symbols_dep, global_trace):
+    def _analyze_loop(self, loop, lda, global_trace):
         trace = OrderedDict()
 
         for stmt in loop.body:
             if not isinstance(stmt, Writer):
                 continue
-            syms_costs = self._analyze_expr(stmt.rvalue, loop, symbols_dep)
+            syms_costs = self._analyze_expr(stmt.rvalue, loop, lda)
             for s in syms_costs.keys():
                 if s.urepr in global_trace:
                     temporary = global_trace[s.urepr]
@@ -1544,8 +1524,8 @@ class CSEUnpicker(object):
         return best
 
     def unpick(self):
-        info = visit(self.header, info_items=['symbols_dep', 'fors'])
-        symbols_dep, fors = info['symbols_dep'], info['fors']
+        fors = visit(self.header, info_items=['fors'])['fors']
+        lda = ldanalysis(self.header, value='dim')
 
         # Collect all loops to be analyzed
         nests = OrderedDict()
@@ -1558,7 +1538,7 @@ class CSEUnpicker(object):
         global_trace = OrderedDict()
         mapper = OrderedDict()
         for loop in nests.keys():
-            trace = self._analyze_loop(loop, symbols_dep, global_trace)
+            trace = self._analyze_loop(loop, lda, global_trace)
             if trace:
                 mapper[loop] = trace
                 global_trace.update(trace)
