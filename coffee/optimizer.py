@@ -43,7 +43,6 @@ from base import *
 from utils import *
 from expression import MetaExpr
 from loop_scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
-from linear_algebra import LinearAlgebra
 from rewriter import ExpressionRewriter
 from ast_analyzer import ExpressionGraph, StmtTracker
 from coffee.visitors import MaxLoopDepth, FindInstances, ProjectExpansion, EstimateFlops
@@ -738,17 +737,6 @@ class CPULoopOptimizer(LoopOptimizer):
         for stmt, expr_info in self.exprs.items():
             new_exprs.update(elf.fission(stmt, expr_info))
         self.exprs = new_exprs
-
-    def blas(self, library):
-        """Convert an expression into sequences of calls to external dense linear
-        algebra libraries. Currently, MKL, ATLAS, and EIGEN are supported."""
-
-        # First, check that the loop nest has depth 3, otherwise it's useless
-        if MaxLoopDepth().visit(self.loop) != 3:
-            return
-
-        linear_algebra = LinearAlgebra(self.loop, self.header, self.kernel_decls)
-        return linear_algebra.transform(library)
 
 
 class GPULoopOptimizer(LoopOptimizer):

@@ -156,9 +156,6 @@ class ASTKernel(object):
         }
         # The higher, the more precise and costly is autotuning
         autotune_resolution = 100000000
-        # Kernel variant when blas transformation is selected
-        blas_config = {'rewrite': 2, 'align_pad': True, 'split': 1,
-                       'precompute': 'perfect'}
         # Kernel variants tested when autotuning is enabled
         autotune_min = [('rewrite', {'rewrite': 1, 'align_pad': True}),
                         ('split', {'rewrite': 2, 'align_pad': True, 'split': 1}),
@@ -191,7 +188,6 @@ class ASTKernel(object):
             v_type, v_param = vectorize if vectorize else (None, None)
             align_pad = kwargs.get('align_pad')
             split = kwargs.get('split')
-            toblas = kwargs.get('blas')
             unroll = kwargs.get('unroll')
             precompute = kwargs.get('precompute')
             dead_ops_elimination = kwargs.get('dead_ops_elimination')
@@ -209,12 +205,8 @@ class ASTKernel(object):
             loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
                          for (loop, header), exprs in nests.items()]
             # Combining certain optimizations is meaningless/forbidden.
-            if unroll and toblas:
-                raise RuntimeError("BLAS forbidden with unrolling")
             if dead_ops_elimination and split:
                 raise RuntimeError("Split forbidden with zero-valued blocks avoidance")
-            if dead_ops_elimination and toblas:
-                raise RuntimeError("BLAS forbidden with zero-valued blocks avoidance")
             if dead_ops_elimination and v_type and v_type != VectStrategy.AUTO:
                 raise RuntimeError("SIMDization forbidden with zero-valued blocks avoidance")
             if unroll and v_type and v_type != VectStrategy.AUTO:
@@ -249,7 +241,7 @@ class ASTKernel(object):
                 # 5) Vectorization
                 if initialized and flatten(loop_opt.expr_domain_loops):
                     vect = LoopVectorizer(loop_opt, kernel)
-                    if align_pad and not toblas:
+                    if align_pad:
                         # Padding and data alignment
                         vect.autovectorize()
                     if v_type and v_type != VectStrategy.AUTO:
@@ -258,10 +250,6 @@ class ASTKernel(object):
                         # Specialize vectorization for the memory access pattern
                         # of the expression
                         vect.specialize(v_type, v_param)
-
-                # 6) Conversion into blas calls
-                if toblas:
-                    self.blas = loop_opt.blas(toblas)
 
             # Ensure kernel is always marked static inline
             # Remove either or both of static and inline (so that we get the order right)
@@ -285,9 +273,6 @@ class ASTKernel(object):
             if opts['autotune'] == 'minimal':
                 resolution = 1
                 autotune_configs = autotune_min
-            elif blas:
-                library = ('blas', blas['name'])
-                autotune_configs.append(('blas', dict(blas_config.items() + [library])))
             variants = []
             autotune_configs_uf = []
             tunable = True
@@ -341,19 +326,10 @@ class ASTKernel(object):
                 fastest = autotuner.tune(resolution)
                 all_params = autotune_configs + autotune_configs_uf
                 name, params = all_params[fastest]
-                # Discard values set while autotuning
-                if name != 'blas':
-                    self.blas = False
             else:
                 # The kernel does not get transformed since it does not contain any
                 # optimizable expression
                 params = {}
-        elif opts.get('blas'):
-            # Conversion into blas requires a specific set of transformations
-            # in order to identify and extract matrix multiplies.
-            if not blas:
-                raise RuntimeError("Must set PYOP2_BLAS to convert into BLAS calls")
-            params = dict(blas_config.items() + [('blas', blas['name'])])
         elif opts.get('Ofast'):
             params = {
                 'rewrite': 2,
@@ -527,25 +503,4 @@ def _init_blas(blas):
         'namespace': ''
     }
 
-    if blas == 'mkl':
-        blas_dict.update({
-            'name': 'mkl',
-            'header': '#include <mkl.h>',
-            'link': ['-lmkl_rt']
-        })
-    elif blas == 'atlas':
-        blas_dict.update({
-            'name': 'atlas',
-            'header': '#include "cblas.h"',
-            'link': ['-lsatlas']
-        })
-    elif blas == 'eigen':
-        blas_dict.update({
-            'name': 'eigen',
-            'header': '#include <Eigen/Dense>',
-            'namespace': 'using namespace Eigen;',
-            'link': []
-        })
-    else:
-        return {}
     return blas_dict
