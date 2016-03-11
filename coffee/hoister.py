@@ -69,18 +69,38 @@ class Extractor():
     def _handle_expr(*args):
         raise NotImplementedError("Extractor is an abstract class")
 
+    def _apply_cse(self):
+        # Find common sub-expressions heuristically looking at binary terminal
+        # operations (i.e., a terminal has two Symbols as children). This may
+        # induce more sweeps of extraction to find all common sub-expressions,
+        # but at least it keeps the algorithm simple and probably more effective
+        finder = FindInstances(Symbol, with_parent=True)
+        for dep, subexprs in self.extracted.items():
+            cs = OrderedDict()
+            retval = FindInstances.default_retval()
+            values = [finder.visit(e, retval=retval)[Symbol] for e in subexprs]
+            binexprs = zip(*flatten(values))[1]
+            binexprs = [b for b in binexprs if binexprs.count(b) > 1]
+            for b in binexprs:
+                v = cs.setdefault(b.urepr, [])
+                if b not in v:
+                    v.append(b)
+            cs = [v for k, v in cs.items() if len(v) > 1]
+            if cs:
+                self.extracted[dep] = list(flatten(cs))
+
     def _try(self, node, dep):
         if isinstance(node, Symbol):
             return False
         should_extract = self.should_extract(dep)
-        if should_extract or self.look_ahead:
+        if should_extract or self._look_ahead:
             dep = sorted(dep, key=lambda i: self.expr_info.dims.index(i))
             self.extracted.setdefault(tuple(dep), []).append(node)
         return should_extract
 
     def _visit(self, node):
         if isinstance(node, Symbol):
-            return (self.lda[node], self.EXT)
+            return (self._lda[node], self.EXT)
 
         elif isinstance(node, Par):
             return self._visit(node.child)
@@ -102,13 +122,18 @@ class Extractor():
 
             return self._handle_expr(left, right, dep_l, dep_r, dep_n, info_l, info_r)
 
-    def extract(self, look_ahead, lda):
+    def extract(self, look_ahead, lda, with_cse=False):
         """Extract invariant subexpressions from /self.expr/."""
-        self.lda = lda
-        self.look_ahead = look_ahead
+        self._lda = lda
+        self._look_ahead = look_ahead
         self.extracted = OrderedDict()
 
         self._visit(self.stmt.rvalue)
+        if with_cse:
+            self._apply_cse()
+
+        del self._lda
+        del self._look_ahead
 
         return self.extracted
 
@@ -272,7 +297,7 @@ class Hoister():
         mapper = {}
         extracted = True
         while extracted:
-            extracted = extractor.extract(False, lda)
+            extracted = extractor.extract(False, lda, global_cse)
             for dep, subexprs in extracted.items():
                 # 1) Filter subexpressions that will be hoisted
                 sharing = []
