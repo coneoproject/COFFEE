@@ -446,7 +446,11 @@ class ExpressionRewriter():
         return self
 
     def SGrewrite(self):
-        """Apply rewrite rules based on the sharing graph of the expression."""
+        """Rewrite the expression based on its sharing graph. Details in the
+        paper:
+
+            On Optimality of Finite Element Integration, Luporini et. al.
+        """
         lda = ldanalysis(self.expr_info.domain_loops[0], key='symbol', value='dim')
         sg_visitor = SharingGraph(self.expr_info, lda)
 
@@ -464,53 +468,58 @@ class ExpressionRewriter():
         self.factorize(mode='heuristic')
         self.licm(mode='only_outdomain')
 
-        # Then, apply rewrite rules A, B, and C
+        # Maximize the visibility of linear symbols
         sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
         if 'topsum' in mapper:
             self.expand(mode='domain', subexprs=[mapper['topsum']], not_aggregate=True)
             sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
 
-        # Now set the ILP problem:
         nodes, edges = sgraph.nodes(), sgraph.edges()
-        if not edges:
-            return
-        # Note: need to use short variable names otherwise Pulp might complair
-        nodes_vars = {i: n for i, n in enumerate(nodes)}
-        vars_nodes = {n: i for i, n in nodes_vars.items()}
-        edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
 
-        # ... declare variables
-        x = ilp.LpVariable.dicts('x', nodes_vars.keys(), 0, 1, ilp.LpBinary)
-        y = ilp.LpVariable.dicts('y', [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
-                                 0, 1, ilp.LpBinary)
-        limits = defaultdict(int)
-        for i, j in edges:
-            limits[i] += 1
-            limits[j] += 1
+        if self.expr_info.dimension == 1:
+            self.factorize(mode='adhoc', adhoc={n: [] for n in nodes})
+            self.licm('only_outdomain')
+        elif self.expr_info.dimension == 2:
+            # Resort to an ILP formulation to find out the best factorization candidates
+            if not edges:
+                return
+            # Note: need to use short variable names otherwise Pulp might complain
+            nodes_vars = {i: n for i, n in enumerate(nodes)}
+            vars_nodes = {n: i for i, n in nodes_vars.items()}
+            edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
 
-        # ... define the problem
-        prob = ilp.LpProblem("Factorizer", ilp.LpMinimize)
+            # ... declare variables
+            x = ilp.LpVariable.dicts('x', nodes_vars.keys(), 0, 1, ilp.LpBinary)
+            y = ilp.LpVariable.dicts('y', [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
+                                     0, 1, ilp.LpBinary)
+            limits = defaultdict(int)
+            for i, j in edges:
+                limits[i] += 1
+                limits[j] += 1
 
-        # ... define the constraints
-        for i in nodes_vars:
-            prob += ilp.lpSum(y[(i, j)] for j in nodes_vars if (i, j) in y) <= limits[i]*x[i]
+            # ... define the problem
+            prob = ilp.LpProblem("Factorizer", ilp.LpMinimize)
 
-        for i, j in edges:
-            prob += y[(i, j)] + y[(j, i)] == 1
+            # ... define the constraints
+            for i in nodes_vars:
+                prob += ilp.lpSum(y[(i, j)] for j in nodes_vars if (i, j) in y) <= limits[i]*x[i]
 
-        # ... define the objective function (min number of factorizations)
-        prob += ilp.lpSum(x[i] for i in nodes_vars)
+            for i, j in edges:
+                prob += y[(i, j)] + y[(j, i)] == 1
 
-        # ... solve the problem
-        status = prob.solve(ilp.GLPK(msg=0))
+            # ... define the objective function (min number of factorizations)
+            prob += ilp.lpSum(x[i] for i in nodes_vars)
 
-        # Finally, factorize and hoist (note: the order in which factorizations are carried
-        # out is crucial)
-        nodes = [nodes_vars[n] for n, v in x.items() if v.value() == 1]
-        other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
-        for n in nodes + other_nodes:
-            self.factorize(mode='adhoc', adhoc={n: []})
-        self.licm()
+            # ... solve the problem
+            prob.solve(ilp.GLPK(msg=0))
+
+            # Finally, factorize and hoist (note: the order in which factorizations are carried
+            # out is crucial)
+            nodes = [nodes_vars[n] for n, v in x.items() if v.value() == 1]
+            other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
+            for n in nodes + other_nodes:
+                self.factorize(mode='adhoc', adhoc={n: []})
+            self.licm()
 
     def unpickCSE(self):
         """Search for factorization opportunities across temporaries created by
