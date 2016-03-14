@@ -467,6 +467,7 @@ class ExpressionRewriter():
                 handled.add(e)
         self.factorize(mode='heuristic')
         self.licm(mode='only_outdomain')
+        self.replacediv()
 
         # Maximize the visibility of linear symbols
         sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
