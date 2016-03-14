@@ -45,11 +45,12 @@ from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
 from expression import MetaExpr
-from coffee.visitors import FindInstances
+from coffee.visitors import FindInstances, EstimateFlops
 
 from collections import defaultdict, OrderedDict
 from warnings import warn as warning
 import sys
+import time
 
 
 class ASTKernel(object):
@@ -136,6 +137,8 @@ class ASTKernel(object):
 
             return loop_opts
 
+        start_time = time.time()
+
         retval = FindInstances.default_retval()
         kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast,
                                                                      ret=retval)[FunDecl]
@@ -175,17 +178,21 @@ class ASTKernel(object):
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
-        from coffee.visitors import EstimateFlops
-        cost_before = EstimateFlops().visit(self.ast)
+        flops_pre = EstimateFlops().visit(self.ast)
         for kernel in kernels:
             # Generate a specific code version
             _generate_cpu_code(self, kernel, **params)
-
             # Post processing of the AST ensures higher-quality code
             postprocess(kernel)
+        flops_post = EstimateFlops().visit(self.ast)
+
+        tot_time = time.time() - start_time
+
         print self.ast
 
-        print self.ast, "BEFORE: ", cost_before, "; COST: ", EstimateFlops().visit(self.ast)
+        out_string = "COFFEE finished in %g seconds (flops: %d -> %d)" % \
+            (tot_time, flops_pre, flops_post)
+        print (GREEN if flops_post <= flops_pre else RED) % out_string
 
     def plan_gpu(self):
         """Transform the kernel suitably for GPU execution.
