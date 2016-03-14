@@ -464,6 +464,8 @@ class SharingGraph(Visitor):
     visit_Sub = visit_Sum
 
     def visit_Symbol(self, o, ret=None, syms=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
         G, _ = ret
         deps = [d for d in self.lda[o.symbol]]
         if syms is not None and any(i in self.expr_info.domain_dims for i in deps):
