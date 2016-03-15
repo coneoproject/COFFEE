@@ -31,6 +31,8 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from warnings import warn as warning
+
 from base import *
 from utils import *
 
@@ -292,6 +294,9 @@ class Hoister():
 
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
+        expr_outermost_domain_loop = self.expr_info.outermost_domain_loop
+        is_bilinear = self.expr_info.is_bilinear
+
         extractor = Extractor.factory(mode, self.stmt, self.expr_info)
 
         mapper = {}
@@ -310,45 +315,54 @@ class Hoister():
                 # 2) Determine the loop nest level where invariant expressions
                 # should be hoisted. The goal is to hoist them as far as possible
                 # in the loop nest, while minimising temporary storage.
-                # We distinguish six hoisting cases:
-                if len(dep) == 0:
-                    # As scalar (/wrap_loop=None/), outside of the loop nest;
-                    place = self.header
-                    wrap_loop = ()
-                    next_loop = expr_outermost_loop
-                elif len(dep) == 1 and is_perfect_loop(expr_outermost_loop):
+                # We distinguish several cases:
+                depth = len(dep)
+                if depth == 0:
                     # As scalar, outside of the loop nest;
                     place = self.header
-                    wrap_loop = (expr_dims_loops[dep[0]],)
-                    next_loop = expr_outermost_loop
-                elif len(dep) == 1 and len(expr_dims_loops) > 1:
-                    # As scalar, within the loop imposing the dependency
-                    place = expr_dims_loops[dep[0]].children[0]
                     wrap_loop = ()
-                    next_loop = od_find_next(expr_dims_loops, dep[0])
-                elif len(dep) == 1:
-                    # As scalar, right before the expression (which is enclosed
-                    # in just a single loop, we can claim at this point)
-                    place = expr_dims_loops[dep[0]].children[0]
+                    offset = expr_outermost_loop
+                elif depth == 1 and len(expr_dims_loops) == 1:
+                    # As scalar, within the only loop present
+                    place = expr_outermost_loop.children[0]
                     wrap_loop = ()
-                    next_loop = place.children[place.children.index(self.stmt)]
+                    offset = place.children[place.children.index(self.stmt)]
+                elif depth == 1 and len(expr_dims_loops) > 1:
+                    if expr_dims_loops[dep[0]] == expr_outermost_loop:
+                        # As scalar, within the outermost loop
+                        place = expr_outermost_loop.children[0]
+                        wrap_loop = ()
+                        offset = od_find_next(expr_dims_loops, dep[0])
+                    else:
+                        # As vector, outside of the loop nest;
+                        place = self.header
+                        wrap_loop = (expr_dims_loops[dep[0]],)
+                        offset = expr_outermost_loop
                 elif mode == 'aggressive' and set(dep) == set(self.expr_info.dims) and \
                         not any([self.expr_graph.is_written(e) for e in subexprs]):
-                    # As n-dimensional vector, where /n == len(dep)/, outside of
-                    # the loop nest
+                    # As n-dimensional vector (n == depth), outside of the loop nest
                     place = self.header
                     wrap_loop = tuple(expr_dims_loops.values())
-                    next_loop = expr_outermost_loop
-                elif not is_perfect_loop(expr_dims_loops[dep[-1]]):
-                    # As scalar, within the closest loop imporsing the dependency
-                    place = expr_dims_loops[dep[-1]].children[0]
-                    wrap_loop = ()
-                    next_loop = od_find_next(expr_dims_loops, dep[-1])
+                    offset = expr_outermost_loop
+                elif depth == 2:
+                    if is_perfect_loop(expr_outermost_domain_loop):
+                        # As vector, within the outermost loop imposing the dependency
+                        place = expr_dims_loops[dep[0]].children[0]
+                        wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, depth))
+                        offset = od_find_next(expr_dims_loops, dep[0])
+                    elif expr_outermost_domain_loop.dim == dep[-1] and is_bilinear:
+                        # As scalar, within the closest loop imposing the dependency
+                        place = expr_dims_loops[dep[-1]].children[0]
+                        wrap_loop = ()
+                        offset = od_find_next(expr_dims_loops, dep[-1])
+                    else:
+                        # As scalar, within the closest loop imposing the dependency
+                        place = expr_dims_loops[dep[-1]].children[0]
+                        wrap_loop = ()
+                        offset = place.children[place.children.index(self.stmt)]
                 else:
-                    # As vector, within the outermost loop imposing the dependency
-                    place = expr_dims_loops[dep[0]].children[0]
-                    wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, len(dep)))
-                    next_loop = od_find_next(expr_dims_loops, dep[0])
+                    warning("Unexpected code motion case. Skipping.")
+                    return
 
                 loop_size = tuple([l.size for l in wrap_loop])
                 loop_dim = tuple([l.dim for l in wrap_loop])
@@ -384,7 +398,7 @@ class Hoister():
                     lda[s] = dep
 
                 # 6) Track necessary information for AST construction
-                info = (loop_dim, place, next_loop, wrap_loop)
+                info = (loop_dim, place, offset, wrap_loop)
                 if info not in mapper:
                     mapper[info] = (decls, stmts)
                 else:
@@ -396,7 +410,7 @@ class Hoister():
                 break
 
         for info, (decls, stmts) in sorted(mapper.items()):
-            loop_dim, place, next_loop, wrap_loop = info
+            loop_dim, place, offset, wrap_loop = info
             # Create the hoisted code
             if wrap_loop:
                 outer_wrap_loop = ast_make_for(stmts, wrap_loop[-1])
@@ -408,8 +422,8 @@ class Hoister():
                 code = decls + stmts
                 wrap_loop = None
             # Insert the new nodes at the right level in the loop nest
-            ofs = place.children.index(next_loop)
-            place.children[ofs:ofs] = code + [FlatBlock("\n")]
+            offset = place.children.index(offset)
+            place.children[offset:offset] = code
             # Track hoisted symbols
             for i, j in zip(stmts, decls):
                 self.hoisted[j.sym.symbol] = (i, j, wrap_loop, place)
