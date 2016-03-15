@@ -388,6 +388,32 @@ def is_perfect_loop(loop):
     return CheckPerfectLoop().visit(loop)
 
 
+def in_written(node, key='default'):
+    """Return a list of symbols written in ``node``.
+
+    :arg key: any value in ['default', 'urepr', 'symbol']. With 'urepr' and
+        'symbol' different instances of the same Symbol are represented by
+        a single entry in the returned dictionary.
+    """
+
+    if key == 'default':
+        gen_key = lambda s: s
+    elif key == 'urepr':
+        gen_key = lambda s: s.urepr
+    elif key == 'symbol':
+        gen_key = lambda s: s.symbol
+    else:
+        raise RuntimeError("Illegal key=%s for loop dependence analysis" % key)
+
+    found = []
+    writers = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
+    for type, stmts in writers.items():
+        for stmt in stmts:
+            found.append(gen_key(stmt.lvalue))
+
+    return found
+
+
 def count(node, mode='urepr', read_only=False):
     """Count the occurrences of all variables appearing in ``node``. For example,
     for the expression: ::
