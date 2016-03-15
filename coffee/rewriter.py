@@ -482,7 +482,7 @@ class ExpressionRewriter():
             self.licm('only_outdomain')
         elif self.expr_info.dimension == 2:
             # Resort to an ILP formulation to find out the best factorization candidates
-            if not all(sgraph.degree(n) > 0 for n in nodes):
+            if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
                 return
             # Note: need to use short variable names otherwise Pulp might complain
             nodes_vars = {i: n for i, n in enumerate(nodes)}
