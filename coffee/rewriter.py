@@ -462,12 +462,14 @@ class ExpressionRewriter():
 
         nodes, edges = sgraph.nodes(), sgraph.edges()
 
-        if self.expr_info.dimension == 1:
+        if self.expr_info.is_linear:
             self.factorize(mode='adhoc', adhoc={n: [] for n in nodes})
             self.licm('only_outdomain')
-        elif self.expr_info.dimension == 2:
+        elif self.expr_info.is_bilinear:
             # Resort to an ILP formulation to find out the best factorization candidates
             if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
+                self.factorize(mode='heuristic')
+                self.licm(mode='only_outdomain')
                 return
             # Note: need to use short variable names otherwise Pulp might complain
             nodes_vars = {i: n for i, n in enumerate(nodes)}
@@ -506,6 +508,8 @@ class ExpressionRewriter():
             for n in nodes + other_nodes:
                 self.factorize(mode='adhoc', adhoc={n: []})
             self.licm()
+
+        return self
 
     def unpickCSE(self):
         """Search for factorization opportunities across temporaries created by
