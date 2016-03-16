@@ -188,8 +188,6 @@ class ASTKernel(object):
 
         tot_time = time.time() - start_time
 
-        print self.ast
-
         out_string = "COFFEE finished in %g seconds (flops: %d -> %d)" % \
             (tot_time, flops_pre, flops_post)
         print (GREEN if flops_post <= flops_pre else RED) % out_string

@@ -279,6 +279,16 @@ class Hoister():
 
         return subexprs
 
+    def _is_hoistable(self, subexprs, loop):
+        """Return True if the sub-expressions provided in ``subexprs`` are
+        hoistable outside of ``loop``, False otherwise."""
+        written = in_written(loop, 'symbol')
+        finder, reads = FindInstances(Symbol), FindInstances.default_retval()
+        for e in subexprs:
+            finder.visit(e, ret=reads)
+        reads = [s.symbol for s in reads[Symbol]]
+        return set.isdisjoint(set(reads), set(written))
+
     def extract(self, mode, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
         lda = kwargs.get('lda') or ldanalysis(self.header, value='dim')
@@ -298,9 +308,8 @@ class Hoister():
         is_bilinear = self.expr_info.is_bilinear
 
         extractor = Extractor.factory(mode, self.stmt, self.expr_info)
-
-        mapper = {}
         extracted = True
+
         while extracted:
             extracted = extractor.extract(False, lda, global_cse)
             for dep, subexprs in extracted.items():
@@ -345,7 +354,7 @@ class Hoister():
                     wrap_loop = tuple(expr_dims_loops.values())
                     offset = expr_outermost_loop
                 elif depth == 2:
-                    if is_perfect_loop(expr_outermost_domain_loop):
+                    if self._is_hoistable(subexprs, expr_outermost_domain_loop):
                         # As vector, within the outermost loop imposing the dependency
                         place = expr_dims_loops[dep[0]].children[0]
                         wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, depth))
@@ -397,36 +406,26 @@ class Hoister():
                         self.expr_graph.add_dependency(s, s)
                     lda[s] = dep
 
-                # 6) Track necessary information for AST construction
-                info = (loop_dim, place, offset, wrap_loop)
-                if info not in mapper:
-                    mapper[info] = (decls, stmts)
+                # 6) Modify the AST adding the hoisted expressions
+                if wrap_loop:
+                    outer_wrap_loop = ast_make_for(stmts, wrap_loop[-1])
+                    for l in reversed(wrap_loop[:-1]):
+                        outer_wrap_loop = ast_make_for([outer_wrap_loop], l)
+                    code = decls + [outer_wrap_loop]
+                    wrap_loop = outer_wrap_loop
                 else:
-                    mapper[info][0].extend(decls)
-                    mapper[info][1].extend(stmts)
+                    code = decls + stmts
+                    wrap_loop = None
+                # Insert the new nodes at the right level in the loop nest
+                offset = place.children.index(offset)
+                place.children[offset:offset] = code
+                # Track hoisted symbols
+                for i, j in zip(stmts, decls):
+                    self.hoisted[j.sym.symbol] = (i, j, wrap_loop, place)
 
             self.nextracted += 1
             if not iterative:
                 break
-
-        for info, (decls, stmts) in sorted(mapper.items()):
-            loop_dim, place, offset, wrap_loop = info
-            # Create the hoisted code
-            if wrap_loop:
-                outer_wrap_loop = ast_make_for(stmts, wrap_loop[-1])
-                for l in reversed(wrap_loop[:-1]):
-                    outer_wrap_loop = ast_make_for([outer_wrap_loop], l)
-                code = decls + [outer_wrap_loop]
-                wrap_loop = outer_wrap_loop
-            else:
-                code = decls + stmts
-                wrap_loop = None
-            # Insert the new nodes at the right level in the loop nest
-            offset = place.children.index(offset)
-            place.children[offset:offset] = code
-            # Track hoisted symbols
-            for i, j in zip(stmts, decls):
-                self.hoisted[j.sym.symbol] = (i, j, wrap_loop, place)
 
         # Finally, make sure symbols are unique in the AST
         self.stmt.rvalue = dcopy(self.stmt.rvalue)
