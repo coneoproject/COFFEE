@@ -113,6 +113,7 @@ class LoopOptimizer(object):
             elif expr_info.mode == 2:
                 ew.unpickCSE()
                 if expr_info.dimension > 0:
+                    ew.replacediv()
                     ew.SGrewrite()
 
             elif expr_info.mode == 3:

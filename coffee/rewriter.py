@@ -454,21 +454,6 @@ class ExpressionRewriter():
         lda = ldanalysis(self.expr_info.domain_loops[0], key='symbol', value='dim')
         sg_visitor = SharingGraph(self.expr_info, lda)
 
-        # First, eliminate sharing "locally", i.e., within Sums
-        sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
-        handled = set()
-        for n in sgraph.nodes():
-            mapped = mapper.get((n,), [])
-            with_sharing = [e for e in mapped if e and e not in handled]
-            for e in with_sharing:
-                self.expand(mode='dimensions', subexprs=[e],
-                            not_aggregate=True, dimensions=n[1])
-                self.factorize(mode='dimensions', subexprs=[e], dimensions=n[1])
-                handled.add(e)
-        self.factorize(mode='heuristic')
-        self.licm(mode='only_outdomain')
-        self.replacediv()
-
         # Maximize the visibility of linear symbols
         sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
         if 'topsum' in mapper:
