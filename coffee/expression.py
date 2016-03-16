@@ -125,11 +125,19 @@ class MetaExpr(object):
 
     @property
     def outermost_loop(self):
-        return self.loops[0]
+        return self.loops[0] if len(self.loops) > 0 else None
 
     @property
     def outermost_parent(self):
-        return self.loops_parents[0]
+        return self.loops_parents[0] if len(self.loops_parents) > 0 else None
+
+    @property
+    def outermost_domain_loop(self):
+        return self.domain_loops[0] if len(self.domain_loops) > 0 else None
+
+    @property
+    def outermost_domain_loop_parent(self):
+        return self.domain_loops_parents[0] if len(self.domain_loops_parents) > 0 else None
 
     @property
     def dimension(self):
@@ -142,6 +150,14 @@ class MetaExpr(object):
     @property
     def is_tensor(self):
         return not self.is_scalar
+
+    @property
+    def is_linear(self):
+        return self.dimension == 1
+
+    @property
+    def is_bilinear(self):
+        return self.dimension == 2
 
     @property
     def mode(self):
