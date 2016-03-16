@@ -44,7 +44,7 @@ from utils import *
 from expression import MetaExpr
 from scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from rewriter import ExpressionRewriter
-from coffee.visitors import MaxLoopDepth, FindInstances, ProjectExpansion, EstimateFlops
+from coffee.visitors import FindInstances, ProjectExpansion
 
 
 class LoopOptimizer(object):

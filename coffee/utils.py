@@ -357,6 +357,7 @@ def ldanalysis(node, key='default', value='default'):
 
     return lda
 
+
 def explore_operator(node):
     """Return a list of the operands composing the operation whose root is
     ``node``."""
@@ -600,7 +601,6 @@ class ItSpace():
 
 
 class StmtTracker(OrderedDict):
-
 
     """Track the location of generic statements in an abstract syntax tree.
 
@@ -871,14 +871,13 @@ def postprocess(node):
 
 # Colors if the terminal supports it (disabled e.g. when piped to file)
 # This code is partly extracted from ``https://bitbucket.org/fenics-project/ufl``
-import sys
 if sys.stdout.isatty() and sys.stderr.isatty():
-    RED   = "\033[1;37;31m%s\033[0m"
-    BLUE  = "\033[1;37;34m%s\033[0m"
+    RED = "\033[1;37;31m%s\033[0m"
+    BLUE = "\033[1;37;34m%s\033[0m"
     GREEN = "\033[1;37;32m%s\033[0m"
     HEADER = "\033[95m%s\033[0m"
 else:
-    RED   = "%s"
-    BLUE  = "%s"
+    RED = "%s"
+    BLUE = "%s"
     GREEN = "%s"
     HEADER = "%s"
