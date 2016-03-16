@@ -254,6 +254,9 @@ class FindCoffeeExpressions(Visitor):
 
     """
 
+    def extract_linear_dimensions(self, symbol):
+        return tuple(i for i in symbol.rank if isinstance(i, str) and not i.isdigit())
+
     def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
@@ -273,7 +276,7 @@ class FindCoffeeExpressions(Visitor):
                 continue
             if opts[1] == "coffee" and opts[2] == "expression":
                 # (parent, loop-nest, rank)
-                ret[o] = (parent, None, o.lvalue.rank)
+                ret[o] = (parent, None, self.extract_linear_dimensions(o.lvalue))
                 return ret
         return ret
 
