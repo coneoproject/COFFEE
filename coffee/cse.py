@@ -34,6 +34,7 @@
 from sys import maxint
 import operator
 
+from plan import verbose
 from base import *
 from utils import *
 from coffee.visitors import EstimateFlops
@@ -286,8 +287,10 @@ class CSEUnpicker():
         fact_levels = OrderedDict([(k, v) for k, v in levels.items()
                                    if k > bounds[0] and k <= bounds[1]])
 
-        # Cost of levels that won't be factorized
+        # Determine current costs of individual loop regions
         cse_cost = self._cost_cse(levels, (min(levels.keys()), bounds[0]))
+        uptolevel_cost = cse_cost
+        level_inloop_cost, total_outloop_cost, cse = 0, 0, 0
 
         # We are going to modify a copy of the temporaries dict
         new_trace = OrderedDict()
@@ -295,7 +298,6 @@ class CSEUnpicker():
             new_trace[s] = t.reconstruct()
 
         best = (bounds[0], bounds[0], maxint)
-        total_outloop_cost = 0
         for level, temporaries in sorted(fact_levels.items(), key=lambda (i, j): i):
             level_inloop_cost = 0
             for t in temporaries:
@@ -350,9 +352,11 @@ class CSEUnpicker():
                 best = (bounds[0], level, uptolevel_cost)
 
             cse = self._cost_cse(fact_levels, (level + 1, bounds[1]))
-            print "Cost after pushing up to level", level, ":", uptolevel_cost, \
-                "(", cse_cost, "+", total_outloop_cost, "+", level_inloop_cost, "+", cse, ")"
-        print "************************"
+
+        if verbose:
+            print BLUE % ("Cost model :: unpicking CSE between levels [%d, %d]:" % bounds),
+            print BLUE % ("cost=%d (cse=%d, outloop=%d, inloop_fact=%d, inloop_cse=%d)" % \
+                (uptolevel_cost, cse_cost, total_outloop_cost, level_inloop_cost, cse))
 
         return best
 
@@ -386,6 +390,9 @@ class CSEUnpicker():
                 local_best = self._cost_fact(trace, levels, (i, max_level))
                 if local_best[2] < global_best[2]:
                     global_best = local_best
+
+            if verbose:
+                print BLUE % ("Cost_model :: Best [%d, %d] (cost=%d)" % global_best)
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):

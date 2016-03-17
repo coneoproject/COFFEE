@@ -38,6 +38,7 @@ arch = {}
 compiler = {}
 isa = {}
 blas = {}
+verbose = False
 initialized = False
 
 from base import *
