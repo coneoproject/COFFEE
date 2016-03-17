@@ -355,8 +355,9 @@ class CSEUnpicker():
 
         if verbose:
             print BLUE % ("Cost model :: unpicking CSE between levels [%d, %d]:" % bounds),
-            print BLUE % ("cost=%d (cse=%d, outloop=%d, inloop_fact=%d, inloop_cse=%d)" % \
-                (uptolevel_cost, cse_cost, total_outloop_cost, level_inloop_cost, cse))
+            print BLUE % ("cost=%d (cse=%d, outloop=%d, inloop_fact=%d, inloop_cse=%d)" %
+                          (uptolevel_cost, cse_cost, total_outloop_cost,
+                           level_inloop_cost, cse))
 
         return best
 
