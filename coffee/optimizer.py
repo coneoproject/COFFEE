@@ -580,49 +580,6 @@ class LoopOptimizer(object):
             for stmt, expr_info in new_exprs.items():
                 expr_info.mode = 3 if stmt in fissioner.matched else 4
 
-    def _rewrite_hoisted(self):
-        """Rewrite hoisted expressions."""
-
-        retval = FindLoopNests.default_retval()
-        nests = FindLoopNests().visit(self.header, parent=None, ret=retval)
-        hoisted_exprs = OrderedDict()
-
-        # First, need to create a /MetaExpr/ for each hoisted expression
-        type = self.exprs.values()[0].type
-        for s, hoisted in self.hoisted.items():
-            stmt, loop, place = hoisted.stmt, hoisted.loop, hoisted.place
-            if not loop and place == self.header:
-                # Outside of any loops, so ignoring it
-                continue
-            elif not loop:
-                # Need to find the loop (an outermost loop in a nest)
-                # within which the statement lives
-                for nest in nests:
-                    loops_info = [(l, p) for l, p in nest if stmt in l.body]
-                    if loops_info:
-                        break
-                domain = tuple(l.dim for l, p in loops_info)
-            else:
-                # Need to find the loop nest in which the statement lives
-                for nest in nests:
-                    if any(l == loop for l, p in nest):
-                        break
-                loops_info = nest
-                domain = tuple(l.dim for l, p in loops_info
-                               if l.dim in stmt.children[0].rank)
-            parent = loops_info[-1][0].children[0]
-            hoisted_exprs[stmt] = MetaExpr(type, parent, loops_info, domain)
-
-        # Now we do the usual: for each expression, we create an ExpressionRewriter
-        # and use it to manipulate the expression itself
-        for stmt, expr_info in hoisted_exprs.items():
-            ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
-                                    self.hoisted, self.expr_graph)
-            ew.expand(mode='domain', not_aggregate=True)
-            ew.factorize(mode='domain')
-            ew.licm(mode='only_outdomain')
-            ew.factorize().factorize('constants')
-
     def _recoil(self):
         """Increase the stack size if the kernel arrays exceed the stack limit
         threshold (at the C level)."""
