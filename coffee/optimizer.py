@@ -106,7 +106,7 @@ class LoopOptimizer(object):
 
             if expr_info.mode == 1:
                 if expr_info.dimension in [0, 1]:
-                    ew.licm(mode='only_outdomain')
+                    ew.licm(mode='only_outlinear')
                 else:
                     ew.licm()
 
@@ -123,15 +123,15 @@ class LoopOptimizer(object):
                 ew.factorize(mode='constants')
                 ew.licm(mode='aggressive')
                 ew.preevaluate()
-                ew.factorize(mode='domain')
+                ew.factorize(mode='linear')
                 ew.licm(mode='only_const')
 
             elif expr_info.mode == 4:
                 ew.replacediv()
                 ew.factorize()
-                ew.licm(mode='only_outdomain')
+                ew.licm(mode='only_outlinear')
                 if expr_info.dimension > 0:
-                    ew.licm(mode='only_domain', iterative=False, max_sharing=True)
+                    ew.licm(mode='only_linear', iterative=False, max_sharing=True)
                     ew.SGrewrite()
                     ew.expand()
 
@@ -249,7 +249,7 @@ class LoopOptimizer(object):
         # Visit the AST and perform the precomputation
         to_remove = []
         for n in self.loop.body:
-            if n in flatten(self.expr_domain_loops):
+            if n in flatten(self.expr_linear_loops):
                 break
             elif n not in no_precompute:
                 _precompute(n, precomputed_block)
@@ -411,14 +411,14 @@ class LoopOptimizer(object):
 
         # 2) Will rewrite mode=3 be cheaper than rewrite mode=2?
         def find_save(target_expr, expr_info):
-            save_factor = [l.size for l in expr_info.out_domain_loops] or [1]
+            save_factor = [l.size for l in expr_info.out_linear_loops] or [1]
             save_factor = reduce(operator.mul, save_factor)
             # The save factor should be multiplied by the number of terms
             # that will /not/ be pre-evaluated. To obtain this number, we
             # can exploit the linearity of the expression in the terms
-            # depending on the domain loops.
+            # depending on the linear loops.
             syms = FindInstances(Symbol).visit(target_expr)[Symbol]
-            inner = lambda s: any(r == expr_info.domain_dims[-1] for r in s.rank)
+            inner = lambda s: any(r == expr_info.linear_dims[-1] for r in s.rank)
             nterms = len(set(s.symbol for s in syms if inner(s)))
             save = nterms * save_factor
             return save_factor, save
@@ -432,8 +432,8 @@ class LoopOptimizer(object):
             # Divide /expr/ into subexpressions, each subexpression affected
             # differently by injection
             if i_syms:
-                dissected = find_expression(expr, Prod, expr_info.domain_dims, i_syms)
-                leftover = find_expression(expr, dims=expr_info.domain_dims, out_syms=i_syms)
+                dissected = find_expression(expr, Prod, expr_info.linear_dims, i_syms)
+                leftover = find_expression(expr, dims=expr_info.linear_dims, out_syms=i_syms)
                 leftover = {(): list(flatten(leftover.values()))}
                 dissected = dict(dissected.items() + leftover.items())
             else:
@@ -481,7 +481,7 @@ class LoopOptimizer(object):
                     fake_parent = expr_info.parent.children
                     fake_parent[fake_parent.index(stmt)] = fake_stmt
                     ew = ExpressionRewriter(fake_stmt, expr_info, self.decls)
-                    ew.expand(mode='all').factorize(mode='all').factorize(mode='domain')
+                    ew.expand(mode='all').factorize(mode='all').factorize(mode='linear')
                     nterms = ew.licm(mode='aggressive', look_ahead=True)
                     nterms = len(uniquify(nterms[expr_info.dims])) or 1
                     fake_parent[fake_parent.index(fake_stmt)] = stmt
@@ -489,7 +489,7 @@ class LoopOptimizer(object):
 
                     # Pre-evaluation will also increase the working set size by
                     # /cost/ * /sizeof(term)/.
-                    size = [l.size for l in expr_info.domain_loops]
+                    size = [l.size for l in expr_info.linear_loops]
                     size = reduce(operator.mul, size, 1)
                     storage_increase = cost * size * plan.arch[expr_info.type]
 
@@ -608,10 +608,10 @@ class LoopOptimizer(object):
         return [expr_info.loops for expr_info in self.exprs.values()]
 
     @property
-    def expr_domain_loops(self):
-        """Return ``[(loop1, loop2, ...), ...]``, where a tuple contains all
-        loops representing the domain of the expressions' output tensor."""
-        return [expr_info.domain_loops for expr_info in self.exprs.values()]
+    def expr_linear_loops(self):
+        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
+        linear loops enclosing expressions."""
+        return [expr_info.linear_loops for expr_info in self.exprs.values()]
 
 
 class CPULoopOptimizer(LoopOptimizer):

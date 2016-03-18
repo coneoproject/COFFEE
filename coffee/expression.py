@@ -39,23 +39,24 @@ class MetaExpr(object):
 
     """Metadata container for a compute-intensive expression."""
 
-    def __init__(self, type, parent, loops_info, domain, mode=0):
+    def __init__(self, type, parent, loops_info, linear_dims, mode=0):
         """Initialize the MetaExpr.
 
         :param type: the C type of the expression.
-        :param parent: the parent block node in which the expression is embedded.
-        :param loops_info: the ordered tuple of (loop, parent) the expression is
-             enclosed in.
-        :param domain: an ``n``-tuple, where ``n`` is the rank of the tensor
-             evaluated by the expression. The i-th entry corresponds to
-             the loop dimension along which iteration occurs (For example,
-             given an output tensor ``A[i][j]``, ``domain=(i, j)``).
-        :param mode: suggested rewrite mode.
+        :param parent: the node in which the expression is embedded.
+        :param loops_info: an iterator of 2-tuples; each tuple represents a loop
+            enclosing the expression (first entry) and its parent (second entry).
+        :param linear_dims: the dimensions of the linear loops enclosing the
+            expression, as an n-tuple. The expression is affine in the symbols
+            varying along a linear loop. For a formal definition of a linear loop,
+            please refer to the paper ``An algorithm for the optimization of
+            finite element integration loop nests``.
+        :param mode: the suggested rewrite mode.
         """
         self._type = type
         self._parent = parent
         self._loops_info = list(loops_info)
-        self._domain = domain
+        self._linear_dims = linear_dims
         self._mode = mode
 
     @property
@@ -67,12 +68,12 @@ class MetaExpr(object):
         return tuple(l.dim for l in self.loops)
 
     @property
-    def domain_dims(self):
-        return self._domain
+    def linear_dims(self):
+        return self._linear_dims
 
     @property
-    def out_domain_dims(self):
-        return tuple(d for d in self.dims if d not in self.domain_dims)
+    def out_linear_dims(self):
+        return tuple(d for d in self.dims if d not in self.linear_dims)
 
     @property
     def loops(self):
@@ -91,28 +92,28 @@ class MetaExpr(object):
         return self._loops_info
 
     @property
-    def domain_loops(self):
-        return tuple([l for l in self.loops if l.dim in self.domain_dims])
+    def linear_loops(self):
+        return tuple([l for l in self.loops if l.dim in self.linear_dims])
 
     @property
-    def domain_loops_parents(self):
-        return tuple([p for l, p in self._loops_info if l.dim in self.domain_dims])
+    def linear_loops_parents(self):
+        return tuple([p for l, p in self._loops_info if l.dim in self.linear_dims])
 
     @property
-    def domain_loops_info(self):
-        return tuple([(l, p) for l, p in self._loops_info if l.dim in self.domain_dims])
+    def linear_loops_info(self):
+        return tuple([(l, p) for l, p in self._loops_info if l.dim in self.linear_dims])
 
     @property
-    def out_domain_loops(self):
-        return tuple([l for l in self.loops if l not in self.domain_loops])
+    def out_linear_loops(self):
+        return tuple([l for l in self.loops if l not in self.linear_loops])
 
     @property
-    def out_domain_loops_parents(self):
-        return tuple([p for p in self.loops_parents if p not in self.domain_loops_parents])
+    def out_linear_loops_parents(self):
+        return tuple([p for p in self.loops_parents if p not in self.linear_loops_parents])
 
     @property
-    def out_domain_loops_info(self):
-        return tuple([i for i in self.loops_info if i not in self.domain_loops_info])
+    def out_linear_loops_info(self):
+        return tuple([i for i in self.loops_info if i not in self.linear_loops_info])
 
     @property
     def perfect_loops(self):
@@ -132,20 +133,20 @@ class MetaExpr(object):
         return self.loops_parents[0] if len(self.loops_parents) > 0 else None
 
     @property
-    def outermost_domain_loop(self):
-        return self.domain_loops[0] if len(self.domain_loops) > 0 else None
+    def outermost_linear_loop(self):
+        return self.linear_loops[0] if len(self.linear_loops) > 0 else None
 
     @property
-    def outermost_domain_loop_parent(self):
-        return self.domain_loops_parents[0] if len(self.domain_loops_parents) > 0 else None
+    def outermost_linear_loop_parent(self):
+        return self.linear_loops_parents[0] if len(self.linear_loops_parents) > 0 else None
 
     @property
     def dimension(self):
-        return len(self.domain_dims) if not self.is_scalar else 0
+        return len(self.linear_dims) if not self.is_scalar else 0
 
     @property
     def is_scalar(self):
-        return all([isinstance(i, int) for i in self.domain_dims])
+        return all([isinstance(i, int) for i in self.linear_dims])
 
     @property
     def is_tensor(self):
@@ -171,16 +172,11 @@ class MetaExpr(object):
 def copy_metaexpr(expr_info, **kwargs):
     """Given a ``MetaExpr``, return a plain new ``MetaExpr`` starting from a
     copy of ``expr_info``, and replaces some attributes as specified in
-    ``kwargs``. In particular, ``kwargs`` has the following keys:
+    ``kwargs``. ``kwargs`` accepts the following keys: parent, loops_info,
+    linear_dims, mode."""
 
-        * parent: the block node that embeds the expression.
-        * loops_info: an iterator of 2-tuple ``(loop, loop_parent)`` which
-          substitute analogous information in the new ``MetaExpr``.
-        * domain: the domain of the output tensor evaluated by the expression.
-        * mode: the suggested rewrite mode.
-    """
     parent = kwargs.get('parent', expr_info.parent)
-    domain = kwargs.get('domain', expr_info.domain_dims)
+    linear_dims = kwargs.get('linear_dims', expr_info.linear_dims)
     mode = kwargs.get('mode', expr_info.mode)
 
     new_loops_info, old_loops_info = [], expr_info.loops_info
@@ -194,4 +190,4 @@ def copy_metaexpr(expr_info, **kwargs):
         else:
             new_loops_info.append(loop_info)
 
-    return MetaExpr(expr_info.type, parent, new_loops_info, domain, mode)
+    return MetaExpr(expr_info.type, parent, new_loops_info, linear_dims, mode)

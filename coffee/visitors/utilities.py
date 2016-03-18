@@ -381,10 +381,10 @@ class SharingGraph(Visitor):
         return (nx.Graph(), OrderedDict())
 
     """
-    Build a sharing graph; that is, a graph in which vertices represent symbols
-    iterating along the expression domain, while an edge between /v1/ and /v2/
-    indicates that both /v1/ and /v2/ appear in the same sub-expression, or would
-    appear in the same sub-expression if expansion were performed.
+    A sharing graph is a particular graph in which vertices represent symbols
+    iterating along the expression's linear loops, while an edge between /v1/
+    and /v2/ indicates that both /v1/ and /v2/ appear in the same sub-expression,
+    or would appear in the same sub-expression if expansion were performed.
 
     Simultaneously, build a mapper from symbols to nodes in the expression.
     A symbol /s/ (a vertex in the sharing graph) is mapped to a list of nodes
@@ -468,7 +468,7 @@ class SharingGraph(Visitor):
             ret = self.default_retval()
         G, _ = ret
         deps = [d for d in self.lda[o.symbol]]
-        if syms is not None and any(i in self.expr_info.domain_dims for i in deps):
+        if syms is not None and any(i in self.expr_info.linear_dims for i in deps):
             syms.add((o.urepr,))
             try:
                 G.node[o.urepr]['occs'] += 1

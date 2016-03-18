@@ -51,11 +51,11 @@ class Extractor():
             # Do not extract unless constant in all loops
             should_extract = lambda d: not (d and d.issubset(set(expr_info.dims)))
             return MainExtractor(stmt, expr_info, should_extract)
-        elif mode == 'only_outdomain':
-            should_extract = lambda d: d.issubset(set(expr_info.out_domain_dims))
+        elif mode == 'only_outlinear':
+            should_extract = lambda d: d.issubset(set(expr_info.out_linear_dims))
             return MainExtractor(stmt, expr_info, should_extract)
-        elif mode == 'only_domain':
-            should_extract = lambda d: not (d.issubset(set(expr_info.out_domain_dims)))
+        elif mode == 'only_linear':
+            should_extract = lambda d: not (d.issubset(set(expr_info.out_linear_dims)))
             return SoftExtractor(stmt, expr_info, should_extract)
         elif mode == 'aggressive':
             should_extract = lambda d: True
@@ -149,12 +149,12 @@ class MainExtractor(Extractor):
                 return (dep_l, self.EXT)
             elif not dep_l:
                 # E.g. alpha*A[i,j]
-                if not set(self.expr_info.domain_dims) & dep_r or \
+                if not set(self.expr_info.linear_dims) & dep_r or \
                         not (self._try(left, dep_l) or self._try(right, dep_r)):
                     return (dep_r, self.EXT)
             elif not dep_r:
                 # E.g. A[i,j]*alpha
-                if not set(self.expr_info.domain_dims) & dep_l or \
+                if not set(self.expr_info.linear_dims) & dep_l or \
                         not (self._try(right, dep_r) or self._try(left, dep_l)):
                     return (dep_l, self.EXT)
             elif dep_l.issubset(dep_r):
@@ -304,7 +304,7 @@ class Hoister():
 
         expr_dims_loops = self.expr_info.loops_from_dims
         expr_outermost_loop = self.expr_info.outermost_loop
-        expr_outermost_domain_loop = self.expr_info.outermost_domain_loop
+        expr_outermost_linear_loop = self.expr_info.outermost_linear_loop
         is_bilinear = self.expr_info.is_bilinear
 
         extractor = Extractor.factory(mode, self.stmt, self.expr_info)
@@ -354,12 +354,12 @@ class Hoister():
                     wrap_loop = tuple(expr_dims_loops.values())
                     offset = expr_outermost_loop
                 elif depth == 2:
-                    if self._is_hoistable(subexprs, expr_outermost_domain_loop):
+                    if self._is_hoistable(subexprs, expr_outermost_linear_loop):
                         # As vector, within the outermost loop imposing the dependency
                         place = expr_dims_loops[dep[0]].children[0]
                         wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, depth))
                         offset = od_find_next(expr_dims_loops, dep[0])
-                    elif expr_outermost_domain_loop.dim == dep[-1] and is_bilinear:
+                    elif expr_outermost_linear_loop.dim == dep[-1] and is_bilinear:
                         # As scalar, within the closest loop imposing the dependency
                         place = expr_dims_loops[dep[-1]].children[0]
                         wrap_loop = ()

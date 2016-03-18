@@ -210,13 +210,13 @@ class CSEUnpicker():
 
         # Code motion
         for t, ew in rewriters.items():
-            ew.licm(mode='only_outdomain', lda=lda, global_cse=True)
+            ew.licm(mode='only_outlinear', lda=lda, global_cse=True)
 
     def _analyze_expr(self, expr, lda):
         finder = FindInstances(Symbol)
         syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
         syms = [s for s in syms
-                if any(l in self.expr_info.domain_dims for l in lda[s])]
+                if any(l in self.expr_info.linear_dims for l in lda[s])]
 
         syms_costs = defaultdict(int)
 

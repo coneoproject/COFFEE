@@ -207,10 +207,10 @@ class ExpressionFissioner(LoopScheduler):
             * match: a list of subexpressions that should be cut from the input
                 expression. ``cut`` is ignored if ``match`` is provided.
             * loops: a value in ['all', 'expr', 'none']. 'all' means that an
-                expression is split, and its chunks are placed in separate loop
-                nests. 'expr' implies that the chunks share the outer loops of the
-                expression, particularly those not belonging to its domain. 'none'
-                means that all chunks are placed within the original loop nest
+                expression is split and its "chunks" are placed in separate loop
+                nests. 'expr' implies that the chunks are placed within the non
+                linear loops sorrounding the expression. 'none' means that all
+                chunks are simply placed within the orginal loop nest
             * perfect: if True, create perfect loop nests. This means that any
                 new loop nest in which a chunk is placed is purged from any extra
                 statement (apart, obviously, from the chunk itself)
@@ -413,35 +413,35 @@ class ExpressionFissioner(LoopScheduler):
         if self.loops == 'none':
             return copy_metaexpr(expr_info)
 
-        # Handle the domain loops
-        domain_loops = ItSpace(mode=2).to_for(expr_info.domain_loops, stmts=[stmt])
-        domain_outerloop = domain_loops[0]
+        # Handle the linear loops
+        linear_loops = ItSpace(mode=2).to_for(expr_info.linear_loops, stmts=[stmt])
+        linear_outerloop = linear_loops[0]
 
-        # Handle the out-domain loops
-        if self.loops == 'all' and expr_info.out_domain_loops_info:
-            out_domain_loop, out_domain_loop_parent = expr_info.out_domain_loops_info[0]
-            index = out_domain_loop.body.index(expr_info.domain_loops[0])
-            out_domain_loop = dcopy(out_domain_loop)
+        # Handle the out-linear loops
+        if self.loops == 'all' and expr_info.out_linear_loops_info:
+            out_linear_loop, out_linear_loop_parent = expr_info.out_linear_loops_info[0]
+            index = out_linear_loop.body.index(expr_info.linear_loops[0])
+            out_linear_loop = dcopy(out_linear_loop)
             if self.perfect:
-                out_domain_loop.body[:] = [domain_outerloop]
+                out_linear_loop.body[:] = [linear_outerloop]
             else:
-                out_domain_loop.body[index] = domain_outerloop
-            out_domain_loops_info = ((out_domain_loop, out_domain_loop_parent),)
-            domain_outerloop_parent = out_domain_loop.children[0]
+                out_linear_loop.body[index] = linear_outerloop
+            out_linear_loops_info = ((out_linear_loop, out_linear_loop_parent),)
+            linear_outerloop_parent = out_linear_loop.children[0]
         else:
-            out_domain_loops_info = expr_info.out_domain_loops_info
-            domain_outerloop_parent = expr_info.domain_loops_parents[0]
+            out_linear_loops_info = expr_info.out_linear_loops_info
+            linear_outerloop_parent = expr_info.linear_loops_parents[0]
 
         # Build new loops info
-        finder, env = FindLoopNests(), {'node_parent': domain_outerloop_parent}
-        loops_info = out_domain_loops_info
-        loops_info += tuple(finder.visit(domain_outerloop, env=env)[0])
+        finder, env = FindLoopNests(), {'node_parent': linear_outerloop_parent}
+        loops_info = out_linear_loops_info
+        loops_info += tuple(finder.visit(linear_outerloop, env=env)[0])
 
         # Append the newly created loop nest
-        if self.loops == 'all' and expr_info.out_domain_loops_info:
-            expr_info.outermost_parent.children.append(out_domain_loop)
+        if self.loops == 'all' and expr_info.out_linear_loops_info:
+            expr_info.outermost_parent.children.append(out_linear_loop)
         else:
-            domain_outerloop_parent.children.append(domain_outerloop)
+            linear_outerloop_parent.children.append(linear_outerloop)
 
         # Finally, create and return the MetaExpr object
         parent = loops_info[-1][0].children[0]

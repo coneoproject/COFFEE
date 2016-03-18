@@ -488,16 +488,16 @@ class LoopVectorizer(object):
             if expr_info.dimension != 2:
                 continue
             parent = expr_info.parent
-            domain_loops = expr_info.domain_loops
-            domain_loops_parents = expr_info.domain_loops_parents
+            linear_loops = expr_info.linear_loops
+            linear_loops_parents = expr_info.linear_loops_parents
 
             # Check if outer-product vectorization is actually doable
             vect_len = plan.isa["dp_reg"]
-            rows = domain_loops[0].size
+            rows = linear_loops[0].size
             if rows < vect_len:
                 continue
 
-            op = OuterProduct(stmt, domain_loops, 'STORE')
+            op = OuterProduct(stmt, linear_loops, 'STORE')
 
             # Vectorisation
             vs = VectStrategy
@@ -523,16 +523,16 @@ class LoopVectorizer(object):
             # Construct the remainder loop
             if opts != vs.SPEC_UAJ_PADD_FULL and rows > rows_per_it and rows % rows_per_it > 0:
                 # Adjust bounds and increments of the main, layout and remainder loops
-                domain_outerloop = domain_loops[0]
-                peel_loop = dcopy(domain_loops)
-                bound = domain_outerloop.end
+                linear_outerloop = linear_loops[0]
+                peel_loop = dcopy(linear_loops)
+                bound = linear_outerloop.end
                 bound -= bound % rows_per_it
-                domain_outerloop.end, layout.end = bound, bound
+                linear_outerloop.end, layout.end = bound, bound
                 peel_loop[0].init.init = Symbol(bound)
                 peel_loop[0].increment, peel_loop[1].increment = 1, 1
                 # Append peeling loop after the main loop
-                domain_outerparent = domain_loops_parents[0].children
-                insert_at_elem(domain_outerparent, domain_outerloop, peel_loop[0], 1)
+                linear_outerparent = linear_loops_parents[0].children
+                insert_at_elem(linear_outerparent, linear_outerloop, peel_loop[0], 1)
 
             # Replace scalar with vector code
             ofs = parent.children.index(stmt)

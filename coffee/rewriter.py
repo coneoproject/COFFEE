@@ -87,8 +87,8 @@ class ExpressionRewriter():
             * aggressive: all subexpressions, depending on any number of loops.
                 This may require introducing N-dimensional temporaries.
             * only_const: only all constant subexpressions
-            * only_domain: only all domain-dependent subexpressions
-            * only_outdomain: only all subexpressions independent of the domain loops
+            * only_linear: only all subexpressions depending on linear loops
+            * only_outlinear: only all subexpressions independent of linear loops
         :param kwargs:
             * look_ahead: (default: False) should be set to True if only a projection
                 of the hoistable subexpressions is needed (i.e., hoisting not performed)
@@ -145,10 +145,10 @@ class ExpressionRewriter():
                 /kwargs['dimensions']/
             * mode == 'all': expand when symbols depend on at least one of the
                 expression's dimensions
-            * mode == 'domain': expand when symbols depending on the expressions's
-                domain are encountered.
-            * mode == 'outdomain': expand when symbols independent of the
-                expression's domain are encountered.
+            * mode == 'linear': expand when symbols depend on the expressions's
+                linear loops.
+            * mode == 'outlinear': expand when symbols are independent of the
+                expression's linear loops.
         :param kwargs:
             * not_aggregate: True if should not try to aggregate expanded symbols
                 with previously hoisted expressions.
@@ -164,10 +164,10 @@ class ExpressionRewriter():
         if mode == 'standard':
             retval = FindInstances.default_retval()
             symbols = FindInstances(Symbol).visit(self.stmt.rvalue, ret=retval)[Symbol]
-            # The heuristics privileges domain dimensions
-            dims = self.expr_info.out_domain_dims
+            # The heuristics privileges linear dimensions
+            dims = self.expr_info.out_linear_dims
             if not dims or self.expr_info.dimension >= 2:
-                dims = self.expr_info.domain_dims
+                dims = self.expr_info.linear_dims
             # Get the dimension occurring most often
             occurrences = [tuple(r for r in s.rank if r in dims) for s in symbols]
             occurrences = [i for i in occurrences if i]
@@ -179,18 +179,18 @@ class ExpressionRewriter():
         elif mode == 'dimensions':
             dimensions = kwargs.get('dimensions', ())
             should_expand = lambda n: set(dimensions).issubset(set(n.rank))
-        elif mode in ['all', 'domain', 'outdomain']:
+        elif mode in ['all', 'linear', 'outlinear']:
             lda = kwargs.get('lda') or ldanalysis(self.expr_info.outermost_loop,
                                                   key='symbol', value='dim')
             if mode == 'all':
                 should_expand = lambda n: lda.get(n.symbol) and \
                     any(r in self.expr_info.dims for r in lda[n.symbol])
-            elif mode == 'domain':
+            elif mode == 'linear':
                 should_expand = lambda n: lda.get(n.symbol) and \
-                    any(r in self.expr_info.domain_dims for r in lda[n.symbol])
-            elif mode == 'outdomain':
+                    any(r in self.expr_info.linear_dims for r in lda[n.symbol])
+            elif mode == 'outlinear':
                 should_expand = lambda n: lda.get(n.symbol) and \
-                    not lda[n.symbol].issubset(set(self.expr_info.domain_dims))
+                    not lda[n.symbol].issubset(set(self.expr_info.linear_dims))
         else:
             warning('Unknown expansion strategy. Skipping.')
             return
@@ -216,9 +216,10 @@ class ExpressionRewriter():
                 in /kwargs['dimensions']/
             * mode == 'all': factorize symbols depending on at least one of the
                 expression's dimensions.
-            * mode == 'domain': factorize symbols depending on the expression's domain.
-            * mode == 'outdomain': factorize symbols independent of the expression's
-                domain.
+            * mode == 'linear': factorize symbols depending on the expression's
+                linear loops.
+            * mode == 'outlinear': factorize symbols independent of the expression's
+                linear loops.
             * mode == 'constants': factorize symbols independent of any loops enclosing
                 the expression.
             * mode == 'adhoc': factorize only symbols in /kwargs['adhoc']/ (details below)
@@ -244,10 +245,10 @@ class ExpressionRewriter():
         if mode == 'standard':
             retval = FindInstances.default_retval()
             symbols = FindInstances(Symbol).visit(self.stmt.rvalue, ret=retval)[Symbol]
-            # The heuristics privileges domain dimensions
-            dims = self.expr_info.out_domain_dims
+            # The heuristics privileges linear dimensions
+            dims = self.expr_info.out_linear_dims
             if not dims or self.expr_info.dimension >= 2:
-                dims = self.expr_info.domain_dims
+                dims = self.expr_info.linear_dims
             # Get the dimension occurring most often
             occurrences = [tuple(r for r in s.rank if r in dims) for s in symbols]
             occurrences = [i for i in occurrences if i]
@@ -267,18 +268,18 @@ class ExpressionRewriter():
         elif mode == 'heuristic':
             kwargs['heuristic'] = True
             should_factorize = lambda n: False
-        elif mode in ['all', 'domain', 'outdomain', 'constants']:
+        elif mode in ['all', 'linear', 'outlinear', 'constants']:
             lda = kwargs.get('lda') or ldanalysis(self.expr_info.outermost_loop,
                                                   key='symbol', value='dim')
             if mode == 'all':
                 should_factorize = lambda n: lda.get(n.symbol) and \
                     any(r in self.expr_info.dims for r in lda[n.symbol])
-            elif mode == 'domain':
+            elif mode == 'linear':
                 should_factorize = lambda n: lda.get(n.symbol) and \
-                    any(r in self.expr_info.domain_dims for r in lda[n.symbol])
-            elif mode == 'outdomain':
+                    any(r in self.expr_info.linear_dims for r in lda[n.symbol])
+            elif mode == 'outlinear':
                 should_factorize = lambda n: lda.get(n.symbol) and \
-                    not lda[n.symbol].issubset(set(self.expr_info.domain_dims))
+                    not lda[n.symbol].issubset(set(self.expr_info.linear_dims))
             elif mode == 'constants':
                 should_factorize = lambda n: not lda.get(n.symbol)
         else:
@@ -364,7 +365,7 @@ class ExpressionRewriter():
             return
         retval = FindInstances.default_retval()
         expr_syms = FindInstances(Symbol).visit(stmt.rvalue, ret=retval)[Symbol]
-        reduction_loops = expr_info.out_domain_loops_info
+        reduction_loops = expr_info.out_linear_loops_info
         if any([not is_perfect_loop(l) for l, p in reduction_loops]):
             # Unsafe if not a perfect loop nest
             return
@@ -403,13 +404,13 @@ class ExpressionRewriter():
                     decl = self.hoisted[sym.symbol].decl
                     if sym.symbol in [s.symbol for s in reducible_syms]:
                         parent.children[parent.children.index(assign)] = Incr(sym, expr)
-                        sym.rank = self.expr_info.domain_dims
+                        sym.rank = self.expr_info.linear_dims
                         decl.sym.rank = decl.sym.rank[i+1:]
             # Remove the reduction loop
             p.children[p.children.index(l)] = l.body[0]
             # Update symbols' ranks
             for s in reducible_syms:
-                s.rank = self.expr_info.domain_dims
+                s.rank = self.expr_info.linear_dims
             # Update expression metadata
             self.expr_info._loops_info.remove((l, p))
 
@@ -451,25 +452,25 @@ class ExpressionRewriter():
 
             On Optimality of Finite Element Integration, Luporini et. al.
         """
-        lda = ldanalysis(self.expr_info.domain_loops[0], key='symbol', value='dim')
+        lda = ldanalysis(self.expr_info.linear_loops[0], key='symbol', value='dim')
         sg_visitor = SharingGraph(self.expr_info, lda)
 
         # Maximize the visibility of linear symbols
         sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
         if 'topsum' in mapper:
-            self.expand(mode='domain', subexprs=[mapper['topsum']], not_aggregate=True)
+            self.expand(mode='linear', subexprs=[mapper['topsum']], not_aggregate=True)
             sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
 
         nodes, edges = sgraph.nodes(), sgraph.edges()
 
         if self.expr_info.is_linear:
             self.factorize(mode='adhoc', adhoc={n: [] for n in nodes})
-            self.licm('only_outdomain')
+            self.licm('only_outlinear')
         elif self.expr_info.is_bilinear:
             # Resort to an ILP formulation to find out the best factorization candidates
             if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
                 self.factorize(mode='heuristic')
-                self.licm(mode='only_outdomain')
+                self.licm(mode='only_outlinear')
                 return
             # Note: need to use short variable names otherwise Pulp might complain
             nodes_vars = {i: n for i, n in enumerate(nodes)}
