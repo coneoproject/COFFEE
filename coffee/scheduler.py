@@ -591,7 +591,7 @@ class ZeroRemover(LoopScheduler):
             itspace = list(set([tuple(i) for i in itspace]))
             return itspace
 
-    def _track_nz_blocks(self, node, nz_syms, nz_info, nest=None, parent=None):
+    def _track_nz_blocks(self, node, nz_syms, nz_info, nest=None, parent=None, candidates=None):
         """Track the propagation of zero-valued blocks in the AST rooted in ``node``
 
         ``nz_syms`` contains, for each known identifier, the ranges of
@@ -618,14 +618,16 @@ class ZeroRemover(LoopScheduler):
             ((<for i>, <for j>), root) -> {A: (i, (nz_along_i)), (j, (nz_along_j))}
 
         """
-        if isinstance(node, (Assign, Incr, Decr)):
+        if isinstance(node, Writer):
             sym, expr = node.children
 
-            # Note: outer, non-perfect loops are discarded for transformation
-            # safety, because splitting (which is a consequence of zero-removal)
-            # non-perfect loop nests is unsafe
+            # Outer, non-perfect loops are discarded for transformation safety
+            # as splitting (a consequence of zero-removal) non-perfect nests is unsafe
             nest = tuple([(l, p) for l, p in (nest or []) if is_perfect_loop(l)])
             if not nest:
+                return
+
+            if candidates and nest[-1][0] not in candidates:
                 return
 
             # Track the propagation of non zero-valued blocks: ...
@@ -635,7 +637,7 @@ class ZeroRemover(LoopScheduler):
                 # ... and then through the lvalue (merging overlaps)
                 nz_expr = tuple(dict(i).get(r) for r in sym.rank if not isinstance(r, int))
                 if any(j is None for j in nz_expr):
-                    return
+                    break
                 nz_node = list(nz_syms.setdefault(sym.symbol, [nz_expr]))
                 if not nz_expr:
                     continue
@@ -660,14 +662,15 @@ class ZeroRemover(LoopScheduler):
 
         elif isinstance(node, For):
             new_nest = (nest or []) + [(node, parent)]
-            self._track_nz_blocks(node.children[0], nz_syms, nz_info, new_nest, node)
+            self._track_nz_blocks(node.children[0], nz_syms, nz_info, new_nest,
+                                  node, candidates)
 
         elif isinstance(node, (Root, Block)):
             for n in node.children:
-                self._track_nz_blocks(n, nz_syms, nz_info, nest, node)
+                self._track_nz_blocks(n, nz_syms, nz_info, nest, node, candidates)
 
-        elif isinstance(node, (If, Switch)):
-            raise RuntimeError("Unexpected control flow while tracking zero blocks")
+        elif isinstance(node, (If, Switch, FunCall)):
+            raise RuntimeError("zero blocks tracking: illegal control flow")
 
     def _reschedule_itspace(self, root):
         """Consider two statements A and B, and their iteration space. If the
@@ -709,11 +712,17 @@ class ZeroRemover(LoopScheduler):
                 if not np.all(d.init.values[np.ix_(*entries)] == 0.0):
                     nz_syms[s].append(nz_b)
 
-        # 2) Track the propagation of non zero-valued blocks through symbolic
-        # execution. This populates /nz_info/ and updates /nz_syms/
-        self._track_nz_blocks(root, nz_syms, nz_info)
+        # 2) Determine the loops that should be analyzed
+        linear_expr_loops = [(l for l in ei.linear_loops) for ei in self.exprs.values()]
+        linear_expr_loops = set(flatten(linear_expr_loops))
+        candidates = [l for l in inner_loops(root)
+                      if not l.is_linear or l in linear_expr_loops]
 
-        # 3) At this point we know where non-zero blocks are located, so we have
+        # 3) Track the propagation of non zero-valued blocks through symbolic
+        # execution. This populates /nz_info/ and updates /nz_syms/
+        self._track_nz_blocks(root, nz_syms, nz_info, candidates=candidates)
+
+        # 4) At this point we know where non-zero blocks are located, so we have
         # to create proper loop nests to access them
         new_exprs, new_nz_info = OrderedDict(), OrderedDict()
         for nest, stmt_itspaces in nz_info.items():
@@ -894,7 +903,7 @@ class ZeroRemover(LoopScheduler):
         nz_syms, nz_info = self._reschedule_itspace(root)
 
         # Shrink sparse arrays by removing zero-valued regions
-        self._shrink(root, nz_syms, nz_info)
+        #self._shrink(root, nz_syms, nz_info)
 
         # Finally, "inline" the expressions that were originally split
         self._recombine(nz_info)
