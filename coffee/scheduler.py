@@ -773,78 +773,6 @@ class ZeroRemover(LoopScheduler):
         self.exprs.update(new_exprs)
         return nz_syms, new_nz_info
 
-    def _shrink(self, root, nz_syms, nz_info):
-        references = SymbolReferences().visit(root, ret=SymbolReferences.default_retval())
-        dataspaces = defaultdict(list)
-
-        # Calculate the dataspaces
-        for nest, stmt_dim_offsets in nz_info.items():
-            nest = {l.dim: l for l in nest}
-            for stmt, dim_offset in stmt_dim_offsets:
-                symbols = FindInstances(Symbol).visit(stmt)[Symbol]
-                symbols = [s for s in symbols if s.symbol in self.decls and
-                           isinstance(self.decls[s.symbol].init, SparseArrayInit)]
-                for s in symbols:
-                    decl = self.decls[s.symbol]
-                    # Each dataspace is stored as a 2-tuple (size, offset)
-                    dataspace = []
-                    for r, o, d_size in zip(s.rank, s.offset, decl.sym.rank):
-                        size = nest[r].size if r in nest else d_size
-                        dataspace.append((size, o[1]))
-                    dataspaces[s.symbol].append(tuple(dataspace))
-
-        # For each symbol, and for each of its dimension, aggregate the dataspaces
-        # if they are contiguous
-        for symbol, dataspace in dataspaces.items():
-            decl = self.decls[symbol]
-            merged_dataspace = []
-            for regions, size in zip(zip(*dataspace), decl.sym.rank):
-                merged_dataspace.append(ItSpace(mode=1).merge(regions, within=size)[0])
-            dataspaces[symbol] = tuple(merged_dataspace)
-
-        # Now that we know the dataspaces, we should see if they are smaller than
-        # the actual array size
-        for symbol, dataspace in dataspaces.items():
-            decl = self.decls[symbol]
-            sections = [range(d[1], d[1] + d[0]) for d in dataspace]
-            values = decl.init.values[np.ix_(*sections)]
-            if values.shape != decl.init.values.shape:
-                # Set the shrunk values ...
-                decl.init.values = values
-                decl.sym.rank = values.shape
-                decl.core = values.shape
-                # ... changes any relevant offsets
-                s_references = [s[0] for s in references[symbol] if s[0] is not decl.sym]
-                for s in s_references:
-                    offset = []
-                    for i, section in enumerate(sections):
-                        # Is the shrunk array still starting from the old base?
-                        # If not, update the offset of each symbol occurence
-                        if s.offset[i][1] > 0 and section[0] > 0:
-                            offset.append((s.offset[i][0], s.offset[i][1] - section[0]))
-                        else:
-                            offset.append(s.offset[i])
-                    s.offset = tuple(offset)
-                # ... and update the /nz_syms/ dictionary
-                nz_syms[symbol] = tuple([(i, 0)] for i in values.shape)
-
-        # Finally, we can merge tables that became identical after shrinking
-        mapper = defaultdict(list)
-        for symbol, dataspace in dataspaces.items():
-            values = self.decls[symbol].init.values
-            mapper[values.tostring()].append(symbol)
-        for values, symbols in mapper.items():
-            to_replace = {s: symbols[0] for s in symbols[1:]}
-            for replacing, target in to_replace.items():
-                for s, p in references[replacing]:
-                    s.symbol = target
-                    if isinstance(p, Decl):
-                        root.children.remove(p)
-                # Clean up
-                self.decls.pop(replacing)
-                if replacing in self.hoisted:
-                    self.hoisted.pop(replacing)
-
     def _recombine(self, nz_info):
         """Recombine expressions writing to the same lvalue."""
         new_exprs = OrderedDict()
@@ -899,9 +827,6 @@ class ZeroRemover(LoopScheduler):
         # Perform symbolic execution, track the propagation of non zero-valued
         # blocks, restructure the iteration spaces to avoid useless arithmetic ops
         nz_syms, nz_info = self._reschedule_itspace(root)
-
-        # Shrink sparse arrays by removing zero-valued regions
-        #self._shrink(root, nz_syms, nz_info)
 
         # Finally, "inline" the expressions that were originally split
         self._recombine(nz_info)
