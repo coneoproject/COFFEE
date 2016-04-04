@@ -530,16 +530,14 @@ class ZeroRemover(LoopScheduler):
             def_itspace = [tuple((l.dim, (l.size, 0)) for l, p in nest)]
             nz_bounds = zip(*nz_syms.get(node.symbol, []))
             for i, (r, o, nz_bs) in enumerate(zip(node.rank, node.offset, nz_bounds)):
-                if o[0] != 1 or isinstance(o[1], str):
-                    # Cannot handle jumps nor non-integer offsets
+                if o[0] != 1 or isinstance(o[1], str) or isinstance(r, int):
+                    # Cannot handle jumps, non-integer offsets, or constant accesses
                     continue
                 try:
-                    # Let's see if I know the loop which defines the iteration
-                    # space of dimension /r/ ...
+                    # Am I tracking the loop with iteration variable == /r/ ?
                     loop = [l for l, p in nest if l.dim == r][0]
                 except:
-                    # ... whops! No, so I just assume it covers the entire
-                    # non zero-valued region
+                    # No, so I just assume it covers the entire non zero-valued region
                     itspace.append([(r, nz_b) for nz_b in nz_bs])
                     continue
                 # Now I can intersect the loop's iteration space with the non
