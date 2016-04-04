@@ -41,7 +41,6 @@ from math import factorial as fact
 import plan
 from base import *
 from utils import *
-from expression import MetaExpr
 from scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from rewriter import ExpressionRewriter
 from coffee.visitors import FindInstances, ProjectExpansion

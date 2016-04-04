@@ -84,9 +84,9 @@ class Extractor():
             binexprs = zip(*flatten(values))[1]
             binexprs = [b for b in binexprs if binexprs.count(b) > 1]
             for b in binexprs:
-                v = cs.setdefault(b.urepr, [])
-                if b not in v:
-                    v.append(b)
+                t = cs.setdefault(b.urepr, [])
+                if b not in t:
+                    t.append(b)
             cs = [v for k, v in cs.items() if len(v) > 1]
             if cs:
                 self.extracted[dep] = list(flatten(cs))
