@@ -1,6 +1,6 @@
 # This file is part of COFFEE
 #
-# COFFEE is Copyright (c) 2014, Imperial College London.
+# COFFEE is Copyright (c) 2016, Imperial College London.
 # Please see the AUTHORS file in the main source directory for
 # a full list of copyright holders.  All rights reserved.
 #

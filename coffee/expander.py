@@ -1,6 +1,6 @@
 # This file is part of COFFEE
 #
-# COFFEE is Copyright (c) 2014, Imperial College London.
+# COFFEE is Copyright (c) 2016, Imperial College London.
 # Please see the AUTHORS file in the main source directory for
 # a full list of copyright holders.  All rights reserved.
 #
@@ -54,13 +54,12 @@ class Cache():
         return exp
 
     def invalidate(self, exp):
-        was_hit = False
         for i, j in self._map.items():
             if str(j) == str(exp):
                 self._map.pop(i)
                 if self._hits[i] > 0:
-                    was_hit = True
-        return was_hit
+                    return True
+        return False
 
     def add(self, key, exp):
         self._map[key] = exp

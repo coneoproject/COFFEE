@@ -1,6 +1,6 @@
 # This file is part of COFFEE
 #
-# COFFEE is Copyright (c) 2014, Imperial College London.
+# COFFEE is Copyright (c) 2016, Imperial College London.
 # Please see the AUTHORS file in the main source directory for
 # a full list of copyright holders.  All rights reserved.
 #
@@ -42,6 +42,10 @@ from expression import MetaExpr
 
 
 class Temporary():
+
+    """A Temporary stores useful information for a statement (e.g., an Assign
+    or an AugmentedAssig) that computes a temporary variable; that is, a variable
+    that is read in more than one place."""
 
     def __init__(self, node, main_loop, nest, reads_costs=None):
         self.level = -1
@@ -126,6 +130,14 @@ class Temporary():
 
 
 class CSEUnpicker():
+
+    """Analyze loops in which some temporary variables are computed and, applying
+    a cost model, decides whether to leave a temporary intact or inline it for
+    creating factorization and code motion opportunities.
+
+    The cost model exploits one particular property of loops, namely linearity in
+    some symbols (further information concerning loop linearity is available in
+    ``expression.py``)."""
 
     def __init__(self, stmt, expr_info, header, hoisted, decls, expr_graph):
         self.stmt = stmt
