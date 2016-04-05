@@ -97,6 +97,10 @@ class Term():
 
 class Factorizer():
 
+    """Factorize terms in an expression according to a set of rules. For a
+    comprehensive list of possible rules, refer to the documentation of the
+    corresponding wrapper function ``factorize`` in ``ExpressionRewriter``."""
+
     def __init__(self, stmt):
         self.stmt = stmt
 

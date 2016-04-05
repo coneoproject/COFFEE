@@ -67,6 +67,10 @@ class Cache():
 
 class Expander():
 
+    """Expand the products in an expression according to a set of rules. For a
+    comprehensive list of possible rules, refer to the documentation of the
+    corresponding wrapper function ``expand`` in ``ExpressionRewriter``."""
+
     # Constants used by the expand method to charaterize sub-expressions:
     GROUP = 0  # Expression /will/ not trigger expansion
     EXPAND = 1  # Expression /could/ be expanded
