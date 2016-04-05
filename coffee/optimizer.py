@@ -159,9 +159,8 @@ class LoopOptimizer(object):
         avoid evaluation of arithmetic operations involving zero-valued blocks
         in statically initialized arrays."""
 
-        if any([d.nonzero for d in self.decls.values()]):
-            zls = ZeroRemover(self.exprs, self.decls, self.hoisted, self.expr_graph)
-            self.nz_syms = zls.reschedule(self.header)
+        zls = ZeroRemover(self.exprs, self.decls, self.hoisted, self.expr_graph)
+        self.nz_syms = zls.reschedule(self.header)
 
     def precompute(self, mode='perfect'):
         """Precompute statements out of ``self.loop``. This is achieved through

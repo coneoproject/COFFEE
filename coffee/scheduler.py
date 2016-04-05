@@ -491,6 +491,8 @@ class ZeroRemover(LoopScheduler):
     admitted.
     """
 
+    THRESHOLD = 1  # Only skip if there more than THRESHOLD consecutive zeros
+
     def __init__(self, exprs, decls, hoisted, expr_graph):
         """Initialize the ZeroRemover.
 
@@ -808,15 +810,35 @@ class ZeroRemover(LoopScheduler):
         self.exprs.clear()
         self.exprs.update(new_exprs)
 
+    def _should_skip(self, zero_decls):
+        """Return False if, based on heuristics, it seems worth skipping the
+        computation over zeros, True otherwise. True is returned if it
+        is thought that the implications on low-level performance would be
+        worse than the gain in operation count (e.g., because spatial locality
+        within loop would go lost)."""
+
+        if not zero_decls:
+            return True
+
+        for d in zero_decls:
+            for d_dim in d.nonzero:
+                if all(size < ZeroRemover.THRESHOLD for size, offset in d_dim):
+                    return True
+
+        return False
+
     def reschedule(self, root):
         """Restructure the loop nests in ``root`` to avoid computation over
         zero-valued data spaces. This is achieved through symbolic execution
         starting from ``root``. Control flow, in the form of If, Switch, etc.,
         is forbidden."""
 
-        # First, split expressions to maximize the impact of the transformation.
-        # This is because different summands may have zero-valued blocks at
-        # different offsets
+        zero_decls = [d for d in self.decls.values() if d.nonzero]
+        if self._should_skip(zero_decls):
+            return
+
+        # First, split the main expressions to maximize the impact of the transformation.
+        # This helps if different summands have zero-valued blocks at different offsets
         elf = ExpressionFissioner(cut=1, loops='none')
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
