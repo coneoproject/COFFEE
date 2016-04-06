@@ -295,9 +295,7 @@ class CSEUnpicker(object):
         # Check parameters
         bounds = bounds or (min(levels.keys()), max(levels.keys()))
         assert len(bounds) == 2 and bounds[1] >= bounds[0]
-        assert [i in levels.keys() for i in bounds]
-        fact_levels = OrderedDict([(k, v) for k, v in levels.items()
-                                   if k > bounds[0] and k <= bounds[1]])
+        assert bounds[0] in levels.keys() and bounds[1] in levels.keys()
 
         # Determine current costs of individual loop regions
         cse_cost = self._cost_cse(levels, (min(levels.keys()), bounds[0]))
@@ -310,6 +308,7 @@ class CSEUnpicker(object):
             new_trace[s] = t.reconstruct()
 
         best = (bounds[0], bounds[0], maxint)
+        fact_levels = {k: v for k, v in levels.items() if k > bounds[0] and k <= bounds[1]}
         for level, temporaries in sorted(fact_levels.items(), key=lambda (i, j): i):
             level_inloop_cost = 0
             for t in temporaries:
