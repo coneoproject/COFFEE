@@ -37,7 +37,7 @@ from base import *
 from utils import *
 
 
-class Cache():
+class Cache(object):
     """A cache for expanded expressions."""
 
     def __init__(self):
@@ -65,7 +65,7 @@ class Cache():
         self._map[key] = exp
 
 
-class Expander():
+class Expander(object):
 
     """Expand the products in an expression according to a set of rules. For a
     comprehensive list of possible rules, refer to the documentation of the

@@ -37,7 +37,7 @@ from base import *
 from utils import *
 
 
-class Extractor():
+class Extractor(object):
 
     EXT = 0  # expression marker: extract
     STOP = 1  # expression marker: do not extract
@@ -230,7 +230,7 @@ class AggressiveExtractor(Extractor):
         return (dep_n, self.STOP)
 
 
-class Hoister():
+class Hoister(object):
 
     # How many times the hoister was invoked
     _handled = 0

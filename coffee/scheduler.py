@@ -227,7 +227,7 @@ class ExpressionFissioner(LoopScheduler):
         else:
             raise RuntimeError("Must specify a `cut` or a `match`.")
 
-    class Cutter():
+    class Cutter(object):
 
         def __init__(self, expr_fissioner):
             self.expr_fissioner = expr_fissioner

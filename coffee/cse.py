@@ -41,7 +41,7 @@ from coffee.visitors import EstimateFlops
 from expression import MetaExpr
 
 
-class Temporary():
+class Temporary(object):
 
     """A Temporary stores useful information for a statement (e.g., an Assign
     or an AugmentedAssig) that computes a temporary variable; that is, a variable
@@ -129,7 +129,7 @@ class Temporary():
              ", ".join([str(i) for i in self.is_read]))
 
 
-class CSEUnpicker():
+class CSEUnpicker(object):
 
     """Analyze loops in which some temporary variables are computed and, applying
     a cost model, decides whether to leave a temporary intact or inline it for

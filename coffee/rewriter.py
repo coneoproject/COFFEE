@@ -44,7 +44,7 @@ from factorizer import Factorizer
 from cse import CSEUnpicker
 
 
-class ExpressionRewriter():
+class ExpressionRewriter(object):
     """Provide operations to re-write an expression:
 
     * Loop-invariant code motion: find and hoist sub-expressions which are

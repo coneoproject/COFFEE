@@ -491,7 +491,7 @@ def find_expression(node, type=None, dims=None, in_syms=None, out_syms=None):
 #######################################################################
 
 
-class ItSpace():
+class ItSpace(object):
 
     """A collection of routines to manipulate iteration spaces."""
 
@@ -615,7 +615,7 @@ class StmtTracker(OrderedDict):
         * The parent of the closest loop
     """
 
-    class StmtInfo():
+    class StmtInfo(object):
         """Simple container class defining ``StmtTracker`` values."""
 
         INFO = ['stmt', 'decl', 'loop', 'place']
@@ -803,7 +803,7 @@ def postprocess(node):
     """Rearrange the Nodes in the AST rooted in ``node`` to improve the code quality
     when unparsing the tree."""
 
-    class Process:
+    class Process(object):
         start = None
         end = None
         decls = {}

@@ -43,7 +43,7 @@ import plan
 from coffee.visitors import FindInstances
 
 
-class VectStrategy():
+class VectStrategy(object):
 
     """Supported vectorization modes."""
 
@@ -544,7 +544,7 @@ class LoopVectorizer(object):
             insert_at_elem(self.header.children, expr_info.loops[0], layout, 1)
 
 
-class OuterProduct():
+class OuterProduct(object):
 
     """Generate an intrinsics-based outer product vectorisation of a statement."""
 

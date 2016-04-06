@@ -37,7 +37,7 @@ from base import *
 from utils import *
 
 
-class Term():
+class Term(object):
     """A Term represents a product between 'operands' and 'factors'. In a
     product /a*(b+c)/, /a/ is the 'operand', while /b/ and /c/ are the 'factors'.
     The symbol /+/ is the 'op' of the Term.
@@ -95,7 +95,7 @@ class Term():
         return Term(operands, factors, op)
 
 
-class Factorizer():
+class Factorizer(object):
 
     """Factorize terms in an expression according to a set of rules. For a
     comprehensive list of possible rules, refer to the documentation of the
