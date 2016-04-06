@@ -364,13 +364,10 @@ def explore_operator(node):
 
     def _explore_operator(node, operator, children):
         for n in node.children:
-            if n.__class__ == operator or isinstance(n, Par):
+            if n.__class__ == operator:
                 _explore_operator(n, operator, children)
             else:
                 children.append((n, node))
-
-    while isinstance(node, Par):
-        node = node.child
 
     children = []
     _explore_operator(node, node.__class__, children)

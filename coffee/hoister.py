@@ -104,9 +104,6 @@ class Extractor():
         if isinstance(node, Symbol):
             return (self._lda[node], self.EXT)
 
-        elif isinstance(node, Par):
-            return self._visit(node.child)
-
         elif isinstance(node, (FunCall, Ternary)):
             arg_deps = [self._visit(n) for n in node.children]
             dep = tuple(set(flatten([dep for dep, _ in arg_deps])))

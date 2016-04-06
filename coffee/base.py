@@ -171,7 +171,7 @@ class BinExpr(Expr):
     def gencode(self, not_scope=True, parent=None):
         children = [n.gencode(not_scope, self) for n in self.children]
         subtree = (" "+type(self).op+" ").join(children)
-        if parent and not isinstance(parent, (Par, self.__class__)):
+        if parent and not isinstance(parent, self.__class__):
             return wrap(subtree)
         return subtree
 
@@ -330,14 +330,6 @@ class SparseArrayInit(ArrayInit):
 
     def operands(self):
         return [self.values, self.precision, self.nonzero], {}
-
-
-class Par(UnaryExpr):
-
-    """Parenthesis object."""
-
-    def gencode(self, not_scope=True, parent=None):
-        return wrap(self.children[0].gencode(not_scope, self))
 
 
 class Sum(BinExpr):
@@ -1151,12 +1143,12 @@ class Determinant3x3(Determinant):
     def gencode(self, scope=False):
         sym, dim, lda = self.children
         v = sym.gencode()
-        a0 = Par(Sub(Prod(Symbol(v, (1, 1)), Symbol(v, (2, 2))),
-                     Prod(Symbol(v, (1, 2)), Symbol(v, (2, 1)))))
-        a1 = Par(Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 2))),
-                     Prod(Symbol(v, (1, 2)), Symbol(v, (2, 0)))))
-        a2 = Par(Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 1))),
-                     Prod(Symbol(v, (1, 1)), Symbol(v, (2, 0)))))
+        a0 = Sub(Prod(Symbol(v, (1, 1)), Symbol(v, (2, 2))),
+                 Prod(Symbol(v, (1, 2)), Symbol(v, (2, 1))))
+        a1 = Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 2))),
+                 Prod(Symbol(v, (1, 2)), Symbol(v, (2, 0))))
+        a2 = Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 1))),
+                 Prod(Symbol(v, (1, 1)), Symbol(v, (2, 0))))
         return Sum(Sub(Prod(Symbol(v, (0, 0)), a0),
                        Prod(Symbol(v, (0, 1)), a1)),
                    Prod(Symbol(v, (0, 2)), a2))

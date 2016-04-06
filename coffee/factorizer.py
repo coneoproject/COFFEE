@@ -170,9 +170,6 @@ class Factorizer():
         if isinstance(node, Symbol):
             return Term.process([node], self.should_factorize)
 
-        elif isinstance(node, Par):
-            return self._factorize(node.child, node)
-
         elif isinstance(node, (FunCall, Div)):
             # Try to factorize /within/ the children, but then return saying
             # "I'm not factorizable any further"

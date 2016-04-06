@@ -260,7 +260,7 @@ class ExpressionFissioner(LoopScheduler):
             if isinstance(node, (Symbol, FunCall)):
                 return 0
 
-            elif isinstance(node, (Par, Div)):
+            elif isinstance(node, Div):
                 return self._cut(node.children[0], node, side, topsum)
 
             elif isinstance(node, Prod):
@@ -333,9 +333,6 @@ class ExpressionFissioner(LoopScheduler):
 
             elif isinstance(node, (Symbol, FunCall)):
                 return None
-
-            elif isinstance(node, Par):
-                return self._cut(node.child, node, side, topsum)
 
             elif isinstance(node, Div):
                 return self._cut(node.left, node, side)
@@ -557,7 +554,7 @@ class ZeroRemover(LoopScheduler):
             itspace = zip(*itspace) or def_itspace
             return itspace
 
-        elif isinstance(node, (Par, FunCall)):
+        elif isinstance(node, FunCall):
             return self._track_nz_expr(node.children[0], nz_syms, nest)
 
         else:

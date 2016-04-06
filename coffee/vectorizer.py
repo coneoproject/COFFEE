@@ -641,8 +641,6 @@ class OuterProduct():
                     return vrs[reg[0]]
             else:
                 return decls[node_ide]
-        elif isinstance(node, Par):
-            return self._vect_expr(node.child, ofs, regs, decls, vrs)
         else:
             left = self._vect_expr(node.left, ofs, regs, decls, vrs)
             right = self._vect_expr(node.right, ofs, regs, decls, vrs)

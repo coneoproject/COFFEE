@@ -212,9 +212,6 @@ class Evaluate(Visitor):
         # Return the result of the binary operation plus forward the precision
         return self.mapper[o.__class__](*values), precisions[0]
 
-    def visit_Par(self, o, *args, **kwargs):
-        return self.visit(o.child, *args, **kwargs)
-
     def visit_Symbol(self, o, *args, **kwargs):
         try:
             # Any time a symbol is encountered, we expect to know the /point/ of

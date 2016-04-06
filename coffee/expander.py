@@ -181,9 +181,6 @@ class Expander():
             return ([node], self.EXPAND) if self.should_expand(node) \
                 else ([node], self.GROUP)
 
-        elif isinstance(node, Par):
-            return self._expand(node.child, node)
-
         elif isinstance(node, (Div, FunCall)):
             # Try to expand /within/ the children, but then return saying "I'm not
             # expandable any further"
