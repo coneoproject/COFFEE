@@ -493,7 +493,9 @@ class LoopOptimizer(object):
                     ew = ExpressionRewriter(fake_stmt, expr_info, self.decls)
                     ew.expand(mode='all').factorize(mode='all').factorize(mode='domain')
                     nterms = ew.licm(mode='aggressive', look_ahead=True)
-                    nterms = len(uniquify(nterms[expr_info.dims])) or 1
+                    genkey = lambda k: tuple(sorted(k))
+                    nterms = {genkey(k): v for k, v in nterms.items()}
+                    nterms = len(uniquify(nterms[genkey(expr_info.dims)])) or 1
                     fake_parent[fake_parent.index(fake_stmt)] = stmt
                     cost = nterms * increase_factor
 
