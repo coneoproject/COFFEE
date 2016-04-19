@@ -448,7 +448,7 @@ class LoopVectorizer(object):
 
             # Adjust the instances
             for s in syms:
-                s.rank = reversed(s.rank)
+                s.rank = tuple(reversed(s.rank))
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar
