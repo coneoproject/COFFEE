@@ -633,6 +633,7 @@ class StmtTracker(OrderedDict):
         if not isinstance(value, self.StmtInfo):
             if not isinstance(value, tuple):
                 raise RuntimeError("StmtTracker accepts tuple or StmtInfo objects")
+            assert len(self.StmtInfo.INFO) == len(value)
             value = self.StmtInfo(**dict(zip(self.StmtInfo.INFO, value)))
         self.byvalue[value.stmt.rvalue.urepr] = key
         return OrderedDict.__setitem__(self, key, value)
