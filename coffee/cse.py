@@ -213,7 +213,7 @@ class CSEUnpicker(object):
             ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
-            ew.expand(mode='all', not_aggregate=True, lda=lda)
+            ew.expand(mode='all', lda=lda)
             ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.reads}, lda=lda)
             ew.factorize(mode='heuristic')
             rewriters[t] = ew

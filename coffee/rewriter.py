@@ -150,8 +150,6 @@ class ExpressionRewriter(object):
             * mode == 'outlinear': expand when symbols are independent of the
                 expression's linear loops.
         :param kwargs:
-            * not_aggregate: True if should not try to aggregate expanded symbols
-                with previously hoisted expressions.
             * subexprs: an iterator of subexpressions rooted in /self.stmt/. If
                 provided, expansion will be performed only within these trees,
                 rather than within the whole expression.
@@ -455,7 +453,7 @@ class ExpressionRewriter(object):
         # Maximize the visibility of linear symbols
         sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
         if 'topsum' in mapper:
-            self.expand(mode='linear', subexprs=[mapper['topsum']], not_aggregate=True)
+            self.expand(mode='linear', subexprs=[mapper['topsum']])
             sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
 
         nodes, edges = sgraph.nodes(), sgraph.edges()
