@@ -378,8 +378,6 @@ class ASTKernel(object):
                 'align_pad': True,
                 'dead_ops_elimination': True
             }
-            if opts.get('flatten'):
-                params['flatten'] = True
         elif opts.get('O2'):
             params = {
                 'rewrite': 4,
@@ -394,6 +392,10 @@ class ASTKernel(object):
             params = {}
         else:
             params = opts
+
+        # HACK: flattening ...
+        if opts.get('flatten'):
+            params['flatten'] = True
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
