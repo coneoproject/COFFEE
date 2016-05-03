@@ -35,7 +35,6 @@ from math import ceil
 from copy import deepcopy as dcopy
 from collections import OrderedDict
 from itertools import product
-import numpy
 
 from base import *
 from utils import *
@@ -137,7 +136,6 @@ class LoopVectorizer(object):
         alignment to (the size in bytes of) the vector length.
         """
         info = visit(self.header, info_items=['fors'])
-        _inner_loops = inner_loops(self.loop)
 
         # Padding and data alignment occur along the innermost dimension
         p_dim = -1
@@ -147,11 +145,6 @@ class LoopVectorizer(object):
             # machinery for ensuring the correctness of the transformation for
             # non-uniform and non-unitary increments is missing
             return
-
-        elif sum(self.loop.size > i.size*4 for i in _inner_loops) > (len(_inner_loops)/2):
-            # The outermost loop is much larger than the inner loops: in this case,
-            # rather transpose the storage layout
-            self._transpose_layout()
 
         else:
             # Pad and align data
@@ -166,25 +159,21 @@ class LoopVectorizer(object):
         symbol_refs = info['symbol_refs']
         retval = FindInstances.default_retval()
         to_invert = FindInstances(Invert).visit(self.header, ret=retval)[Invert]
-        align = system.compiler['align'](system.isa['alignment'])
 
         buffer = None
         for decl_name, decl in self.decls.items():
-            if numpy.prod(decl.sym.rank) == 1:
+            if not decl.sym.rank or decl.is_pointer_type:
                 continue
 
             p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
+            if decl.sym.rank[p_dim] == 1 or p_rank == decl.sym.rank:
+                continue
+
             if decl.scope == LOCAL:
-                if p_rank != decl.sym.rank:
-                    # Padding
-                    decl.pad(p_rank)
-                # Alignment
-                decl.attr.append(align)
+                decl.pad(p_rank)
                 continue
-            # Don't try and pad function arguments that are pointer-valued
-            if decl.is_pointer_type:
-                continue
-            # Examined symbol is a FunDecl argument, so a buffer might be required
+
+            # Examined symbol is a FunDecl argument, so a buffer may be necessary
             access_modes, dataspaces = [], []
             p_info = OrderedDict()
             # A- Analyze occurrences of the FunDecl argument in the AST
@@ -212,7 +201,8 @@ class LoopVectorizer(object):
                         l_dataspace = (l.start + offset, l.end + offset)
                     dataspace[index] = l_dataspace
                 assert len(dataspace) <= len(s.rank)
-                dataspaces.append(tuple(sorted((d[1] for d in dataspace.items()), key=lambda d: d[0])))
+                dataspaces.append(tuple(sorted((d[1] for d in dataspace.items()),
+                                               key=lambda d: d[0])))
                 p_info.setdefault((itspace, p_offset), (loops, []))[1].append(s)
 
             # B- Check dataspace overlap. Dataspaces ...
@@ -228,6 +218,7 @@ class LoopVectorizer(object):
 
             # C- Create a padded temporary buffer for efficient vectorization
             buf_name, buf_rank = '_%s' % decl_name, 0
+            buf_nz = self.nz_syms.setdefault(buf_name, [])
             itspace_mapper = OrderedDict()
             for (itspace, p_offset), (loops, syms) in p_info.items():
                 if isinstance(p_offset, str):
@@ -235,27 +226,28 @@ class LoopVectorizer(object):
                     continue
                 mapped = set()
                 for s in syms:
-                    original_s = dcopy(s)
+                    # Track the non zero-valued region
+                    new_nz = ((1, buf_rank),)
+                    new_nz += tuple((j[1]-j[0], i[1])for i, j in
+                                    zip(s.offset[:p_dim], itspace[:p_dim]))
+                    new_nz += ((itspace[p_dim][1]-itspace[p_dim][0], 0),)
+                    buf_nz.append(new_nz)
+                    # Make use of the buffer
+                    original = dcopy(s)
                     s.symbol = buf_name
                     s.rank = (buf_rank,) + s.rank
                     s.offset = ((1, 0),) + s.offset[:p_dim] + ((1, 0),)
-                    if s.offset not in mapped:
-                        # Map buffer symbol to each FunDecl symbol occurrence
-                        # avoiding duplicate, useless copies
-                        mapping = (original_s, dcopy(s))
+                    if s.urepr not in mapped:
+                        mapping = (original, dcopy(s))
                         itspace_mapper.setdefault(itspace, (loops, []))[1].append(mapping)
-                        mapped.add(s.offset)
-                # Track the non zero-valued regions
-                nz = ((1, buf_rank),) + tuple((j-i, i+p_offset) for i, j in itspace)
-                self.nz_syms.setdefault(buf_name, []).append(nz)
-                # Prepare for the next buffer dimension
+                        mapped.add(s.urepr)
                 buf_rank += 1
             if buf_rank == 0:
                 continue
             buf_pad = (buf_rank,) + p_rank
             buf_rank = (buf_rank,) + decl.sym.rank
             init = ArrayInit(np.ndarray(shape=(1,)*len(buf_rank), buffer=np.array(0.0)))
-            buffer = Decl(decl.typ, Symbol(buf_name, buf_rank), init, attributes=[align])
+            buffer = Decl(decl.typ, Symbol(buf_name, buf_rank), init)
             buffer.scope = BUFFER
             buffer.pad(buf_pad)
             self.header.children.insert(0, buffer)
@@ -276,8 +268,8 @@ class LoopVectorizer(object):
                     # not contain any meaningful values, then we can safely write
                     # to it. This is an optimization to avoid increments when not
                     # necessarily required
-                    could_incr = WRITE in decl.pragma and len(itspace_mapper) == 1
-                    op = Assign if could_incr else last[1]
+                    can_write = WRITE in decl.pragma and len(itspace_mapper) == 1
+                    op = Assign if can_write else last[1]
                     stmts = [op(s, b) for s, b in mapper]
                     copy_back = ItSpace(mode=2).to_for(loops, stmts=stmts)
                     if to_invert:
@@ -292,13 +284,20 @@ class LoopVectorizer(object):
     def _align_data(self, buffer, p_dim):
         """Apply data alignment. This boils down to:
 
+            * Decorate declarations with qualifiers for data alignment
             * Round up the bounds (i.e. /start/ and /end/ points) of loops such
             that all memory accesses get aligned to the vector length. Several
             checks ensure the correctness of the transformation.
-            * Decorate declarations with qualifiers for data alignment
         """
         vector_length = system.isa["dp_reg"]
+        align = system.compiler['align'](system.isa['alignment'])
 
+        # Array alignment
+        for decl in self.decls.values():
+            if decl.sym.rank and decl.scope == LOCAL:
+                decl.attr.append(align)
+
+        # Loop bounds adjustment
         for l in inner_loops(self.header):
             should_round, should_vectorize = True, True
             for stmt in l.body:
@@ -307,7 +306,7 @@ class LoopVectorizer(object):
                 sym_decl = self.decls.get(sym.symbol)
                 # Condition A: all lvalues must have the innermost loop as fastest
                 # varying dimension
-                if sym.rank and not sym.rank[p_dim] == l.dim:
+                if not sym.rank or not sym.rank[p_dim] == l.dim:
                     should_round = False
                     should_vectorize = False
                     break
@@ -318,19 +317,18 @@ class LoopVectorizer(object):
                     should_round = False
                     break
 
-                # Condition C: statements using offsets to write buffers should
-                # not be aligned
+                # Condition C: statements using offsets to write buffers cannot
+                # be aligned
                 if sym_decl and sym_decl.scope == BUFFER and sym.offset[p_dim][1] > 0:
                     should_round = False
                     break
 
             # Condition D: extra iterations induced by bounds and offset rounding
-            # should /not/ alter the result.
-            lvalues, aligned_l = {}, dcopy(l)
-            for stmt in aligned_l.body:
+            # must not alter the computation
+            lvalues, aligned = {}, dcopy(l)
+            for stmt in aligned.body:
                 sym = stmt.lvalue
                 expr = stmt.rvalue
-                lvalues[sym] = (0, 0, False)
                 symbols = [sym] + FindInstances(Symbol).visit(expr)[Symbol]
                 symbols = [s for s in symbols if any(r == l.dim for r in s.rank)]
                 for s in symbols:
@@ -363,26 +361,26 @@ class LoopVectorizer(object):
                         break
 
                     # It remains to check if the extra iterations would alter the
-                    # result because they would access non zero-valued entries
+                    # result by access non zero-valued entries
                     extra = range(start, offset) + range(offset + l.end + 1, end + 1)
                     for i in extra:
-                        # Declaration not padded to padded loop bounds
                         if i > decl.size[p_dim]:
                             should_round = False
                             break
                         if i >= decl.core[p_dim]:
                             # In the padded region, safe
                             continue
-                        # If /s/ is the buffer, need to access the actual dimension
+                        # If /s/ is the buffer, we need to access the actual dimension
                         # written by /stmt/
-                        nz = self.nz_syms.get(s.symbol, [tuple((r, 0) for r in decl.core)])
+                        nz = list(self.nz_syms.get(s.symbol,
+                                  [tuple((r, 0) for r in decl.core)]))
                         if buffer and s.symbol == buffer.sym.symbol:
                             for j in list(nz):
                                 buf_dim = j[0]
                                 if s.rank[0] not in range(buf_dim[1], buf_dim[0]+buf_dim[1]):
                                     nz.remove(j)
                         # Now we can finally check if the i-th extra iteration falls in a
-                        # zero-valued region (in case, we are happy and round), or not
+                        # zero-valued region (in which case we are happy) or not
                         if any(i in range(k, j + k) for j, k in [j[p_dim] for j in nz]):
                             should_round = False
                             break
@@ -392,30 +390,37 @@ class LoopVectorizer(object):
                     # Track the rounding in the lvalue and infer if the zero-valued
                     # region in /sym/ has now become a /non/ zero-valued region.
                     # Note: /sym/ is the first element in the /symbols/ list
-                    if s is sym:
+                    lvalues.setdefault(sym, [start, offset, False])
+                    if start < offset or \
+                            any(v[2] for k, v in lvalues.items() if k.urepr == s.urepr):
+                        lvalues[sym][2] = True
+                    #if s is sym:
                         # Assume there's no need to remove the non zero-valued region ...
-                        lvalues[s] = (start, offset, False)
-                    else:
-                        # ... and then, maybe, change it as the rvalue is examined: ...
-                        if start == offset and lvalues[sym][0] < lvalues[sym][1] or \
-                                any(v[2] for k, v in lvalues.items() if str(k) == str(s)):
+                    #    lvalues[sym] = (start, offset, False)
+                    #else:
+                    #    from IPython import embed; embed()
+                    #    # ... and then potentially change it as the rvalue is examined: ...
+                    #    if start == offset and lvalues[sym][0] < lvalues[sym][1] or \
+                    #            any(v[2] for k, v in lvalues.items() if k.urepr == s.urepr):
                             # ... this is the case if at least one symbol in the rvalue
                             # was not rounded while the lvalue was, /or/
                             # if at least one symbol in the rvalue appeared as an lvalue
                             # in a previoud /stmt/ and such lvalue was rounded down
-                            lvalues[sym] = lvalues[sym][:-1] + (True,)
+                    #        lvalues[sym] = lvalues[sym][:-1] + (True,)
 
             if should_round:
-                l.body = aligned_l.body
-                # Round up the end point
+                l.body = aligned.body
                 l.end = vect_roundup(l.end)
+
                 # It was safe to round an lvalue S, but now all subsequent
                 # accesses to the same symbol S /might/ have to be rounded too.
                 # This is the case /iff/:
+                #
                 # 1) in rounding, we are writing to the rounded region (e.g.,
                 # A[i+2] += B[i] ===> A[i] += B[i]: since B[i] wasn't rounded,
                 # it means that B[i] is != 0, so we are now writing to A[i],
                 # which was previously 0, instead of A[i+2]), /and/
+                #
                 # 2) the offset used by S', which is a later reference to S, falls
                 # in the rounded region (e.g., starting from the example above,
                 # if there's another line D[i] = A[i+2], then it must be D[i] = A[i],
@@ -423,6 +428,7 @@ class LoopVectorizer(object):
                 # how such an S' /cannot/ be an lvalue, since we have already
                 # enforced that rounding only happens over zero-valued regions.
                 # The first property is captured by /remove_nz/
+
                 for lvalue, (start, orig_ofs, remove_nz) in lvalues.items():
                     if not remove_nz:
                         # Property 1) above does not hold
@@ -442,6 +448,7 @@ class LoopVectorizer(object):
                                 ((size, offset-(orig_ofs-start)),)
                 if l.start % vector_length == 0 and l.size % vector_length == 0:
                     l.pragma.add(system.compiler["align_forloop"])
+
             # Enforce vectorization if loop size is a multiple of the vector length
             if should_vectorize and l.size % vector_length == 0:
                 l.pragma.add(system.compiler['force_simdization'])
@@ -468,7 +475,7 @@ class LoopVectorizer(object):
 
             # Adjust the instances
             for s in syms:
-                s.rank = reversed(s.rank)
+                s.rank = tuple(reversed(s.rank))
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar
