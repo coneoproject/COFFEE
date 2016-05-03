@@ -105,6 +105,11 @@ class Node(object):
             raise TypeError("Type '%s' cannot be used as Node pragma" % type(pragma))
 
     @property
+    def urepr(self):
+        """A unique representation for this node."""
+        return self.gencode()
+
+    @property
     def pragma(self):
         return self._pragma
 
@@ -166,7 +171,7 @@ class BinExpr(Expr):
     def gencode(self, not_scope=True, parent=None):
         children = [n.gencode(not_scope, self) for n in self.children]
         subtree = (" "+type(self).op+" ").join(children)
-        if parent and not isinstance(parent, (Par, self.__class__)):
+        if parent and not isinstance(parent, self.__class__):
             return wrap(subtree)
         return subtree
 
@@ -325,14 +330,6 @@ class SparseArrayInit(ArrayInit):
 
     def operands(self):
         return [self.values, self.precision, self.nonzero], {}
-
-
-class Par(UnaryExpr):
-
-    """Parenthesis object."""
-
-    def gencode(self, not_scope=True, parent=None):
-        return wrap(self.children[0].gencode(not_scope, self))
 
 
 class Sum(BinExpr):
@@ -596,8 +593,13 @@ class Assign(Statement, Writer):
         self.children[1] = val
 
     def gencode(self, not_scope=False):
-        return assign(self.children[0].gencode(),
-                      self.children[1].gencode()) + semicolon(not_scope)
+        prefix = ""
+        if self.pragma:
+            prefix = "\n".join(p for p in self.pragma) + "\n"
+        return prefix + \
+            assign(self.children[0].gencode(),
+                   self.children[1].gencode()) + \
+            semicolon(not_scope)
 
 
 class AugmentedAssign(Statement, Writer):
@@ -619,7 +621,10 @@ class AugmentedAssign(Statement, Writer):
 
     def gencode(self, not_scope=False):
         sym, exp = self.children
-        return "%s %s %s%s" % (sym.gencode(), type(self).op, exp.gencode(), semicolon(not_scope))
+        prefix = ""
+        if self.pragma:
+            prefix = "\n".join(p for p in self.pragma) + "\n"
+        return "%s%s %s %s%s" % (prefix, sym.gencode(), type(self).op, exp.gencode(), semicolon(not_scope))
 
 
 class Incr(AugmentedAssign):
@@ -642,7 +647,7 @@ class IDiv(AugmentedAssign):
     op = "/="
 
 
-class Decl(Statement):
+class Decl(Writer):
 
     """Declaration of a symbol.
 
@@ -654,13 +659,16 @@ class Decl(Statement):
 
         static const double FE0[3][3] __attribute__(align(32)) = {{...}};"""
 
-    def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None, pragma=None):
+    def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None,
+                 pointers=None, pragma=None):
         super(Decl, self).__init__(pragma=pragma)
         self.typ = typ
-        self.sym = as_symbol(sym)
+        sym = as_symbol(sym)
+        self.pointers = pointers or []
         self.qual = qualifiers or []
         self.attr = attributes or []
-        self.init = as_symbol(init) if init is not None else EmptyStatement()
+        init = as_symbol(init) if init is not None else EmptyStatement()
+        self.children = [sym, init]
         self._core = self.sym.rank
 
     def operands(self):
@@ -670,16 +678,28 @@ class Decl(Statement):
         self.sym.rank = rank
 
     @property
+    def sym(self):
+        return self.children[0]
+
+    @property
+    def init(self):
+        return self.children[1]
+
+    @init.setter
+    def init(self, val):
+        self.children[1] = val
+
+    @property
     def lvalue(self):
-        return self.sym
+        return self.children[0]
 
     @property
     def rvalue(self):
-        return self.init
+        return self.children[1]
 
     @rvalue.setter
     def rvalue(self, val):
-        self.init = val
+        self.children[1] = val
 
     @property
     def size(self):
@@ -727,17 +747,25 @@ class Decl(Statement):
         self._scope = val
 
     @property
+    def is_pointer_type(self):
+        return len(self.pointers) > 0
+
+    @property
     def nonzero(self):
         """Return the location of non-zero valued blocks, if any."""
         return self.init.nonzero if isinstance(self.init, SparseArrayInit) else ()
 
     def gencode(self, not_scope=False):
+        pointers = " " + " ".join(['*' + ' '.join(i) for i in self.pointers])
+        prefix = ""
+        if self.pragma:
+            prefix = "\n".join(p for p in self.pragma) + "\n"
         if isinstance(self.init, EmptyStatement):
-            return decl(spacer(self.qual), self.typ, self.sym.gencode(),
-                        spacer(self.attr)) + semicolon(not_scope)
+            return prefix + decl(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
+                                 spacer(self.attr)) + semicolon(not_scope)
         else:
-            return decl_init(spacer(self.qual), self.typ, self.sym.gencode(),
-                             spacer(self.attr), self.init.gencode(parent=self)) +\
+            return prefix + decl_init(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
+                                      spacer(self.attr), self.init.gencode(parent=self)) + \
                 semicolon(not_scope)
 
 
@@ -830,6 +858,10 @@ class For(Statement):
     @property
     def body(self):
         return self.children[0].children
+
+    @property
+    def is_linear(self):
+        return '#pragma coffee linear loop' in self.pragma
 
     @body.setter
     def body(self, new_body):
@@ -1111,12 +1143,12 @@ class Determinant3x3(Determinant):
     def gencode(self, scope=False):
         sym, dim, lda = self.children
         v = sym.gencode()
-        a0 = Par(Sub(Prod(Symbol(v, (1, 1)), Symbol(v, (2, 2))),
-                     Prod(Symbol(v, (1, 2)), Symbol(v, (2, 1)))))
-        a1 = Par(Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 2))),
-                     Prod(Symbol(v, (1, 2)), Symbol(v, (2, 0)))))
-        a2 = Par(Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 1))),
-                     Prod(Symbol(v, (1, 1)), Symbol(v, (2, 0)))))
+        a0 = Sub(Prod(Symbol(v, (1, 1)), Symbol(v, (2, 2))),
+                 Prod(Symbol(v, (1, 2)), Symbol(v, (2, 1))))
+        a1 = Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 2))),
+                 Prod(Symbol(v, (1, 2)), Symbol(v, (2, 0))))
+        a2 = Sub(Prod(Symbol(v, (1, 0)), Symbol(v, (2, 1))),
+                 Prod(Symbol(v, (1, 1)), Symbol(v, (2, 0))))
         return Sum(Sub(Prod(Symbol(v, (0, 0)), a0),
                        Prod(Symbol(v, (0, 1)), a1)),
                    Prod(Symbol(v, (0, 2)), a2))

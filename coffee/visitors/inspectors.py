@@ -1,6 +1,6 @@
 from __future__ import absolute_import
 from coffee.visitor import Visitor
-from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol
+from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol, EmptyStatement
 from collections import defaultdict, OrderedDict, Counter
 import itertools
 
@@ -254,6 +254,9 @@ class FindCoffeeExpressions(Visitor):
 
     """
 
+    def extract_linear_dimensions(self, symbol):
+        return tuple(i for i in symbol.rank if isinstance(i, str) and not i.isdigit())
+
     def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
@@ -273,7 +276,7 @@ class FindCoffeeExpressions(Visitor):
                 continue
             if opts[1] == "coffee" and opts[2] == "expression":
                 # (parent, loop-nest, rank)
-                ret[o] = (parent, None, o.children[0].rank)
+                ret[o] = (parent, None, self.extract_linear_dimensions(o.lvalue))
                 return ret
         return ret
 
@@ -397,9 +400,10 @@ class SymbolDependencies(Visitor):
     visit_EmptyStatement = visit_object
 
     def visit_Decl(self, o, ret=None, *args, **kwargs):
+        write = kwargs.pop("write")
+        ret = self.visit(o.sym, ret=ret, write=True, *args, **kwargs)
         # Declaration init could have symbol access
-        for op in [o.sym, o.init]:
-            ret = self.visit(op, ret=ret, *args, **kwargs)
+        ret = self.visit(o.init, ret=ret, write=write, *args, **kwargs)
         return ret
 
     visit_FunCall = visit_Node
@@ -491,7 +495,14 @@ class SymbolModes(Visitor):
     # Don't do anything with declarations.  If you want lvalues to get
     # a WRITE unless uninitialised, then custom visitor must be
     # written.
-    visit_Decl = visit_object
+    def visit_Decl(self, o, ret=None, parent=None, *args, **kwargs):
+        if type(o.rvalue) is EmptyStatement:
+            mode = READ
+        else:
+            ret = self.visit(o.rvalue, ret=ret, parent=o)
+            mode = WRITE
+        ret = self.visit(o.lvalue, ret=ret, parent=o, mode=mode)
+        return ret
 
     def visit_Writer(self, o, ret=None, *args, **kwargs):
         # lvalues have access mode WRITE

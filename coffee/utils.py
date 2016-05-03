@@ -31,106 +31,16 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Utility functions for the transformation of ASTs."""
+"""Utility functions for the inspection, transformation, and creation of ASTs."""
 
 from copy import deepcopy as dcopy
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+import sys
+
+import networkx as nx
 
 from base import *
 from coffee.visitors.inspectors import *
-
-
-def unroll_factors(loops):
-    """Return a dictionary, in which each entry maps an iteration space,
-    identified by the iteration variable of a loop, to a suitable unroll factor.
-    Heuristically, 1) inner loops are not unrolled to give the backend compiler
-    a chance of auto-vectorizing them; 2) loops sizes must be a multiple of the
-    unroll factor.
-
-    :param loops: list of for loops for which a suitable unroll factor has to be
-                  determined.
-    """
-
-    v = inspectors.DetermineUnrollFactors()
-
-    unrolls = [v.visit(l, ret=v.default_retval()) for l in loops]
-    ret = unrolls[0]
-    ret.update(d for d in unrolls[1:])
-    return ret
-
-
-def postprocess(node):
-    """Rearrange the Nodes in the AST rooted in ``node`` to improve the code quality
-    when unparsing the tree."""
-
-    class Process:
-        start = None
-        end = None
-        decls = {}
-        blockable = []
-        _processed = []
-
-        @staticmethod
-        def mark(node):
-            if Process.start is not None:
-                Process._processed.append((node, Process.start, Process.end,
-                                           Process.decls, Process.blockable))
-            Process.start = None
-            Process.end = None
-            Process.decls = {}
-            Process.blockable = []
-
-    def init_decl(node):
-        lhs, rhs = node.children
-        decl = Process.decls.get(lhs.symbol)
-        if decl and (not decl.init or isinstance(decl.init, EmptyStatement)):
-            decl.init = rhs
-            Process.blockable.remove(decl)
-            return decl
-        else:
-            return node
-
-    def update(node, parent):
-        index = parent.children.index(node)
-        if Process.start is None:
-            Process.start = index
-        Process.end = index
-
-    def make_blocks():
-        for node, start, end, _, blockable in reversed(Process._processed):
-            node.children[start:end+1] = [Block(blockable, open_scope=False)]
-
-    def _postprocess(node, parent):
-        if isinstance(node, FlatBlock) and str(node).isspace():
-            update(node, parent)
-        elif isinstance(node, (For, If, Switch, FunCall, FunDecl, FlatBlock, LinAlg,
-                               Block, Root)):
-            Process.mark(parent)
-            for n in node.children:
-                _postprocess(n, node)
-            Process.mark(node)
-        elif isinstance(node, Decl):
-            if not (node.init and not isinstance(node.init, EmptyStatement)) and \
-                    not node.sym.rank:
-                Process.decls[node.sym.symbol] = node
-            update(node, parent)
-            Process.blockable.append(node)
-        elif isinstance(node, AugmentedAssign):
-            update(node, parent)
-            Process.blockable.append(node)
-        elif isinstance(node, Assign):
-            update(node, parent)
-            Process.blockable.append(init_decl(node))
-
-    _postprocess(node, None)
-    make_blocks()
-
-
-def uniquify(exprs):
-    """Iterate over ``exprs`` and return a list of expressions in which duplicates
-    have been discarded. This function considers two expressions identical if they
-    have the same string representation."""
-    return dict([(str(e), e) for e in exprs]).values()
 
 
 #####################################
@@ -413,19 +323,51 @@ def visit(node, parent=None, info_items=None):
     return info
 
 
+def ldanalysis(node, key='default', value='default'):
+    """Perform loop dependence analysis in the AST rooted in ``node``. Return
+    a dictionary mapping symbols to loops they depend on.
+
+    :arg key: any value in ['default', 'urepr', 'symbol']. With 'urepr' and
+        'symbol' different instances of the same Symbol are represented by
+        a single entry in the returned dictionary.
+    :arg value: any value in ['default', 'dim']. If 'dim' is specified, then
+        loop iteration dimensions are used in place of the actual object.
+    """
+
+    if key == 'default':
+        gen_key = lambda s: s
+    elif key == 'urepr':
+        gen_key = lambda s: s.urepr
+    elif key == 'symbol':
+        gen_key = lambda s: s.symbol
+    else:
+        raise RuntimeError("Illegal key=%s for loop dependence analysis" % key)
+
+    if value == 'default':
+        gen_value = lambda d: set(d)
+    elif value == 'dim':
+        gen_value = lambda d: {l.dim for l in d}
+    else:
+        raise RuntimeError("Illegal value=%s for loop dependence analysis" % value)
+
+    symbols_dep = visit(node, info_items=['symbols_dep'])['symbols_dep']
+    lda = defaultdict(set)
+    for s, dep in symbols_dep.items():
+        lda[gen_key(s)] |= gen_value(dep)
+
+    return lda
+
+
 def explore_operator(node):
     """Return a list of the operands composing the operation whose root is
     ``node``."""
 
     def _explore_operator(node, operator, children):
         for n in node.children:
-            if n.__class__ == operator or isinstance(n, Par):
+            if n.__class__ == operator:
                 _explore_operator(n, operator, children)
             else:
                 children.append((n, node))
-
-    while isinstance(node, Par):
-        node = node.child
 
     children = []
     _explore_operator(node, node.__class__, children)
@@ -442,6 +384,32 @@ def is_perfect_loop(loop):
     """Return True if ``loop`` is part of a perfect loop nest, False otherwise."""
 
     return CheckPerfectLoop().visit(loop)
+
+
+def in_written(node, key='default'):
+    """Return a list of symbols written in ``node``.
+
+    :arg key: any value in ['default', 'urepr', 'symbol']. With 'urepr' and
+        'symbol' different instances of the same Symbol are represented by
+        a single entry in the returned dictionary.
+    """
+
+    if key == 'default':
+        gen_key = lambda s: s
+    elif key == 'urepr':
+        gen_key = lambda s: s.urepr
+    elif key == 'symbol':
+        gen_key = lambda s: s.symbol
+    else:
+        raise RuntimeError("Illegal key=%s for loop dependence analysis" % key)
+
+    found = []
+    writers = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
+    for type, stmts in writers.items():
+        for stmt in stmts:
+            found.append(gen_key(stmt.lvalue))
+
+    return found
 
 
 def count(node, mode='urepr', read_only=False):
@@ -488,8 +456,8 @@ def check_type(stmt, decls):
                   the name of a symbol) to Decl nodes
     """
     v = SymbolReferences()
-    lhs_symbol = v.visit(stmt.children[0], parent=stmt, ret=v.default_retval()).keys()[0]
-    rhs_symbols = v.visit(stmt.children[1], parent=stmt, ret=v.default_retval()).keys()
+    lhs_symbol = v.visit(stmt.lvalue, parent=stmt, ret=v.default_retval()).keys()[0]
+    rhs_symbols = v.visit(stmt.rvalue, parent=stmt, ret=v.default_retval()).keys()
 
     lhs_decl = decls[lhs_symbol]
     rhs_decls = [decls[s] for s in rhs_symbols if s in decls]
@@ -523,7 +491,7 @@ def find_expression(node, type=None, dims=None, in_syms=None, out_syms=None):
 #######################################################################
 
 
-class ItSpace():
+class ItSpace(object):
 
     """A collection of routines to manipulate iteration spaces."""
 
@@ -624,6 +592,185 @@ class ItSpace():
         return loops
 
 
+###############################################################
+# Utilities for tracking the global impact of transformations #
+###############################################################
+
+
+class StmtTracker(OrderedDict):
+
+    """Track the location of generic statements in an abstract syntax tree.
+
+    Each key in the dictionary is a string representing a symbol. As such,
+    StmtTracker can be used only in SSA scopes. Each entry in the dictionary
+    is a 4-tuple containing information about the symbol: ::
+
+        (statement, declaration, closest_for, place)
+
+    whose semantics is, respectively, as follows:
+
+        * The AST node whose ``str(lvalue)`` is used as dictionary key
+        * The AST node of the symbol declaration
+        * The AST node of the closest loop enclosing the statement
+        * The parent of the closest loop
+    """
+
+    class StmtInfo(object):
+        """Simple container class defining ``StmtTracker`` values."""
+
+        INFO = ['stmt', 'decl', 'loop', 'place']
+
+        def __init__(self, **kwargs):
+            for k, v in kwargs.iteritems():
+                assert(k in self.__class__.INFO)
+                setattr(self, k, v)
+
+    def __init__(self):
+        super(StmtTracker, self).__init__()
+        self.byvalue = OrderedDict()
+
+    def __setitem__(self, key, value):
+        if not isinstance(value, self.StmtInfo):
+            if not isinstance(value, tuple):
+                raise RuntimeError("StmtTracker accepts tuple or StmtInfo objects")
+            assert len(self.StmtInfo.INFO) == len(value)
+            value = self.StmtInfo(**dict(zip(self.StmtInfo.INFO, value)))
+        self.byvalue[value.stmt.rvalue.urepr] = key
+        return OrderedDict.__setitem__(self, key, value)
+
+    def update_stmt(self, sym, **kwargs):
+        """Given the symbol ``sym``, it updates information related to it as
+        specified in ``kwargs``. If ``sym`` is not present, return ``None``.
+        ``kwargs`` is based on the following special keys:
+
+            * "stmt": change the statement
+            * "decl": change the declaration
+            * "loop": change the closest loop
+            * "place": change the parent the closest loop
+        """
+        if sym not in self:
+            return None
+        for k, v in kwargs.iteritems():
+            assert(k in self.StmtInfo.INFO)
+            setattr(self[sym], k, v)
+
+    def update_loop(self, loop_a, loop_b):
+        """Replace all occurrences of ``loop_a`` with ``loop_b`` in all entries."""
+
+        for sym, sym_info in self.items():
+            if sym_info.loop == loop_a:
+                self.update_stmt(sym, **{'loop': loop_b})
+
+    def get_symbol(self, value):
+        """Return the key associated to the provided ``value``, or None if not
+        present."""
+        return self.byvalue.get(value.urepr)
+
+    @property
+    def stmt(self, sym):
+        return self[sym].stmt if self.get(sym) else None
+
+    @property
+    def decl(self, sym):
+        return self[sym].decl if self.get(sym) else None
+
+    @property
+    def loop(self, sym):
+        return self[sym].loop if self.get(sym) else None
+
+    @property
+    def place(self, sym):
+        return self[sym].place if self.get(sym) else None
+
+    @property
+    def all_stmts(self):
+        return set((stmt_info.stmt for stmt_info in self.values() if stmt_info.stmt))
+
+    @property
+    def all_places(self):
+        return set((stmt_info.place for stmt_info in self.values() if stmt_info.place))
+
+    @property
+    def all_loops(self):
+        return set((stmt_info.loop for stmt_info in self.values() if stmt_info.loop))
+
+
+class ExpressionGraph(object):
+
+    """Track read-after-write dependencies between symbols."""
+
+    def __init__(self, node):
+        """Initialize the ExpressionGraph.
+
+        :param node: root of the AST visited to initialize the ExpressionGraph.
+        """
+        self.deps = nx.DiGraph()
+        writes = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
+        for type, nodes in writes.items():
+            for n in nodes:
+                lvalue = n.lvalue
+                rvalue = n.rvalue
+                if isinstance(rvalue, EmptyStatement):
+                    continue
+                self.add_dependency(lvalue, rvalue)
+
+    def add_dependency(self, sym, expr):
+        """Add dependency between ``sym`` and symbols appearing in ``expr``."""
+        retval = FindInstances.default_retval()
+        expr_symbols = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
+        for es in expr_symbols:
+            self.deps.add_edge(sym.symbol, es.symbol)
+
+    def is_read(self, expr, target_sym=None):
+        """Return True if any symbols in ``expr`` is read by ``target_sym``,
+        False otherwise. If ``target_sym`` is None, Return True if any symbols
+        in ``expr`` are read by at least one symbol, False otherwise."""
+        retval = FindInstances.default_retval()
+        input_syms = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
+        for s in input_syms:
+            if s.symbol not in self.deps:
+                continue
+            elif not target_sym:
+                if zip(*self.deps.in_edges(s.symbol)):
+                    return True
+            elif nx.has_path(self.deps, target_sym.symbol, s.symbol):
+                return True
+        return False
+
+    def is_written(self, expr, target_sym=None):
+        """Return True if any symbols in ``expr`` is written by ``target_sym``,
+        False otherwise. If ``target_sym`` is None, Return True if any symbols
+        in ``expr`` are written by at least one symbol, False otherwise."""
+        retval = FindInstances.default_retval()
+        input_syms = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
+        for s in input_syms:
+            if s.symbol not in self.deps:
+                continue
+            elif not target_sym:
+                if zip(*self.deps.out_edges(s.symbol)):
+                    return True
+            elif nx.has_path(self.deps, s.symbol, target_sym.symbol):
+                return True
+        return False
+
+    def shares(self, symbols):
+        """Return an iterator of tuples, each tuple being a group of symbols
+        identifiers sharing the same reads."""
+        groups = set()
+        for i in [set(self.reads(s)) for s in symbols]:
+            group = tuple(j for j in symbols if i.intersection(set(self.reads(j))))
+            groups.add(group)
+        return list(groups)
+
+    def readers(self, sym):
+        """Return the list of symbol identifiers that read from ``sym``."""
+        return [i for i, j in self.deps.in_edges(sym)]
+
+    def reads(self, sym):
+        """Return the list of symbol identifiers that ``sym`` reads from."""
+        return [j for i, j in self.deps.out_edges(sym)]
+
+
 #############################
 # Generic utility functions #
 #############################
@@ -644,3 +791,91 @@ def insert_at_elem(_list, elem, new_elem, ofs=0):
     new_elem = [new_elem] if not isinstance(new_elem, list) else new_elem
     for e in reversed(new_elem):
         _list.insert(ofs, e)
+
+
+def uniquify(exprs):
+    """Iterate over ``exprs`` and return a list of expressions in which duplicates
+    have been discarded. This function considers two expressions identical if they
+    have the same string representation."""
+    return dict([(str(e), e) for e in exprs]).values()
+
+
+def postprocess(node):
+    """Rearrange the Nodes in the AST rooted in ``node`` to improve the code quality
+    when unparsing the tree."""
+
+    class Process(object):
+        start = None
+        end = None
+        decls = {}
+        blockable = []
+        _processed = []
+
+        @staticmethod
+        def mark(node):
+            if Process.start is not None:
+                Process._processed.append((node, Process.start, Process.end,
+                                           Process.decls, Process.blockable))
+            Process.start = None
+            Process.end = None
+            Process.decls = {}
+            Process.blockable = []
+
+    def init_decl(node):
+        lhs, rhs = node.children
+        decl = Process.decls.get(lhs.symbol)
+        if decl and (not decl.init or isinstance(decl.init, EmptyStatement)):
+            decl.init = rhs
+            Process.blockable.remove(decl)
+            return decl
+        else:
+            return node
+
+    def update(node, parent):
+        index = parent.children.index(node)
+        if Process.start is None:
+            Process.start = index
+        Process.end = index
+
+    def make_blocks():
+        for node, start, end, _, blockable in reversed(Process._processed):
+            node.children[start:end+1] = [Block(blockable, open_scope=False)]
+
+    def _postprocess(node, parent):
+        if isinstance(node, FlatBlock) and str(node).isspace():
+            update(node, parent)
+        elif isinstance(node, (For, If, Switch, FunCall, FunDecl, FlatBlock, LinAlg,
+                               Block, Root)):
+            Process.mark(parent)
+            for n in node.children:
+                _postprocess(n, node)
+            Process.mark(node)
+        elif isinstance(node, Decl):
+            if not (node.init and not isinstance(node.init, EmptyStatement)) and \
+                    not node.sym.rank:
+                Process.decls[node.sym.symbol] = node
+            update(node, parent)
+            Process.blockable.append(node)
+        elif isinstance(node, AugmentedAssign):
+            update(node, parent)
+            Process.blockable.append(node)
+        elif isinstance(node, Assign):
+            update(node, parent)
+            Process.blockable.append(init_decl(node))
+
+    _postprocess(node, None)
+    make_blocks()
+
+
+# Colors if the terminal supports it (disabled e.g. when piped to file)
+# This code is partly extracted from ``https://bitbucket.org/fenics-project/ufl``
+if sys.stdout.isatty() and sys.stderr.isatty():
+    RED = "\033[1;37;31m%s\033[0m"
+    BLUE = "\033[1;37;34m%s\033[0m"
+    GREEN = "\033[1;37;32m%s\033[0m"
+    HEADER = "\033[95m%s\033[0m"
+else:
+    RED = "%s"
+    BLUE = "%s"
+    GREEN = "%s"
+    HEADER = "%s"

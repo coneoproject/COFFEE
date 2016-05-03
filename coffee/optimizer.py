@@ -41,12 +41,9 @@ from math import factorial as fact
 import plan
 from base import *
 from utils import *
-from expression import MetaExpr
-from loop_scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
-from linear_algebra import LinearAlgebra
+from scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from rewriter import ExpressionRewriter
-from ast_analyzer import ExpressionGraph, StmtTracker
-from coffee.visitors import MaxLoopDepth, FindInstances, ProjectExpansion
+from coffee.visitors import FindInstances, ProjectExpansion
 
 
 class LoopOptimizer(object):
@@ -55,7 +52,7 @@ class LoopOptimizer(object):
         """Initialize the LoopOptimizer.
 
         :param loop: root AST node of a loop nest
-        :param header: parent AST node of ``loop``
+        :param header: the kernel's top node
         :param decls: list of Decl objects accessible in ``loop``
         :param exprs: list of expressions to be optimized
         """
@@ -72,36 +69,20 @@ class LoopOptimizer(object):
         self.hoisted = StmtTracker()
 
     def rewrite(self, mode):
-        """Rewrite a compute-intensive expression found in the loop nest so as to
-        minimize floating point operations and to relieve register pressure.
-        This involves several possible transformations:
+        """Rewrite all compute-intensive expressions detected in the loop nest to
+        minimize the number of floating point operations performed.
 
-        1. Generalized loop-invariant code motion
-        2. Factorization of common loop-dependent terms
-        3. Expansion of constants over loop-dependent terms
+        :param mode: Any value in (0, 1, 2, 3, 4). Each ``mode`` corresponds to a
+            different expression rewriting strategy.
 
-        :param mode: Any value in (0, 1, 2, 3). Each ``mode`` corresponds to a
-            different expression rewriting strategy. A strategy impacts the aspects:
-            amount of floating point calculations required to evaluate the expression;
-            amount of temporary storage introduced; accuracy of the result.
-
-            * mode == 0: No rewriting is performed
-            * mode == 1: Apply one pass: generalized loop-invariant code motion.
-                Safest: accuracy not affected
-            * mode == 2: Apply four passes: generalized loop-invariant code motion;
+            * mode == 0: no rewriting is performed.
+            * mode == 1: generalized loop-invariant code motion.
+            * mode == 2: apply four passes: generalized loop-invariant code motion;
                 expansion of inner-loop dependent expressions; factorization of
                 inner-loop dependent terms; generalized loop-invariant code motion.
-                Factorization may affect accuracy. Improves performance while trying to
-                minimize temporary storage
-            * mode == 3: Apply nine passes: Expansion of inner-loops dependent terms.
-                Factorization of inner-loops dependent terms; generalized loop-invariant
-                code motion of outer-loop dependent terms. Factorization of constants.
-                Reassociation, followed by 'aggressive' generalized loop-invariant code
-                motion (in which n-rank temporary arrays can be allocated to host
-                expressions independent of more than one loop). Simplification is the
-                key pass: it tries to remove reduction loops and precompute constant
-                expressions. Finally, two last sweeps of factorization and code motion
-                are applied.
+            * mode == 3: apply multiple passes; aims at pre-evaluating sub-expressions
+                that fully depend on reduction loops.
+            * mode == 4: rewrite an expression based on its sharing graph
         """
         ExpressionRewriter.reset()
 
@@ -124,55 +105,34 @@ class LoopOptimizer(object):
 
             if expr_info.mode == 1:
                 if expr_info.dimension in [0, 1]:
-                    ew.licm(only_outdomain=True)
+                    ew.licm(mode='only_outlinear')
                 else:
                     ew.licm()
 
             elif expr_info.mode == 2:
-                if expr_info.dimension == 0:
-                    ew.licm(only_outdomain=True)
-                elif expr_info.dimension == 1:
-                    ew.licm(only_outdomain=True)
-                    ew.expand(mode='domain')
-                    ew.factorize(mode='domain')
-                    ew.licm(only_outdomain=True)
-                else:
-                    ew.licm()
-                    ew.expand()
-                    ew.factorize()
-                    ew.licm()
+                ew.unpickCSE()
+                if expr_info.dimension > 0:
+                    ew.replacediv()
+                    ew.SGrewrite()
 
             elif expr_info.mode == 3:
                 ew.expand(mode='all')
                 ew.factorize(mode='all')
-                ew.licm(only_const=True)
+                ew.licm(mode='only_const')
                 ew.factorize(mode='constants')
-                ew.licm(only_domain=True)
+                ew.licm(mode='aggressive')
                 ew.preevaluate()
-                ew.factorize(mode='domain')
-                ew.licm(only_const=True)
+                ew.factorize(mode='linear')
+                ew.licm(mode='only_const')
 
             elif expr_info.mode == 4:
                 ew.replacediv()
-                ew.licm(only_outdomain=True)
-                ew.expand(mode='domain')
-                ew.factorize(mode='domain')
-                ew.licm(only_outdomain=True)
-                ew.licm(only_const=True)
-                for i in range(1, expr_info.dimension):
-                    ew.factorize()
-                    ew.licm()
-
-            elif expr_info.mode == 5:
-                ew.replacediv()
-                ew.expand(mode='all')
-                ew.factorize(mode='domain')
-                ew.licm(only_const=True)
-                ew.factorize(mode='domain')
-                ew.licm(only_const=True)
-                for i in range(1, expr_info.dimension):
-                    ew.factorize()
-                    ew.licm()
+                ew.factorize()
+                ew.licm(mode='only_outlinear')
+                if expr_info.dimension > 0:
+                    ew.licm(mode='only_linear', iterative=False, max_sharing=True)
+                    ew.SGrewrite()
+                    ew.expand()
 
         # Try merging the loops created by expression rewriting
         merged_loops = SSALoopMerger(self.expr_graph).merge(self.header)
@@ -187,12 +147,8 @@ class LoopOptimizer(object):
                         expr_info._loops_info[-1] = (merged_in, expr_info.loops_parents[-1])
                         expr_info._parent = merged_in.children[0]
 
-        # Reduce memory pressure by rearranging operations ...
+        # Reduce memory pressure by avoiding useless temporaries
         self._min_temporaries()
-        # ... plus, at max rewrite level, apply rewriting to hoisted subexprs too ...
-        if mode == 'auto':
-            self._rewrite_hoisted()
-        # ... which in turn require updating the expression graph
         self.expr_graph = ExpressionGraph(self.header)
 
         # Handle the effects, at the C-level, of the AST transformation
@@ -203,9 +159,8 @@ class LoopOptimizer(object):
         avoid evaluation of arithmetic operations involving zero-valued blocks
         in statically initialized arrays."""
 
-        if any([d.nonzero for d in self.decls.values()]):
-            zls = ZeroRemover(self.exprs, self.decls, self.hoisted)
-            self.nz_syms = zls.reschedule(self.header)
+        zls = ZeroRemover(self.exprs, self.decls, self.hoisted, self.expr_graph)
+        self.nz_syms = zls.reschedule(self.header)
 
     def precompute(self, mode='perfect'):
         """Precompute statements out of ``self.loop``. This is achieved through
@@ -292,7 +247,7 @@ class LoopOptimizer(object):
         # Visit the AST and perform the precomputation
         to_remove = []
         for n in self.loop.body:
-            if n in flatten(self.expr_domain_loops):
+            if n in flatten(self.expr_linear_loops):
                 break
             elif n not in no_precompute:
                 _precompute(n, precomputed_block)
@@ -454,14 +409,14 @@ class LoopOptimizer(object):
 
         # 2) Will rewrite mode=3 be cheaper than rewrite mode=2?
         def find_save(target_expr, expr_info):
-            save_factor = [l.size for l in expr_info.out_domain_loops] or [1]
+            save_factor = [l.size for l in expr_info.out_linear_loops] or [1]
             save_factor = reduce(operator.mul, save_factor)
             # The save factor should be multiplied by the number of terms
             # that will /not/ be pre-evaluated. To obtain this number, we
             # can exploit the linearity of the expression in the terms
-            # depending on the domain loops.
+            # depending on the linear loops.
             syms = FindInstances(Symbol).visit(target_expr)[Symbol]
-            inner = lambda s: any(r == expr_info.domain_dims[-1] for r in s.rank)
+            inner = lambda s: any(r == expr_info.linear_dims[-1] for r in s.rank)
             nterms = len(set(s.symbol for s in syms if inner(s)))
             save = nterms * save_factor
             return save_factor, save
@@ -475,8 +430,8 @@ class LoopOptimizer(object):
             # Divide /expr/ into subexpressions, each subexpression affected
             # differently by injection
             if i_syms:
-                dissected = find_expression(expr, Prod, expr_info.domain_dims, i_syms)
-                leftover = find_expression(expr, dims=expr_info.domain_dims, out_syms=i_syms)
+                dissected = find_expression(expr, Prod, expr_info.linear_dims, i_syms)
+                leftover = find_expression(expr, dims=expr_info.linear_dims, out_syms=i_syms)
                 leftover = {(): list(flatten(leftover.values()))}
                 dissected = dict(dissected.items() + leftover.items())
             else:
@@ -524,15 +479,15 @@ class LoopOptimizer(object):
                     fake_parent = expr_info.parent.children
                     fake_parent[fake_parent.index(stmt)] = fake_stmt
                     ew = ExpressionRewriter(fake_stmt, expr_info, self.decls)
-                    ew.expand(mode='all').factorize(mode='all').factorize(mode='domain')
-                    nterms = ew.licm(look_ahead=True, only_domain=True)
+                    ew.expand(mode='all').factorize(mode='all').factorize(mode='linear')
+                    nterms = ew.licm(mode='aggressive', look_ahead=True)
                     nterms = len(uniquify(nterms[expr_info.dims])) or 1
                     fake_parent[fake_parent.index(fake_stmt)] = stmt
                     cost = nterms * increase_factor
 
                     # Pre-evaluation will also increase the working set size by
                     # /cost/ * /sizeof(term)/.
-                    size = [l.size for l in expr_info.domain_loops]
+                    size = [l.size for l in expr_info.linear_loops]
                     size = reduce(operator.mul, size, 1)
                     storage_increase = cost * size * plan.arch[expr_info.type]
 
@@ -613,7 +568,7 @@ class LoopOptimizer(object):
 
         # 4) Split the expressions if injection has been performed
         for stmt, expr_info in self.exprs.items():
-            expr_info.mode = 2
+            expr_info.mode = 4
             inj_exprs = injected.get(stmt)
             if not inj_exprs:
                 continue
@@ -621,50 +576,7 @@ class LoopOptimizer(object):
             new_exprs = fissioner.fission(stmt, self.exprs.pop(stmt))
             self.exprs.update(new_exprs)
             for stmt, expr_info in new_exprs.items():
-                expr_info.mode = 3 if stmt in fissioner.matched else 2
-
-    def _rewrite_hoisted(self):
-        """Rewrite hoisted expressions."""
-
-        retval = FindLoopNests.default_retval()
-        nests = FindLoopNests().visit(self.header, parent=None, ret=retval)
-        hoisted_exprs = OrderedDict()
-
-        # First, need to create a /MetaExpr/ for each hoisted expression
-        type = self.exprs.values()[0].type
-        for s, hoisted in self.hoisted.items():
-            stmt, loop, place = hoisted.stmt, hoisted.loop, hoisted.place
-            if not loop and place == self.header:
-                # Outside of any loops, so ignoring it
-                continue
-            elif not loop:
-                # Need to find the loop (an outermost loop in a nest)
-                # within which the statement lives
-                for nest in nests:
-                    loops_info = [(l, p) for l, p in nest if stmt in l.body]
-                    if loops_info:
-                        break
-                domain = tuple(l.dim for l, p in loops_info)
-            else:
-                # Need to find the loop nest in which the statement lives
-                for nest in nests:
-                    if any(l == loop for l, p in nest):
-                        break
-                loops_info = nest
-                domain = tuple(l.dim for l, p in loops_info
-                               if l.dim in stmt.children[0].rank)
-            parent = loops_info[-1][0].children[0]
-            hoisted_exprs[stmt] = MetaExpr(type, parent, loops_info, domain)
-
-        # Now we do the usual: for each expression, we create an ExpressionRewriter
-        # and use it to manipulate the expression itself
-        for stmt, expr_info in hoisted_exprs.items():
-            ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
-                                    self.hoisted, self.expr_graph)
-            ew.expand(mode='domain', not_aggregate=True)
-            ew.factorize(mode='domain')
-            ew.licm(only_outdomain=True)
-            ew.factorize().factorize('constants')
+                expr_info.mode = 3 if stmt in fissioner.matched else 4
 
     def _recoil(self):
         """Increase the stack size if the kernel arrays exceed the stack limit
@@ -694,52 +606,15 @@ class LoopOptimizer(object):
         return [expr_info.loops for expr_info in self.exprs.values()]
 
     @property
-    def expr_domain_loops(self):
-        """Return ``[(loop1, loop2, ...), ...]``, where a tuple contains all
-        loops representing the domain of the expressions' output tensor."""
-        return [expr_info.domain_loops for expr_info in self.exprs.values()]
+    def expr_linear_loops(self):
+        """Return ``[(loop1, loop2, ...), ...]``, where each tuple contains all
+        linear loops enclosing expressions."""
+        return [expr_info.linear_loops for expr_info in self.exprs.values()]
 
 
 class CPULoopOptimizer(LoopOptimizer):
 
     """Loop optimizer for CPU architectures."""
-
-    def unroll(self, loop_uf):
-        """Unroll loops enclosing expressions as specified by ``loop_uf``.
-
-        :param loop_uf: dictionary from iteration spaces to unroll factors."""
-
-        def update_expr(node, var, factor):
-            """Add an offset ``factor`` to every iteration variable ``var`` in
-            ``node``."""
-            if isinstance(node, Symbol):
-                new_ofs = []
-                node.offset = node.offset or ((1, 0) for i in range(len(node.rank)))
-                for r, ofs in zip(node.rank, node.offset):
-                    new_ofs.append((ofs[0], ofs[1] + factor) if r == var else ofs)
-                node.offset = tuple(new_ofs)
-            else:
-                for n in node.children:
-                    update_expr(n, var, factor)
-
-        unrolled_loops = set()
-        for itspace, uf in loop_uf.items():
-            new_exprs = OrderedDict()
-            for stmt, expr_info in self.exprs.items():
-                loop = [l for l in expr_info.perfect_loops if l.dim == itspace]
-                if not loop:
-                    # Unroll only loops in a perfect loop nest
-                    continue
-                loop = loop[0]  # Only one loop possibly found
-                for i in range(uf-1):
-                    new_stmt = dcopy(stmt)
-                    update_expr(new_stmt, itspace, i+1)
-                    expr_info.parent.children.append(new_stmt)
-                    new_exprs.update({new_stmt: expr_info})
-                if loop not in unrolled_loops:
-                    loop.incr.children[1].symbol += uf-1
-                    unrolled_loops.add(loop)
-            self.exprs.update(new_exprs)
 
     def split(self, cut=1):
         """Split expressions into multiple chunks exploiting sum's associativity.
@@ -780,17 +655,6 @@ class CPULoopOptimizer(LoopOptimizer):
         for stmt, expr_info in self.exprs.items():
             new_exprs.update(elf.fission(stmt, expr_info))
         self.exprs = new_exprs
-
-    def blas(self, library):
-        """Convert an expression into sequences of calls to external dense linear
-        algebra libraries. Currently, MKL, ATLAS, and EIGEN are supported."""
-
-        # First, check that the loop nest has depth 3, otherwise it's useless
-        if MaxLoopDepth().visit(self.loop) != 3:
-            return
-
-        linear_algebra = LinearAlgebra(self.loop, self.header, self.kernel_decls)
-        return linear_algebra.transform(library)
 
 
 class GPULoopOptimizer(LoopOptimizer):

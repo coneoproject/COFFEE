@@ -44,6 +44,7 @@ from copy import deepcopy as dcopy
 from base import *
 from utils import *
 from expression import copy_metaexpr
+from rewriter import ExpressionRewriter
 from coffee.visitors import FindLoopNests
 
 
@@ -206,10 +207,10 @@ class ExpressionFissioner(LoopScheduler):
             * match: a list of subexpressions that should be cut from the input
                 expression. ``cut`` is ignored if ``match`` is provided.
             * loops: a value in ['all', 'expr', 'none']. 'all' means that an
-                expression is split, and its chunks are placed in separate loop
-                nests. 'expr' implies that the chunks share the outer loops of the
-                expression, particularly those not belonging to its domain. 'none'
-                means that all chunks are placed within the original loop nest
+                expression is split and its "chunks" are placed in separate loop
+                nests. 'expr' implies that the chunks are placed within the non
+                linear loops sorrounding the expression. 'none' means that all
+                chunks are simply placed within the orginal loop nest
             * perfect: if True, create perfect loop nests. This means that any
                 new loop nest in which a chunk is placed is purged from any extra
                 statement (apart, obviously, from the chunk itself)
@@ -226,7 +227,7 @@ class ExpressionFissioner(LoopScheduler):
         else:
             raise RuntimeError("Must specify a `cut` or a `match`.")
 
-    class Cutter():
+    class Cutter(object):
 
         def __init__(self, expr_fissioner):
             self.expr_fissioner = expr_fissioner
@@ -259,7 +260,7 @@ class ExpressionFissioner(LoopScheduler):
             if isinstance(node, (Symbol, FunCall)):
                 return 0
 
-            elif isinstance(node, (Par, Div)):
+            elif isinstance(node, Div):
                 return self._cut(node.children[0], node, side, topsum)
 
             elif isinstance(node, Prod):
@@ -332,9 +333,6 @@ class ExpressionFissioner(LoopScheduler):
 
             elif isinstance(node, (Symbol, FunCall)):
                 return None
-
-            elif isinstance(node, Par):
-                return self._cut(node.child, node, side, topsum)
 
             elif isinstance(node, Div):
                 return self._cut(node.left, node, side)
@@ -412,35 +410,35 @@ class ExpressionFissioner(LoopScheduler):
         if self.loops == 'none':
             return copy_metaexpr(expr_info)
 
-        # Handle the domain loops
-        domain_loops = ItSpace(mode=2).to_for(expr_info.domain_loops, stmts=[stmt])
-        domain_outerloop = domain_loops[0]
+        # Handle the linear loops
+        linear_loops = ItSpace(mode=2).to_for(expr_info.linear_loops, stmts=[stmt])
+        linear_outerloop = linear_loops[0]
 
-        # Handle the out-domain loops
-        if self.loops == 'all' and expr_info.out_domain_loops_info:
-            out_domain_loop, out_domain_loop_parent = expr_info.out_domain_loops_info[0]
-            index = out_domain_loop.body.index(expr_info.domain_loops[0])
-            out_domain_loop = dcopy(out_domain_loop)
+        # Handle the out-linear loops
+        if self.loops == 'all' and expr_info.out_linear_loops_info:
+            out_linear_loop, out_linear_loop_parent = expr_info.out_linear_loops_info[0]
+            index = out_linear_loop.body.index(expr_info.linear_loops[0])
+            out_linear_loop = dcopy(out_linear_loop)
             if self.perfect:
-                out_domain_loop.body[:] = [domain_outerloop]
+                out_linear_loop.body[:] = [linear_outerloop]
             else:
-                out_domain_loop.body[index] = domain_outerloop
-            out_domain_loops_info = ((out_domain_loop, out_domain_loop_parent),)
-            domain_outerloop_parent = out_domain_loop.children[0]
+                out_linear_loop.body[index] = linear_outerloop
+            out_linear_loops_info = ((out_linear_loop, out_linear_loop_parent),)
+            linear_outerloop_parent = out_linear_loop.children[0]
         else:
-            out_domain_loops_info = expr_info.out_domain_loops_info
-            domain_outerloop_parent = expr_info.domain_loops_parents[0]
+            out_linear_loops_info = expr_info.out_linear_loops_info
+            linear_outerloop_parent = expr_info.linear_loops_parents[0]
 
         # Build new loops info
-        finder, env = FindLoopNests(), {'node_parent': domain_outerloop_parent}
-        loops_info = out_domain_loops_info
-        loops_info += tuple(finder.visit(domain_outerloop, env=env)[0])
+        finder, env = FindLoopNests(), {'node_parent': linear_outerloop_parent}
+        loops_info = out_linear_loops_info
+        loops_info += tuple(finder.visit(linear_outerloop, env=env)[0])
 
         # Append the newly created loop nest
-        if self.loops == 'all' and expr_info.out_domain_loops_info:
-            expr_info.outermost_parent.children.append(out_domain_loop)
+        if self.loops == 'all' and expr_info.out_linear_loops_info:
+            expr_info.outermost_parent.children.append(out_linear_loop)
         else:
-            domain_outerloop_parent.children.append(domain_outerloop)
+            linear_outerloop_parent.children.append(linear_outerloop)
 
         # Finally, create and return the MetaExpr object
         parent = loops_info[-1][0].children[0]
@@ -490,16 +488,20 @@ class ZeroRemover(LoopScheduler):
     admitted.
     """
 
-    def __init__(self, exprs, decls, hoisted):
+    THRESHOLD = 1  # Only skip if there more than THRESHOLD consecutive zeros
+
+    def __init__(self, exprs, decls, hoisted, expr_graph):
         """Initialize the ZeroRemover.
 
         :param exprs: the expressions for which zero removal is performed.
         :param decls: lists of declarations visible to ``exprs``.
         :param hoisted: dictionary that tracks hoisted sub-expressions
+        :param expr_graph: expression graph that tracks symbol dependencies
         """
         self.exprs = exprs
         self.decls = decls
         self.hoisted = hoisted
+        self.expr_graph = expr_graph
 
     def _track_nz_expr(self, node, nz_syms, nest):
         """For the expression rooted in ``node``, return iteration space and
@@ -527,16 +529,14 @@ class ZeroRemover(LoopScheduler):
             def_itspace = [tuple((l.dim, (l.size, 0)) for l, p in nest)]
             nz_bounds = zip(*nz_syms.get(node.symbol, []))
             for i, (r, o, nz_bs) in enumerate(zip(node.rank, node.offset, nz_bounds)):
-                if o[0] != 1 or isinstance(o[1], str):
-                    # Cannot handle jumps nor non-integer offsets
+                if o[0] != 1 or isinstance(o[1], str) or isinstance(r, int):
+                    # Cannot handle jumps, non-integer offsets, or constant accesses
                     continue
                 try:
-                    # Let's see if I know the loop which defines the iteration
-                    # space of dimension /r/ ...
+                    # Am I tracking the loop with iteration variable == /r/ ?
                     loop = [l for l, p in nest if l.dim == r][0]
                 except:
-                    # ... whops! No, so I just assume it covers the entire
-                    # non zero-valued region
+                    # No, so I just assume it covers the entire non zero-valued region
                     itspace.append([(r, nz_b) for nz_b in nz_bs])
                     continue
                 # Now I can intersect the loop's iteration space with the non
@@ -554,7 +554,7 @@ class ZeroRemover(LoopScheduler):
             itspace = zip(*itspace) or def_itspace
             return itspace
 
-        elif isinstance(node, (Par, FunCall)):
+        elif isinstance(node, FunCall):
             return self._track_nz_expr(node.children[0], nz_syms, nest)
 
         else:
@@ -588,7 +588,7 @@ class ZeroRemover(LoopScheduler):
             itspace = list(set([tuple(i) for i in itspace]))
             return itspace
 
-    def _track_nz_blocks(self, node, nz_syms, nz_info, nest=None, parent=None):
+    def _track_nz_blocks(self, node, nz_syms, nz_info, nest=None, parent=None, candidates=None):
         """Track the propagation of zero-valued blocks in the AST rooted in ``node``
 
         ``nz_syms`` contains, for each known identifier, the ranges of
@@ -615,14 +615,16 @@ class ZeroRemover(LoopScheduler):
             ((<for i>, <for j>), root) -> {A: (i, (nz_along_i)), (j, (nz_along_j))}
 
         """
-        if isinstance(node, (Assign, Incr, Decr)):
+        if isinstance(node, Writer):
             sym, expr = node.children
 
-            # Note: outer, non-perfect loops are discarded for transformation
-            # safety, because splitting (which is a consequence of zero-removal)
-            # non-perfect loop nests is unsafe
+            # Outer, non-perfect loops are discarded for transformation safety
+            # as splitting (a consequence of zero-removal) non-perfect nests is unsafe
             nest = tuple([(l, p) for l, p in (nest or []) if is_perfect_loop(l)])
             if not nest:
+                return
+
+            if candidates and nest[-1][0] not in candidates:
                 return
 
             # Track the propagation of non zero-valued blocks: ...
@@ -632,7 +634,7 @@ class ZeroRemover(LoopScheduler):
                 # ... and then through the lvalue (merging overlaps)
                 nz_expr = tuple(dict(i).get(r) for r in sym.rank if not isinstance(r, int))
                 if any(j is None for j in nz_expr):
-                    return
+                    break
                 nz_node = list(nz_syms.setdefault(sym.symbol, [nz_expr]))
                 if not nz_expr:
                     continue
@@ -657,14 +659,15 @@ class ZeroRemover(LoopScheduler):
 
         elif isinstance(node, For):
             new_nest = (nest or []) + [(node, parent)]
-            self._track_nz_blocks(node.children[0], nz_syms, nz_info, new_nest, node)
+            self._track_nz_blocks(node.children[0], nz_syms, nz_info, new_nest,
+                                  node, candidates)
 
         elif isinstance(node, (Root, Block)):
             for n in node.children:
-                self._track_nz_blocks(n, nz_syms, nz_info, nest, node)
+                self._track_nz_blocks(n, nz_syms, nz_info, nest, node, candidates)
 
-        elif isinstance(node, (If, Switch)):
-            raise RuntimeError("Unexpected control flow while tracking zero blocks")
+        elif isinstance(node, (If, Switch, FunCall)):
+            raise RuntimeError("zero blocks tracking: illegal control flow")
 
     def _reschedule_itspace(self, root):
         """Consider two statements A and B, and their iteration space. If the
@@ -706,11 +709,17 @@ class ZeroRemover(LoopScheduler):
                 if not np.all(d.init.values[np.ix_(*entries)] == 0.0):
                     nz_syms[s].append(nz_b)
 
-        # 2) Track the propagation of non zero-valued blocks through symbolic
-        # execution. This populates /nz_info/ and updates /nz_syms/
-        self._track_nz_blocks(root, nz_syms, nz_info)
+        # 2) Determine the loops that should be analyzed
+        linear_expr_loops = [(l for l in ei.linear_loops) for ei in self.exprs.values()]
+        linear_expr_loops = set(flatten(linear_expr_loops))
+        candidates = [l for l in inner_loops(root)
+                      if not l.is_linear or l in linear_expr_loops]
 
-        # 3) At this point we know where non-zero blocks are located, so we have
+        # 3) Track the propagation of non zero-valued blocks through symbolic
+        # execution. This populates /nz_info/ and updates /nz_syms/
+        self._track_nz_blocks(root, nz_syms, nz_info, candidates=candidates)
+
+        # 4) At this point we know where non-zero blocks are located, so we have
         # to create proper loop nests to access them
         new_exprs, new_nz_info = OrderedDict(), OrderedDict()
         for nest, stmt_itspaces in nz_info.items():
@@ -763,77 +772,6 @@ class ZeroRemover(LoopScheduler):
         self.exprs.update(new_exprs)
         return nz_syms, new_nz_info
 
-    def _shrink(self, root, nz_syms, nz_info):
-        references = SymbolReferences().visit(root, ret=SymbolReferences.default_retval())
-        dataspaces = defaultdict(list)
-
-        # Calculate the dataspaces
-        for nest, stmt_dim_offsets in nz_info.items():
-            nest = {l.dim: l for l in nest}
-            for stmt, dim_offset in stmt_dim_offsets:
-                symbols = FindInstances(Symbol).visit(stmt)[Symbol]
-                symbols = [s for s in symbols if s.symbol in self.decls and
-                           isinstance(self.decls[s.symbol].init, SparseArrayInit)]
-                for s in symbols:
-                    decl = self.decls[s.symbol]
-                    # Each dataspace is stored as a 2-tuple (size, offset)
-                    dataspace = []
-                    for r, o, d_size in zip(s.rank, s.offset, decl.sym.rank):
-                        size = nest[r].size if r in nest else d_size
-                        dataspace.append((size, o[1]))
-                    dataspaces[s.symbol].append(tuple(dataspace))
-
-        # For each symbol, and for each of its dimension, aggregate the dataspaces
-        # if they are contiguous
-        for symbol, dataspace in dataspaces.items():
-            decl = self.decls[symbol]
-            merged_dataspace = []
-            for regions, size in zip(zip(*dataspace), decl.sym.rank):
-                merged_dataspace.append(ItSpace(mode=1).merge(regions, within=size)[0])
-            dataspaces[symbol] = tuple(merged_dataspace)
-
-        # Now that we know the dataspaces, we should see if they are smaller than
-        # the actual array size
-        for symbol, dataspace in dataspaces.items():
-            decl = self.decls[symbol]
-            sections = [range(d[1], d[1] + d[0]) for d in dataspace]
-            values = decl.init.values[np.ix_(*sections)]
-            if values.shape != decl.init.values.shape:
-                # Set the shrunk values ...
-                decl.init.values = values
-                decl.sym.rank = values.shape
-                # ... changes any relevant offsets
-                s_references = [s[0] for s in references[symbol] if s[0] is not decl.sym]
-                for s in s_references:
-                    offset = []
-                    for i, section in enumerate(sections):
-                        # Is the shrunk array still starting from the old base?
-                        # If not, update the offset of each symbol occurence
-                        if s.offset[i][1] > 0 and section[0] > 0:
-                            offset.append((s.offset[i][0], s.offset[i][1] - section[0]))
-                        else:
-                            offset.append(s.offset[i])
-                    s.offset = tuple(offset)
-                # ... and update the /nz_syms/ dictionary
-                nz_syms[symbol] = tuple([(i, 0)] for i in values.shape)
-
-        # Finally, we can merge tables that became identical after shrinking
-        mapper = defaultdict(list)
-        for symbol, dataspace in dataspaces.items():
-            values = self.decls[symbol].init.values
-            mapper[values.tostring()].append(symbol)
-        for values, symbols in mapper.items():
-            to_replace = {s: symbols[0] for s in symbols[1:]}
-            for replacing, target in to_replace.items():
-                for s, p in references[replacing]:
-                    s.symbol = target
-                    if isinstance(p, Decl):
-                        root.children.remove(p)
-                # Clean up
-                self.decls.pop(replacing)
-                if replacing in self.hoisted:
-                    self.hoisted.pop(replacing)
-
     def _recombine(self, nz_info):
         """Recombine expressions writing to the same lvalue."""
         new_exprs = OrderedDict()
@@ -860,8 +798,31 @@ class ZeroRemover(LoopScheduler):
                 if all(i in self.exprs for i in stmts):
                     new_exprs[stmt] = self.exprs[i]
 
+        for stmt, expr_info in new_exprs.items():
+            ew = ExpressionRewriter(stmt, expr_info, self.decls,
+                                    expr_info.outermost_parent,
+                                    self.hoisted, self.expr_graph)
+            ew.factorize('heuristic')
+
         self.exprs.clear()
         self.exprs.update(new_exprs)
+
+    def _should_skip(self, zero_decls):
+        """Return False if, based on heuristics, it seems worth skipping the
+        computation over zeros, True otherwise. True is returned if it
+        is thought that the implications on low-level performance would be
+        worse than the gain in operation count (e.g., because spatial locality
+        within loop would go lost)."""
+
+        if not zero_decls:
+            return True
+
+        for d in zero_decls:
+            for d_dim in d.nonzero:
+                if all(size < ZeroRemover.THRESHOLD for size, offset in d_dim):
+                    return True
+
+        return False
 
     def reschedule(self, root):
         """Restructure the loop nests in ``root`` to avoid computation over
@@ -869,9 +830,12 @@ class ZeroRemover(LoopScheduler):
         starting from ``root``. Control flow, in the form of If, Switch, etc.,
         is forbidden."""
 
-        # First, split expressions to maximize the impact of the transformation.
-        # This is because different summands may have zero-valued blocks at
-        # different offsets
+        zero_decls = [d for d in self.decls.values() if d.nonzero]
+        if self._should_skip(zero_decls):
+            return
+
+        # First, split the main expressions to maximize the impact of the transformation.
+        # This helps if different summands have zero-valued blocks at different offsets
         elf = ExpressionFissioner(cut=1, loops='none')
         for stmt, expr_info in self.exprs.items():
             if expr_info.is_scalar:
@@ -882,9 +846,6 @@ class ZeroRemover(LoopScheduler):
         # Perform symbolic execution, track the propagation of non zero-valued
         # blocks, restructure the iteration spaces to avoid useless arithmetic ops
         nz_syms, nz_info = self._reschedule_itspace(root)
-
-        # Shrink sparse arrays by removing zero-valued regions
-        self._shrink(root, nz_syms, nz_info)
 
         # Finally, "inline" the expressions that were originally split
         self._recombine(nz_info)
