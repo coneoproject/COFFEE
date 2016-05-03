@@ -190,7 +190,7 @@ class ASTKernel(object):
 
         out_string = "COFFEE finished in %g seconds (flops: %d -> %d)" % \
             (tot_time, flops_pre, flops_post)
-        print (GREEN if flops_post <= flops_pre else RED) % out_string
+        print (GREEN if flops_post <= flops_pre else BLUE) % out_string
 
     def plan_gpu(self):
         """Transform the kernel suitably for GPU execution.
