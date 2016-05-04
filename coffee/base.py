@@ -462,8 +462,16 @@ class Symbol(Expr):
 
     @property
     def is_const_stride(self):
-        from utils import is_const_dim
-        return not self.offset or all(is_const_dim(o) for o in self.offset)
+        from utils import is_const_dim, flatten
+        return not self.offset or all(is_const_dim(o) for o in flatten(self.offset))
+
+    @property
+    def periods(self):
+        return tuple(o[0] for o in self.offset)
+
+    @property
+    def strides(self):
+        return tuple(o[1] for o in self.offset)
 
     @property
     def urepr(self):
