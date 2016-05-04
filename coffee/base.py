@@ -458,12 +458,12 @@ class Symbol(Expr):
     @property
     def is_const(self):
         from utils import is_const_dim
-        return all(is_const_dim(r) for r in self.rank)
+        return not self.rank or all(is_const_dim(r) for r in self.rank)
 
     @property
     def is_const_stride(self):
         from utils import is_const_dim
-        return all(is_const_dim(o) for o in self.offset)
+        return not self.offset or all(is_const_dim(o) for o in self.offset)
 
     @property
     def urepr(self):
