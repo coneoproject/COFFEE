@@ -522,11 +522,11 @@ class ItSpace(object):
 
     def _convert_to_mode0(self, itspaces):
         if self.mode == 0:
-            return itspaces
+            return tuple(itspaces)
         elif self.mode == 1:
-            return [(ofs, ofs+size) for size, ofs in itspaces]
+            return tuple((ofs, ofs+size) for size, ofs in itspaces)
         elif self.mode == 2:
-            return [(l.start, l.end) for l in itspaces]
+            return tuple((l.start, l.end) for l in itspaces)
 
     def _convert_from_mode0(self, itspaces):
         if self.mode == 0:
