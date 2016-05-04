@@ -461,6 +461,11 @@ class Symbol(Expr):
         return all(is_const_dim(r) for r in self.rank)
 
     @property
+    def is_const_stride(self):
+        from utils import is_const_dim
+        return all(is_const_dim(o) for o in self.offset)
+
+    @property
     def urepr(self):
         """Provide a unique representation of Symbols having same name,
         iteration space, and offset."""
