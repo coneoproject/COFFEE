@@ -390,8 +390,8 @@ class Hoister(object):
                             'i': i
                         }
                         stmts.append(Assign(Symbol(name, loop_dim), dcopy(e)))
-                        decl = Decl(self.expr_info.type, Symbol(name, loop_size))
-                        decl.scope = LOCAL
+                        decl = Decl(self.expr_info.type, Symbol(name, loop_size),
+                                    scope=LOCAL)
                         decls.append(decl)
                         self.decls[name] = decl
                     symbols.append(Symbol(name, loop_dim))

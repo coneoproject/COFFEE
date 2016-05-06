@@ -679,7 +679,7 @@ class Decl(Writer):
         static const double FE0[3][3] __attribute__(align(32)) = {{...}};"""
 
     def __init__(self, typ, sym, init=None, qualifiers=None, attributes=None,
-                 pointers=None, pragma=None):
+                 pointers=None, pragma=None, scope=None):
         super(Decl, self).__init__(pragma=pragma)
         self.typ = typ
         sym = as_symbol(sym)
@@ -688,13 +688,15 @@ class Decl(Writer):
         self.attr = attributes or []
         init = as_symbol(init) if init is not None else EmptyStatement()
         self.children = [sym, init]
+
         self._core = self.sym.rank
+        self._scope = scope or UNKNOWN
 
     def operands(self):
         return [self.typ, self.sym, self.init, self.qual, self.attr], {}
 
-    def pad(self, rank):
-        self.sym.rank = rank
+    def pad(self, new_rank):
+        self.sym.rank = new_rank
 
     @property
     def sym(self):
@@ -757,8 +759,6 @@ class Decl(Writer):
 
     @property
     def scope(self):
-        if not hasattr(self, '_scope'):
-            raise RuntimeError("Declaration scope available only after a tree visit")
         return self._scope
 
     @scope.setter
@@ -1259,15 +1259,16 @@ IDIV = Access("IDIV")
 
 class Scope(object):
 
-    """Three /Scope/s are possible:
+    """Four /Scope/s are possible:
 
-        * ``EXTERNAL``: the /Decl/ is a kernel argument
-        * ``LOCAL``: the /Decl/ lives within the kernel body
-        * ``BUFFER``: the /Decl/ is ``LOCAL``, but it is special in that it maps
-            data from an ``EXTERNAL`` /Decl/
+        * ``UNKNOWN``: unknown (default)
+        * ``EXTERNAL``: a kernel argument
+        * ``LOCAL``: within the kernel body
+        * ``BUFFER``: within the kernel body, but it is actually a ``shadow copy``
+            of a kernel argument.
     """
 
-    _scopes = ["LOCAL", "EXTERNAL", "BUFFER"]
+    _scopes = ["UNKNOWN", "LOCAL", "EXTERNAL", "BUFFER"]
 
     def __init__(self, scope):
         if scope not in Scope._scopes:
@@ -1280,3 +1281,4 @@ class Scope(object):
 LOCAL = Scope("LOCAL")
 EXTERNAL = Scope("EXTERNAL")
 BUFFER = Scope("BUFFER")
+UNKNOWN = Scope("UNKNOWN")
