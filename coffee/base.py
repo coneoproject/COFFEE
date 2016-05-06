@@ -726,12 +726,12 @@ class Decl(Writer):
     def size(self):
         """Return the size of the declared variable. In particular, return
 
-        * ``(0,)``, if it is a scalar
+        * ``()``, if it is a scalar
         * a tuple, if it is a N-dimensional array, such that each entry
           represents the size of an array dimension (e.g. ``double A[20][10]``
           -> ``(20, 10)``)
         """
-        return self.sym.rank or (0,)
+        return self.sym.rank or ()
 
     @property
     def core(self):
