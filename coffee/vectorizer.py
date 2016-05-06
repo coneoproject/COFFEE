@@ -158,11 +158,11 @@ class LoopVectorizer(object):
 
         buf_decl = None
         for decl_name, decl in self.decls.items():
-            if not decl.sym.rank or decl.is_pointer_type:
+            if not decl.size or decl.is_pointer_type:
                 continue
 
-            p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
-            if decl.sym.rank[p_dim] == 1 or p_rank == decl.sym.rank:
+            p_rank = decl.size[:p_dim] + (vect_roundup(decl.size[p_dim]),)
+            if decl.size[p_dim] == 1 or p_rank == decl.size:
                 continue
 
             if decl.scope == LOCAL:
@@ -173,7 +173,7 @@ class LoopVectorizer(object):
 
             # A) Can a buffer actually be allocated ?
             symbols = [s for s, _ in symbol_refs[decl_name] if s is not decl.sym]
-            if not all(s.dim == decl.sym.dim and s.is_const_stride for s in symbols):
+            if not all(s.dim == decl.sym.dim and s.is_const_offset for s in symbols):
                 continue
             periods = flatten([s.periods for s in symbols])
             if not all(p == 1 for p in periods):
@@ -245,10 +245,9 @@ class LoopVectorizer(object):
                         mapper[original] = Symbol(s.symbol, s.rank, s.offset)
 
             # ... insert the buffer into the AST
-            buf_rank = (n,) + decl.sym.rank
+            buf_rank = (n,) + decl.size
             init = ArrayInit(np.ndarray(shape=(1,)*len(buf_rank), buffer=np.array(0.0)))
-            buf_decl = Decl(decl.typ, Symbol(buf_name, buf_rank), init)
-            buf_decl.scope = BUFFER
+            buf_decl = Decl(decl.typ, Symbol(buf_name, buf_rank), init, scope=BUFFER)
             buf_decl.pad((n,) + p_rank)
             self.header.children.insert(0, buf_decl)
 
@@ -276,7 +275,6 @@ class LoopVectorizer(object):
 
             # D) Update the global data structures
             self.decls[buf_name] = buf_decl
-        from IPython import embed; embed()
 
         return buf_decl
 
@@ -302,55 +300,54 @@ class LoopVectorizer(object):
 
             for stmt in l.body:
                 sym, expr = stmt.lvalue, stmt.rvalue
+                decl = self.decls[sym.symbol]
 
-                # Condition A: the fastest varying dimension of an lvalue must be /l/
+                # Condition A: the fastest varying dimension of the lvalue must be /l/
                 if not sym.rank or not sym.rank[p_dim] == l.dim:
                     should_round = False
                     break
 
-                # Condition B: all lvalues must have been padded
-                decl = self.decls[sym.symbol]
+                # Condition B: the lvalue must have been padded
                 if decl.size[p_dim] != vect_roundup(decl.size[p_dim]):
                     should_round = False
                     break
 
-            # Condition C: extra iterations induced by bounds and offset rounding
-            # must not alter the computation
-            lvalues, aligned = {}, dcopy(l)
-            for stmt in aligned.body:
-                if not should_round:
-                    break
-                sym, expr = stmt.lvalue, stmt.rvalue
-
+                # Condition C: extra iterations induced by bounds and offset rounding
+                # must not alter the computation
                 symbols = [sym] + FindInstances(Symbol).visit(expr)[Symbol]
-                symbols = [s for s in symbols if any(r == l.dim for r in s.rank)]
+                symbols = [s for s in symbols if s.rank and any(r == l.dim for r in s.rank)]
+                if any(not s.is_unit_period for s in symbols):
+                    # Cannot infer the access pattern so must break
+                    should_round = False
+                    break
                 for s in symbols:
-                    # First of all, we need to be sure we can inspect the symbol
-                    # declaration
-                    decl = self.decls.get(s.symbol)
-                    if not decl:
+                    stride = s.strides[p_dim]
+                    extra = range(stride + l.size, stride + vect_roundup(l.size))
+                    # Do any of the extra iterations alter the computation ?
+                    if any(i > decl.size[p_dim] for i in extra):
+                        # ... outside of the legal region, abort
                         should_round = False
                         break
-                    # We can skip loop constants
-                    if not decl.sym.rank:
+                    if all(i >= decl.core[p_dim for i in extra]):
+                        # ... in the padded region, pass
                         continue
+                    nz = list(self.nz_syms.get(s.symbol))
+                    if not nz:
+                        # ... lacks the non zero-valued entries mapping, abort
+                        should_round = False
+                        break
+                    if s.symbol == buffer.lvalue:
+                        # ... the buffer requires special handling
+                        nz = [i for i in nz if s.rank[0] in range(i[0][1], ...)]
+                        # WIP TODO use namedtuple
+                        for i in list(nz):
+                            dim = i[0]
+                            if s.rank[0] not in range(dim[1], dim[0] + dim[1]):
+                                nz.remove(i)
 
-                    # Now we check if lowering the start point would be unsafe
-                    # because it would result in /not/ executing iterations
-                    # that should be executed
-                    offset = s.offset[p_dim][1]
-                    if isinstance(offset, str):
-                        # Unknown offset, cannot infer anything so must break
-                        should_round = False
-                        break
-                    start = vect_rounddown(offset)
-                    end = start + vect_roundup(l.end)
-                    if end < offset + l.end:
-                        should_round = False
-                        break
 
                     # It remains to check if the extra iterations would alter the
-                    # result by access non zero-valued entries
+                    # result by accessing non zero-valued entries
                     extra = range(start, offset) + range(offset + l.end + 1, end + 1)
                     for i in extra:
                         if i > decl.size[p_dim]:
@@ -439,7 +436,7 @@ class LoopVectorizer(object):
                     l.pragma.add(system.compiler["align_forloop"])
 
             # Enforce vectorization if loop size is a multiple of the vector length
-            if should_vectorize and l.size % vector_length == 0:
+            if should_round and l.size % vector_length == 0:
                 l.pragma.add(system.compiler['force_simdization'])
 
     def _transpose_layout(self):
