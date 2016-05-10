@@ -155,6 +155,10 @@ class CSEUnpicker(object):
             if not temporary.is_ssa:
                 # ... must be written only once
                 return False
+            if not temporary.is_read:
+                # ... must actually be read by some other temporaries (the output
+                # variables are not)
+                return False
             if temporary.is_static_init:
                 # ... its rvalue must not be an array initializer
                 return False
