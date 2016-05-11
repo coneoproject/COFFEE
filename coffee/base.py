@@ -434,7 +434,13 @@ class Symbol(Expr):
 
     :param tuple rank: entries represent the iteration variables the symbol
         depends on, or explicit numbers representing the entry of a tensor the
-        symbol is accessing, or the size of the tensor itself. """
+        symbol is accessing, or the size of the tensor itself.
+    :param list offset: an iterator of 2-tuple (period, stride), one 2-tuple for
+        each entry in rank. The period is the multiplier of the rank, while
+        stride is a quantity summed to the rank. E.g., if rank=(i, j) and
+        offset=((1, 0), (3, 2)), printing a symbol 'a' returns the string
+        a[i][3*j + 2].
+    """
 
     def __init__(self, symbol, rank=(), offset=()):
         super(Symbol, self).__init__([])
