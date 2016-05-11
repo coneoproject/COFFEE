@@ -55,7 +55,7 @@ class Temporary(object):
         self.node = node
         self.main_loop = main_loop
         self.nest = nest
-        self.reads_costs = reads_costs or {}
+        self.reads_costs = reads_costs or OrderedDict()
         self.flops = EstimateFlops().visit(node)
 
     @property
@@ -117,7 +117,7 @@ class Temporary(object):
 
     def reconstruct(self):
         temporary = Temporary(self.node, self.main_loop,
-                              self.nest, dict(self.reads_costs))
+                              self.nest, OrderedDict(self.reads_costs))
         temporary.level = self.level
         temporary.is_read = list(self.is_read)
         return temporary
@@ -240,11 +240,12 @@ class CSEUnpicker(object):
         syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
         syms = [s for s in syms if any(l in self.linear_dims for l in lda[s])]
 
-        syms_costs = defaultdict(int)
+        syms_costs = OrderedDict()
 
         def wrapper(node, found=0):
             if isinstance(node, Symbol):
                 if node in syms:
+                    syms_costs.setdefault(node, 0)
                     syms_costs[node] += found
                 return
             elif isinstance(node, (EmptyStatement, ArrayInit)):
