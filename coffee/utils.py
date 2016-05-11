@@ -797,7 +797,7 @@ def uniquify(exprs):
     """Iterate over ``exprs`` and return a list of expressions in which duplicates
     have been discarded. This function considers two expressions identical if they
     have the same string representation."""
-    return dict([(str(e), e) for e in exprs]).values()
+    return OrderedDict([(e.urepr, e) for e in exprs]).values()
 
 
 def postprocess(node):
