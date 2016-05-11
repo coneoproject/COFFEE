@@ -34,7 +34,7 @@
 """Utility functions for the inspection, transformation, and creation of ASTs."""
 
 from copy import deepcopy as dcopy
-from collections import defaultdict, OrderedDict
+from collections import defaultdict, OrderedDict, namedtuple
 
 import networkx as nx
 
@@ -532,7 +532,7 @@ class ItSpace(object):
         if self.mode == 0:
             return itspaces
         elif self.mode == 1:
-            return [(end-start, start) for start, end in itspaces]
+            return [Region(end-start, start) for start, end in itspaces]
         elif self.mode == 2:
             raise RuntimeError("Cannot convert from mode=0 to mode=2")
 
@@ -785,6 +785,14 @@ class ExpressionGraph(object):
     def reads(self, sym):
         """Return the list of symbol identifiers that ``sym`` reads from."""
         return [j for i, j in self.deps.out_edges(sym)]
+
+
+########################
+# Simple support types #
+########################
+
+
+Region = namedtuple('Region', ['size', 'ofs'])
 
 
 #############################
