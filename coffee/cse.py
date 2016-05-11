@@ -139,13 +139,20 @@ class CSEUnpicker(object):
     some symbols (further information concerning loop linearity is available in
     ``expression.py``)."""
 
-    def __init__(self, stmt, expr_info, header, hoisted, decls, expr_graph):
-        self.stmt = stmt
-        self.expr_info = expr_info
+    def __init__(self, exprs, header, hoisted, decls, expr_graph):
+        self.exprs = exprs
         self.header = header
         self.hoisted = hoisted
         self.decls = decls
         self.expr_graph = expr_graph
+
+    @property
+    def type(self):
+        return self.exprs.values()[0].type
+
+    @property
+    def linear_dims(self):
+        return self.exprs.values()[0].linear_dims
 
     def _push_temporaries(self, temporaries, loop, trace, global_trace):
 
@@ -205,15 +212,15 @@ class CSEUnpicker(object):
         from rewriter import ExpressionRewriter
 
         # Never attempt to transform the main expression
-        temporaries = [t for t in temporaries if t.node != self.stmt]
+        temporaries = [t for t in temporaries if t.node not in self.exprs]
 
         lda = ldanalysis(self.header, key='symbol', value='dim')
 
         # Expand + Factorize
         rewriters = OrderedDict()
         for t in temporaries:
-            expr_info = MetaExpr(self.expr_info.type, t.main_loop.children[0],
-                                 t.nest, tuple(l.dim for l in t.loops if l.is_linear))
+            expr_info = MetaExpr(self.type, t.main_loop.children[0], t.nest,
+                                 tuple(l.dim for l in t.loops if l.is_linear))
             ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
@@ -231,8 +238,7 @@ class CSEUnpicker(object):
     def _analyze_expr(self, expr, lda):
         finder = FindInstances(Symbol)
         syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
-        syms = [s for s in syms
-                if any(l in self.expr_info.linear_dims for l in lda[s])]
+        syms = [s for s in syms if any(l in self.linear_dims for l in lda[s])]
 
         syms_costs = defaultdict(int)
 

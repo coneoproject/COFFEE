@@ -41,7 +41,6 @@ from coffee.visitors import *
 from hoister import Hoister
 from expander import Expander
 from factorizer import Factorizer
-from cse import CSEUnpicker
 
 
 class ExpressionRewriter(object):
@@ -506,14 +505,6 @@ class ExpressionRewriter(object):
             self.licm()
 
         return self
-
-    def unpickCSE(self):
-        """Search for factorization opportunities across temporaries created by
-        common sub-expression elimination. If a gain in operation count is detected,
-        unpick CSE and apply factorization + code motion."""
-        cse_unpicker = CSEUnpicker(self.stmt, self.expr_info, self.header, self.hoisted,
-                                   self.decls, self.expr_graph)
-        cse_unpicker.unpick()
 
     @staticmethod
     def reset():
