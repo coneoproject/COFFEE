@@ -376,9 +376,14 @@ class Hoister(object):
                 # 3) Create the required new AST nodes
                 symbols, decls, stmts = [], [], []
                 for i, e in enumerate(subexprs):
+                    already_hoisted = False
                     if global_cse and self.hoisted.get_symbol(e):
                         name = self.hoisted.get_symbol(e)
-                    else:
+                        decl = self.hoisted[name].decl
+                        if decl in place.children and \
+                                place.children.index(decl) < place.children.index(offset):
+                            already_hoisted = True
+                    if not already_hoisted:
                         name = self._hoisted_sym % {
                             'loop_dep': '_'.join(dep) if dep else 'c',
                             'expr_id': self.expr_id,
