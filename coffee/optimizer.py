@@ -43,6 +43,7 @@ from base import *
 from utils import *
 from scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from rewriter import ExpressionRewriter
+from cse import CSEUnpicker
 from coffee.visitors import FindInstances, ProjectExpansion
 
 
@@ -98,6 +99,10 @@ class LoopOptimizer(object):
         elif mode == 'auto-aggressive':
             self._dissect('aggressive')
 
+        # Search for factorization opportunities across temporaries in the kernel
+        if mode > 1 and self.exprs:
+            self._unpick_cse()
+
         # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
@@ -110,7 +115,6 @@ class LoopOptimizer(object):
                     ew.licm()
 
             elif expr_info.mode == 2:
-                ew.unpickCSE()
                 if expr_info.dimension > 0:
                     ew.replacediv()
                     ew.SGrewrite()
@@ -277,6 +281,14 @@ class LoopOptimizer(object):
         insert_at_elem(self.header.children, self.loop, outer_block)
         # ... scalar-expanding the precomputed symbols
         ast_update_rank(self.loop, precomputed_syms)
+
+    def _unpick_cse(self):
+        """Search for factorization opportunities across temporaries created by
+        common sub-expression elimination. If a gain in operation count is detected,
+        unpick CSE and apply factorization + code motion."""
+        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted,
+                                   self.decls, self.expr_graph)
+        cse_unpicker.unpick()
 
     def _min_temporaries(self):
         """Remove unnecessary temporaries, thus relieving memory pressure.

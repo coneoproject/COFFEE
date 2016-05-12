@@ -55,7 +55,7 @@ class Temporary(object):
         self.node = node
         self.main_loop = main_loop
         self.nest = nest
-        self.reads_costs = reads_costs or {}
+        self.reads_costs = reads_costs or OrderedDict()
         self.flops = EstimateFlops().visit(node)
 
     @property
@@ -117,7 +117,7 @@ class Temporary(object):
 
     def reconstruct(self):
         temporary = Temporary(self.node, self.main_loop,
-                              self.nest, dict(self.reads_costs))
+                              self.nest, OrderedDict(self.reads_costs))
         temporary.level = self.level
         temporary.is_read = list(self.is_read)
         return temporary
@@ -139,13 +139,20 @@ class CSEUnpicker(object):
     some symbols (further information concerning loop linearity is available in
     ``expression.py``)."""
 
-    def __init__(self, stmt, expr_info, header, hoisted, decls, expr_graph):
-        self.stmt = stmt
-        self.expr_info = expr_info
+    def __init__(self, exprs, header, hoisted, decls, expr_graph):
+        self.exprs = exprs
         self.header = header
         self.hoisted = hoisted
         self.decls = decls
         self.expr_graph = expr_graph
+
+    @property
+    def type(self):
+        return self.exprs.values()[0].type
+
+    @property
+    def linear_dims(self):
+        return self.exprs.values()[0].linear_dims
 
     def _push_temporaries(self, temporaries, loop, trace, global_trace):
 
@@ -162,7 +169,8 @@ class CSEUnpicker(object):
             if temporary.is_static_init:
                 # ... its rvalue must not be an array initializer
                 return False
-            if not all(r.pushed or
+            if not all(not r.reads or
+                       r.pushed or
                        loop == r.main_loop or
                        temporary.main_loop.dim in r.rank for r in reads):
                 # ... all the read temporaries must still be accessible
@@ -205,15 +213,15 @@ class CSEUnpicker(object):
         from rewriter import ExpressionRewriter
 
         # Never attempt to transform the main expression
-        temporaries = [t for t in temporaries if t.node != self.stmt]
+        temporaries = [t for t in temporaries if t.node not in self.exprs]
 
         lda = ldanalysis(self.header, key='symbol', value='dim')
 
         # Expand + Factorize
         rewriters = OrderedDict()
         for t in temporaries:
-            expr_info = MetaExpr(self.expr_info.type, t.main_loop.children[0],
-                                 t.nest, tuple(l.dim for l in t.loops if l.is_linear))
+            expr_info = MetaExpr(self.type, t.main_loop.children[0], t.nest,
+                                 tuple(l.dim for l in t.loops if l.is_linear))
             ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
@@ -231,14 +239,14 @@ class CSEUnpicker(object):
     def _analyze_expr(self, expr, lda):
         finder = FindInstances(Symbol)
         syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
-        syms = [s for s in syms
-                if any(l in self.expr_info.linear_dims for l in lda[s])]
+        syms = [s for s in syms if any(l in self.linear_dims for l in lda[s])]
 
-        syms_costs = defaultdict(int)
+        syms_costs = OrderedDict()
 
         def wrapper(node, found=0):
             if isinstance(node, Symbol):
                 if node in syms:
+                    syms_costs.setdefault(node, 0)
                     syms_costs[node] += found
                 return
             elif isinstance(node, (EmptyStatement, ArrayInit)):

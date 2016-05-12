@@ -529,7 +529,7 @@ class ZeroRemover(LoopScheduler):
             def_itspace = [tuple((l.dim, (l.size, 0)) for l, p in nest)]
             nz_bounds = zip(*nz_syms.get(node.symbol, []))
             for i, (r, o, nz_bs) in enumerate(zip(node.rank, node.offset, nz_bounds)):
-                if o[0] != 1 or isinstance(o[1], str) or isinstance(r, int):
+                if o[0] != 1 or isinstance(o[1], str) or is_const_dim(r):
                     # Cannot handle jumps, non-integer offsets, or constant accesses
                     continue
                 try:
@@ -624,7 +624,7 @@ class ZeroRemover(LoopScheduler):
             if not nest:
                 return
 
-            if candidates and nest[-1][0] not in candidates:
+            if nest[-1][0] not in candidates:
                 return
 
             # Track the propagation of non zero-valued blocks: ...
@@ -632,7 +632,7 @@ class ZeroRemover(LoopScheduler):
             itspaces = self._track_nz_expr(expr, nz_syms, nest)
             for i in itspaces:
                 # ... and then through the lvalue (merging overlaps)
-                nz_expr = tuple(dict(i).get(r) for r in sym.rank if not isinstance(r, int))
+                nz_expr = tuple(dict(i).get(r) for r in sym.rank if not is_const_dim(r))
                 if any(j is None for j in nz_expr):
                     break
                 nz_node = list(nz_syms.setdefault(sym.symbol, [nz_expr]))
@@ -669,7 +669,7 @@ class ZeroRemover(LoopScheduler):
         elif isinstance(node, (If, Switch, FunCall)):
             raise RuntimeError("zero blocks tracking: illegal control flow")
 
-    def _reschedule_itspace(self, root):
+    def _reschedule_itspace(self, root, candidates):
         """Consider two statements A and B, and their iteration space. If the
         two iteration spaces have
 
@@ -699,7 +699,7 @@ class ZeroRemover(LoopScheduler):
         """
         nz_info = OrderedDict()
 
-        # 1) Elaborate the initial sparsity pattern of the symbols in /root/
+        # Elaborate the initial sparsity pattern of the symbols in /root/
         nz_syms = defaultdict(list)
         for s, d in self.decls.items():
             if not d.nonzero:
@@ -709,17 +709,11 @@ class ZeroRemover(LoopScheduler):
                 if not np.all(d.init.values[np.ix_(*entries)] == 0.0):
                     nz_syms[s].append(nz_b)
 
-        # 2) Determine the loops that should be analyzed
-        linear_expr_loops = [(l for l in ei.linear_loops) for ei in self.exprs.values()]
-        linear_expr_loops = set(flatten(linear_expr_loops))
-        candidates = [l for l in inner_loops(root)
-                      if not l.is_linear or l in linear_expr_loops]
-
-        # 3) Track the propagation of non zero-valued blocks through symbolic
+        # Track the propagation of non zero-valued blocks through symbolic
         # execution. This populates /nz_info/ and updates /nz_syms/
         self._track_nz_blocks(root, nz_syms, nz_info, candidates=candidates)
 
-        # 4) At this point we know where non-zero blocks are located, so we have
+        # At this point we know where non-zero blocks are located, so we have
         # to create proper loop nests to access them
         new_exprs, new_nz_info = OrderedDict(), OrderedDict()
         for nest, stmt_itspaces in nz_info.items():
@@ -830,24 +824,37 @@ class ZeroRemover(LoopScheduler):
         starting from ``root``. Control flow, in the form of If, Switch, etc.,
         is forbidden."""
 
+        # Avoid rescheduling if zero-valued blocks are too small
         zero_decls = [d for d in self.decls.values() if d.nonzero]
         if self._should_skip(zero_decls):
-            return
+            return {}
 
-        # First, split the main expressions to maximize the impact of the transformation.
-        # This helps if different summands have zero-valued blocks at different offsets
-        elf = ExpressionFissioner(cut=1, loops='none')
-        for stmt, expr_info in self.exprs.items():
-            if expr_info.is_scalar:
-                continue
-            self.exprs.pop(stmt)
-            self.exprs.update(elf.fission(stmt, expr_info))
+        # Determine the analyzable loops (inner loops in which statements have no
+        # read-after-write dependencies)
+        linear_expr_loops = [(l for l in ei.linear_loops) for ei in self.exprs.values()]
+        linear_expr_loops = set(flatten(linear_expr_loops))
+        candidates = [l for l in inner_loops(root) if not l.is_linear or l in linear_expr_loops]
+        candidates = [l for l in candidates if not ExpressionGraph(l.body).has_dependency()]
+        if not candidates:
+            return {}
 
-        # Perform symbolic execution, track the propagation of non zero-valued
-        # blocks, restructure the iteration spaces to avoid useless arithmetic ops
-        nz_syms, nz_info = self._reschedule_itspace(root)
+        if linear_expr_loops & set(candidates):
+            # Split the main expressions to maximize the impact of the rescheduling (this
+            # helps if different summands have zero-valued blocks at different offsets)
+            elf = ExpressionFissioner(cut=1, loops='none')
+            for stmt, expr_info in self.exprs.items():
+                if expr_info.is_scalar:
+                    continue
+                self.exprs.pop(stmt)
+                self.exprs.update(elf.fission(stmt, expr_info))
 
-        # Finally, "inline" the expressions that were originally split
-        self._recombine(nz_info)
+            # Apply the rescheduling
+            nz_syms, nz_info = self._reschedule_itspace(root, candidates)
+
+            # Finally, "inline" the expressions that were originally split, if possible
+            self._recombine(nz_info)
+        else:
+            # Apply the rescheduling
+            nz_syms, nz_info = self._reschedule_itspace(root, candidates)
 
         return nz_syms
