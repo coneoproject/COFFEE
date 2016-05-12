@@ -708,11 +708,9 @@ class ExpressionGraph(object):
         writes = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
         for type, nodes in writes.items():
             for n in nodes:
-                lvalue = n.lvalue
-                rvalue = n.rvalue
-                if isinstance(rvalue, EmptyStatement):
+                if isinstance(n.rvalue, EmptyStatement):
                     continue
-                self.add_dependency(lvalue, rvalue)
+                self.add_dependency(n.lvalue, n.rvalue)
 
     def add_dependency(self, sym, expr):
         """Add dependency between ``sym`` and symbols appearing in ``expr``."""
@@ -720,6 +718,12 @@ class ExpressionGraph(object):
         expr_symbols = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
         for es in expr_symbols:
             self.deps.add_edge(sym.symbol, es.symbol)
+
+    def has_dependency(self):
+        """Return True if a read-after-write (raw) or write-after-read (war)
+        dependency appears in the graph, False otherwise."""
+        sources, targets = zip(*self.deps.edges())
+        return True if set(sources) & set(targets) else False
 
     def is_read(self, expr, target_sym=None):
         """Return True if any symbols in ``expr`` is read by ``target_sym``,
