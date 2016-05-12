@@ -169,7 +169,8 @@ class CSEUnpicker(object):
             if temporary.is_static_init:
                 # ... its rvalue must not be an array initializer
                 return False
-            if not all(r.pushed or
+            if not all(not r.reads or
+                       r.pushed or
                        loop == r.main_loop or
                        temporary.main_loop.dim in r.rank for r in reads):
                 # ... all the read temporaries must still be accessible
