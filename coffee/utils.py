@@ -358,6 +358,19 @@ def ldanalysis(node, key='default', value='default'):
     return lda
 
 
+def ranalysis(node, decls=None):
+    """Perform reachability analysis in the AST rooted in ``node``. Return
+    a dictionary mapping symbols to scopes in which they are visible.
+
+    :param decls: an iterator of :class:`Decl`s which are known to be visible
+        within ``node``
+    """
+    symbols_vis, scopes = SymbolVisibility().visit(node)
+    for d in decls:
+        symbols_vis[d].extend(scopes)
+    return symbols_vis
+
+
 def explore_operator(node):
     """Return a list of the operands composing the operation whose root is
     ``node``."""

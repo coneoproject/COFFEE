@@ -7,7 +7,7 @@ import itertools
 __all__ = ["FindInnerLoops", "CheckPerfectLoop", "CountOccurences",
            "FindLoopNests", "FindCoffeeExpressions", "SymbolReferences",
            "SymbolDependencies", "SymbolModes", "SymbolDeclarations",
-           "FindInstances", "FindExpression"]
+           "SymbolVisibility", "FindInstances", "FindExpression"]
 
 
 class FindInnerLoops(Visitor):
@@ -492,6 +492,56 @@ class SymbolDeclarations(Visitor):
             ret = self.default_retval()
         o.scope = scope
         ret[o.sym.symbol] = o
+        return ret
+
+
+class SymbolVisibility(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return defaultdict(list), []
+
+    """
+    Visit the tree and return a dict mapping symbols to tuples of
+    scopes (AST sub-trees) in which they are legally accessible.
+    """
+
+    def __init__(self):
+        super(SymbolVisibility, self).__init__()
+
+    def visit_Decl(self, o, ret=None, in_scope=None, *args, **kwargs):
+        if in_scope is not None:
+            in_scope.append(o)
+        return ret
+
+    def visit_Block(self, o, ret=None, in_scope=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
+        if in_scope is None:
+            in_scope = []
+        symbols_vis, scopes = ret
+        scopes.append(o)
+        this_scope = list(in_scope)
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, in_scope=this_scope, scopes=scopes)
+        for d in this_scope:
+            symbols_vis[d].insert(0, o)
+        return ret
+
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        # Identity
+        return ret
+
+    def visit_list(self, o, ret=None, *args, **kwargs):
+        for entry in o:
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
+        return ret
+
+    def visit_Node(self, o, ret=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
 
