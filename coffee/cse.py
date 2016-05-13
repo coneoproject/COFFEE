@@ -47,7 +47,7 @@ class Temporary(object):
     or an AugmentedAssig) that computes a temporary variable; that is, a variable
     that is read in more than one place."""
 
-    def __init__(self, node, main_loop, nest, reads_costs=None):
+    def __init__(self, node, main_loop, nest, reads, linear_reads_costs=None):
         self.level = -1
         self.pushed = False
         self.is_read = []
@@ -55,7 +55,8 @@ class Temporary(object):
         self.node = node
         self.main_loop = main_loop
         self.nest = nest
-        self.reads_costs = reads_costs or OrderedDict()
+        self.reads = reads
+        self.linear_reads_costs = linear_reads_costs or OrderedDict()
         self.flops = EstimateFlops().visit(node)
 
     @property
@@ -87,8 +88,8 @@ class Temporary(object):
         return self.symbol.urepr
 
     @property
-    def reads(self):
-        return self.reads_costs.keys() if self.reads_costs else []
+    def linear_reads(self):
+        return self.linear_reads_costs.keys() if self.linear_reads_costs else []
 
     @property
     def loops(self):
@@ -105,7 +106,7 @@ class Temporary(object):
 
     @property
     def project(self):
-        return len(self.reads)
+        return len(self.linear_reads)
 
     @property
     def is_ssa(self):
@@ -116,16 +117,16 @@ class Temporary(object):
         return isinstance(self.expr, ArrayInit)
 
     def reconstruct(self):
-        temporary = Temporary(self.node, self.main_loop,
-                              self.nest, OrderedDict(self.reads_costs))
+        temporary = Temporary(self.node, self.main_loop, self.nest, list(self.reads),
+                              OrderedDict(self.linear_reads_costs))
         temporary.level = self.level
         temporary.is_read = list(self.is_read)
         return temporary
 
     def __str__(self):
-        return "%s: level=%d, flops/iter=%d, reads=[%s], isread=[%s]" % \
+        return "%s: level=%d, flops/iter=%d, linear_reads=[%s], isread=[%s]" % \
             (self.symbol, self.level, self.flops,
-             ", ".join([str(i) for i in self.reads]),
+             ", ".join([str(i) for i in self.linear_reads]),
              ", ".join([str(i) for i in self.is_read]))
 
 
@@ -157,7 +158,7 @@ class CSEUnpicker(object):
     def _push_temporaries(self, temporaries, loop, trace, global_trace):
 
         def is_pushable(temporary):
-            reads = [global_trace[r.urepr] for r in temporary.reads]
+            reads = [global_trace[r.urepr] for r in temporary.linear_reads]
             # To be pushable ...
             if not temporary.is_ssa:
                 # ... must be written only once
@@ -169,11 +170,11 @@ class CSEUnpicker(object):
             if temporary.is_static_init:
                 # ... its rvalue must not be an array initializer
                 return False
-            if not all(not r.reads or
+            if not all(not r.linear_reads or
                        r.pushed or
                        loop == r.main_loop or
                        temporary.main_loop.dim in r.rank for r in reads):
-                # ... all the read temporaries must still be accessible
+                # ... all the read temporaries must still be visible
                 return False
             return True
 
@@ -203,11 +204,12 @@ class CSEUnpicker(object):
 
         # Update the temporaries
         for t in modified_temporaries:
-            for r, c in t.reads_costs.items():
+            for r, c in t.linear_reads_costs.items():
                 if r.urepr in replaced:
-                    t.reads_costs.pop(r)
-                    for p, p_c in global_trace[r.urepr].reads_costs.items() or [(r, 0)]:
-                        t.reads_costs[p] = c + p_c
+                    t.linear_reads_costs.pop(r)
+                    r_linear_reads_costs = global_trace[r.urepr].linear_reads_costs
+                    for p, p_c in r_linear_reads_costs.items() or [(r, 0)]:
+                        t.linear_reads_costs[p] = c + p_c
 
     def _transform_temporaries(self, temporaries):
         from rewriter import ExpressionRewriter
@@ -226,7 +228,7 @@ class CSEUnpicker(object):
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
             ew.expand(mode='all', lda=lda)
-            ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.reads}, lda=lda)
+            ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.linear_reads}, lda=lda)
             ew.factorize(mode='heuristic')
             rewriters[t] = ew
 
@@ -238,16 +240,16 @@ class CSEUnpicker(object):
 
     def _analyze_expr(self, expr, lda):
         finder = FindInstances(Symbol)
-        syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
-        syms = [s for s in syms if any(l in self.linear_dims for l in lda[s])]
+        reads = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
+        syms = [s for s in reads if any(l in self.linear_dims for l in lda[s])]
 
-        syms_costs = OrderedDict()
+        linear_reads_costs = OrderedDict()
 
         def wrapper(node, found=0):
             if isinstance(node, Symbol):
                 if node in syms:
-                    syms_costs.setdefault(node, 0)
-                    syms_costs[node] += found
+                    linear_reads_costs.setdefault(node, 0)
+                    linear_reads_costs[node] += found
                 return
             elif isinstance(node, (EmptyStatement, ArrayInit)):
                 return
@@ -258,7 +260,7 @@ class CSEUnpicker(object):
                 wrapper(o, found)
         wrapper(expr)
 
-        return syms_costs
+        return reads, linear_reads_costs
 
     def _analyze_loop(self, loop, nest, lda, global_trace):
         trace = OrderedDict()
@@ -269,8 +271,8 @@ class CSEUnpicker(object):
                 for t in not_ssa:
                     t.is_read.append(t.symbol)
                 continue
-            syms_costs = self._analyze_expr(node.rvalue, lda)
-            for s in syms_costs.keys():
+            reads, linear_reads_costs = self._analyze_expr(node.rvalue, lda)
+            for s in linear_reads_costs.keys():
                 if s.urepr in global_trace:
                     temporary = global_trace[s.urepr]
                     temporary.is_read.append(node.lvalue)
@@ -278,11 +280,11 @@ class CSEUnpicker(object):
                     temporary.level = -1
                     trace[s.urepr] = temporary
                 else:
-                    temporary = trace.setdefault(s.urepr, Temporary(s, loop, nest))
+                    temporary = trace.setdefault(s.urepr, Temporary(s, loop, nest, reads))
                     temporary.is_read.append(node.lvalue)
-            new_temporary = Temporary(node, loop, nest, syms_costs)
+            new_temporary = Temporary(node, loop, nest, reads, linear_reads_costs)
             new_temporary.level = max([trace[s.urepr].level for s
-                                       in new_temporary.reads] or [-2]) + 1
+                                       in new_temporary.linear_reads] or [-2]) + 1
             trace[node.lvalue.urepr] = new_temporary
 
         return trace
@@ -330,18 +332,19 @@ class CSEUnpicker(object):
                 t_inloop_cost = 0
 
                 # Calculate the operation count for /t/ if we applied expansion + fact
-                reads = []
-                for read, cost in t.reads_costs.items():
+                linear_reads = []
+                for read, cost in t.linear_reads_costs.items():
                     if read.urepr in new_trace:
-                        reads.extend(new_trace[read.urepr].reads or [read.urepr])
+                        linear_reads.extend(new_trace[read.urepr].linear_reads or
+                                            [read.urepr])
                         t_outloop_cost += new_trace[read.urepr].project*cost
                     else:
-                        reads.extend([read.urepr])
+                        linear_reads.extend([read.urepr])
 
                 # Factorization will kill duplicates and increase the number of sums
                 # in the outer loop
-                fact_syms = {s.urepr if isinstance(s, Symbol) else s for s in reads}
-                t_outloop_cost += len(reads) - len(fact_syms)
+                fact_syms = {s.urepr if isinstance(s, Symbol) else s for s in linear_reads}
+                t_outloop_cost += len(linear_reads) - len(fact_syms)
 
                 # Note: if n=len(fact_syms), then we'll have n prods, n-1 sums
                 t_inloop_cost += 2*len(fact_syms) - 1
@@ -352,7 +355,7 @@ class CSEUnpicker(object):
 
                 # Update the trace because we want to track the cost after "pushing" the
                 # temporaries on which /t/ depends into /t/ itself
-                new_trace[t.urepr].reads_costs = {s: 1 for s in fact_syms}
+                new_trace[t.urepr].linear_reads_costs = {s: 1 for s in fact_syms}
 
             # Some temporaries at levels < /i/ may also appear in:
             # 1) subsequent loops
