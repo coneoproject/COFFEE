@@ -15,8 +15,8 @@ transformations:
   alignment, a transformation for enhancing the effectiveness of compiler
   auto-vectorisation.
 
-COFFEE currently has one user, Firedrake, an automated system for the solution of
+COFFEE currently has one user, Firedrake, an automated system for the resolution of
 partial differential equations using the finite element method. An optimisation
 pipeline in COFFEE was designed to exploit a fundamental mathematical property
-of finite element integration kernels, namely linearity with respect to test and
+of finite element integration kernels, namely linearity of operators in test and
 trial functions.
