@@ -323,7 +323,7 @@ def visit(node, parent=None, info_items=None):
     return info
 
 
-def ldanalysis(node, key='default', value='default'):
+def loops_analysis(node, key='default', value='default'):
     """Perform loop dependence analysis in the AST rooted in ``node``. Return
     a dictionary mapping symbols to loops they depend on.
 
@@ -358,7 +358,7 @@ def ldanalysis(node, key='default', value='default'):
     return lda
 
 
-def ranalysis(node, decls=None):
+def reachability_analysis(node, decls=None):
     """Perform reachability analysis in the AST rooted in ``node``. Return
     a dictionary mapping symbols to scopes in which they are visible.
 

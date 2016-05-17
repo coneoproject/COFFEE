@@ -219,7 +219,7 @@ class CSEUnpicker(object):
         # Never attempt to transform the main expression
         temporaries = [t for t in temporaries if t.node not in self.exprs]
 
-        lda = ldanalysis(self.header, key='symbol', value='dim')
+        lda = loops_analysis(self.header, key='symbol', value='dim')
 
         # Expand + Factorize
         rewriters = OrderedDict()
@@ -234,7 +234,7 @@ class CSEUnpicker(object):
             ew.factorize(mode='heuristic')
             rewriters[t] = ew
 
-        lda = ldanalysis(self.header, value='dim')
+        lda = loops_analysis(self.header, value='dim')
 
         # Code motion
         for t, ew in rewriters.items():
@@ -394,8 +394,8 @@ class CSEUnpicker(object):
         # Collect all necessary info
         external_decls = [d for d in self.decls.values() if d.scope == EXTERNAL]
         fors = visit(self.header, info_items=['fors'])['fors']
-        lda = ldanalysis(self.header, value='dim')
-        ra = ranalysis(self.header, external_decls)
+        lda = loops_analysis(self.header, value='dim')
+        ra = reachability_analysis(self.header, external_decls)
 
         # Collect all loops to be analyzed
         nests = OrderedDict()
