@@ -97,7 +97,7 @@ class ExpressionRewriter(object):
             * iterative: (default: True) should be set to False if interested in
                 hoisting only the smallest subexpressions matching /mode/
             * lda: an up-to-date loop dependence analysis, as returned by a call
-                to ``ldanalysis(node, 'dim'). By providing this information, loop
+                to ``loops_analysis(node, 'dim'). By providing this information, loop
                 dependence analysis can be avoided, thus speeding up the transformation.
             * global_cse: (default: False) search for common sub-expressions across
                 all previously hoisted terms. Note that no data dependency analysis is
@@ -153,9 +153,9 @@ class ExpressionRewriter(object):
                 provided, expansion will be performed only within these trees,
                 rather than within the whole expression.
             * lda: an up-to-date loop dependence analysis, as returned by a call
-                to ``ldanalysis(node, 'symbol', 'dim'). By providing this information,
-                loop dependence analysis can be avoided, thus speeding up the
-                transformation.
+                to ``loops_analysis(node, 'symbol', 'dim'). By providing this
+                information, loop dependence analysis can be avoided, thus
+                speeding up the transformation.
         """
 
         if mode == 'standard':
@@ -177,8 +177,8 @@ class ExpressionRewriter(object):
             dimensions = kwargs.get('dimensions', ())
             should_expand = lambda n: set(dimensions).issubset(set(n.rank))
         elif mode in ['all', 'linear', 'outlinear']:
-            lda = kwargs.get('lda') or ldanalysis(self.expr_info.outermost_loop,
-                                                  key='symbol', value='dim')
+            lda = kwargs.get('lda') or loops_analysis(self.expr_info.outermost_loop,
+                                                      key='symbol', value='dim')
             if mode == 'all':
                 should_expand = lambda n: lda.get(n.symbol) and \
                     any(r in self.expr_info.dims for r in lda[n.symbol])
@@ -234,9 +234,9 @@ class ExpressionRewriter(object):
                 three symbols B, C, and F would be factorized. Recall that this
                 option is ignored unless ``mode == 'adhoc'``.
             * lda: an up-to-date loop dependence analysis, as returned by a call
-                to ``ldanalysis(node, 'symbol', 'dim'). By providing this information,
-                loop dependence analysis can be avoided, thus speeding up the
-                transformation.
+                to ``loops_analysis(node, 'symbol', 'dim'). By providing this
+                information, loop dependence analysis can be avoided, thus
+                speeding up the transformation.
         """
 
         if mode == 'standard':
@@ -266,8 +266,8 @@ class ExpressionRewriter(object):
             kwargs['heuristic'] = True
             should_factorize = lambda n: False
         elif mode in ['all', 'linear', 'outlinear', 'constants']:
-            lda = kwargs.get('lda') or ldanalysis(self.expr_info.outermost_loop,
-                                                  key='symbol', value='dim')
+            lda = kwargs.get('lda') or loops_analysis(self.expr_info.outermost_loop,
+                                                      key='symbol', value='dim')
             if mode == 'all':
                 should_factorize = lambda n: lda.get(n.symbol) and \
                     any(r in self.expr_info.dims for r in lda[n.symbol])
@@ -446,7 +446,7 @@ class ExpressionRewriter(object):
 
             On Optimality of Finite Element Integration, Luporini et. al.
         """
-        lda = ldanalysis(self.expr_info.linear_loops[0], key='symbol', value='dim')
+        lda = loops_analysis(self.expr_info.linear_loops[0], key='symbol', value='dim')
         sg_visitor = SharingGraph(self.expr_info, lda)
 
         # Maximize the visibility of linear symbols

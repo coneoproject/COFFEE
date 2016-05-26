@@ -5,9 +5,9 @@ from collections import defaultdict, OrderedDict, Counter
 import itertools
 
 __all__ = ["FindInnerLoops", "CheckPerfectLoop", "CountOccurences",
-           "DetermineUnrollFactors", "MaxLoopDepth", "FindLoopNests",
-           "FindCoffeeExpressions", "SymbolReferences", "SymbolDependencies",
-           "SymbolModes", "SymbolDeclarations", "FindInstances", "FindExpression"]
+           "FindLoopNests", "FindCoffeeExpressions", "SymbolReferences",
+           "SymbolDependencies", "SymbolModes", "SymbolDeclarations",
+           "SymbolVisibility", "FindInstances", "FindExpression"]
 
 
 class FindInnerLoops(Visitor):
@@ -120,65 +120,6 @@ class CountOccurences(Visitor):
             ret = self.default_retval()
         ret[self.key(o)] += 1
         return ret
-
-
-class DetermineUnrollFactors(Visitor):
-
-    @classmethod
-    def default_retval(cls):
-        return dict()
-
-    """
-    Determine unroll factors for all For loops in a tree.
-
-    Returns a dict mapping iteration variable names to possible unroll
-    factors for that iteration variable.
-
-    Innermost loops always get an unroll factor of 1, to give the
-    backend compiler a chance of auto-vectorizing them.  Outer loops
-    are given potential unroll factors that result in no loop
-    remainders.
-    """
-    def visit_object(self, o, ret=None):
-        return ret
-
-    def visit_Node(self, o, ret=None):
-        ops, _ = o.operands()
-        for op in ops:
-            ret = self.visit(op, ret=ret)
-        return ret
-
-    def visit_For(self, o, ret=None):
-        if ret is None:
-            ret = self.default_retval()
-        # Check if children contain any loops
-        nval = len(ret)
-        ret = self.visit(o.children[0], ret=ret)
-        if len(ret) == nval:
-            # No child for loops
-            # Inner loops are not unrollable
-            ret[o.dim] = (1, )
-            return ret
-        # Not an inner loop, determine unroll factors
-        ret[o.dim] = tuple(i for i in range(1, o.size+1) if (o.size % i) == 0)
-        return ret
-
-
-class MaxLoopDepth(Visitor):
-
-    """Return the maximum loop depth in the tree."""
-
-    def visit_object(self, o):
-        return 0
-
-    def visit_Node(self, o):
-        ops, _ = o.operands()
-        if len(ops) == 0:
-            return 0
-        return max(self.visit(op) for op in ops)
-
-    def visit_For(self, o):
-        return 1 + max(self.visit(op) for op in o.children)
 
 
 class FindLoopNests(Visitor):
@@ -551,6 +492,56 @@ class SymbolDeclarations(Visitor):
             ret = self.default_retval()
         o.scope = scope
         ret[o.sym.symbol] = o
+        return ret
+
+
+class SymbolVisibility(Visitor):
+
+    @classmethod
+    def default_retval(cls):
+        return defaultdict(list), []
+
+    """
+    Visit the tree and return a dict mapping symbols to tuples of
+    scopes (AST sub-trees) in which they are legally accessible.
+    """
+
+    def __init__(self):
+        super(SymbolVisibility, self).__init__()
+
+    def visit_Decl(self, o, ret=None, in_scope=None, *args, **kwargs):
+        if in_scope is not None:
+            in_scope.append(o)
+        return ret
+
+    def visit_Block(self, o, ret=None, in_scope=None, *args, **kwargs):
+        if ret is None:
+            ret = self.default_retval()
+        if in_scope is None:
+            in_scope = []
+        symbols_vis, scopes = ret
+        scopes.append(o)
+        this_scope = list(in_scope)
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, in_scope=this_scope, scopes=scopes)
+        for d in this_scope:
+            symbols_vis[d].insert(0, o)
+        return ret
+
+    def visit_object(self, o, ret=None, *args, **kwargs):
+        # Identity
+        return ret
+
+    def visit_list(self, o, ret=None, *args, **kwargs):
+        for entry in o:
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
+        return ret
+
+    def visit_Node(self, o, ret=None, *args, **kwargs):
+        ops, _ = o.operands()
+        for op in ops:
+            ret = self.visit(op, ret=ret, *args, **kwargs)
         return ret
 
 

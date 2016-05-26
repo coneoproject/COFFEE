@@ -315,48 +315,6 @@ def test_symbol_dependencies_write_then_read_inner_loop():
     assert ret[b] == [tree.children[0], tree.children[0].body[1].children[0]]
 
 
-def test_unroll_factors_single():
-    tree = c_for("i", 2, [])
-
-    v = DetermineUnrollFactors()
-
-    ret = v.visit(tree)
-
-    assert ret["i"] == (1, )
-
-
-def test_unroll_factors_nested():
-    tree = c_for("i", 10, [c_for("j", 4, []),
-                           c_for("k", 6, [c_for("l", 2, [])])])
-
-    v = DetermineUnrollFactors()
-
-    ret = v.visit(tree)
-
-    assert ret["j"] == (1, )
-    assert ret["l"] == (1, )
-    assert ret["k"] == (1, 2, 3, 6)
-    assert ret["i"] == (1, 2, 5, 10)
-
-
-def test_max_loop_depth_single():
-    tree = c_for("i", 2, [])
-
-    v = MaxLoopDepth()
-
-    assert v.visit(tree) == 1
-    assert v.visit(tree.children[0].body) == 0
-
-
-def test_max_loop_depth_nested():
-    tree = c_for("i", 10, [c_for("j", 4, []),
-                           c_for("k", 6, [c_for("l", 2, [])])])
-
-    v = MaxLoopDepth()
-
-    assert v.visit(tree) == 3
-
-
 def test_find_loop_nests_single():
     tree = c_for("i", 2, [])
     v = FindLoopNests()

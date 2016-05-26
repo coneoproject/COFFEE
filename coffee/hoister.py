@@ -288,7 +288,7 @@ class Hoister(object):
 
     def extract(self, mode, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
-        lda = kwargs.get('lda') or ldanalysis(self.header, value='dim')
+        lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
         extractor = Extractor.factory(mode, self.stmt, self.expr_info)
         return extractor.extract(True, lda)
 
@@ -296,7 +296,7 @@ class Hoister(object):
         """Perform generalized loop-invariant code motion."""
         max_sharing = kwargs.get('max_sharing', False)
         iterative = kwargs.get('iterative', True)
-        lda = kwargs.get('lda') or ldanalysis(self.header, value='dim')
+        lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
         global_cse = kwargs.get('global_cse', False)
 
         expr_dims_loops = self.expr_info.loops_from_dims

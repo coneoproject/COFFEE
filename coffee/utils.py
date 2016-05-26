@@ -323,7 +323,7 @@ def visit(node, parent=None, info_items=None):
     return info
 
 
-def ldanalysis(node, key='default', value='default'):
+def loops_analysis(node, key='default', value='default'):
     """Perform loop dependence analysis in the AST rooted in ``node``. Return
     a dictionary mapping symbols to loops they depend on.
 
@@ -356,6 +356,19 @@ def ldanalysis(node, key='default', value='default'):
         lda[gen_key(s)] |= gen_value(dep)
 
     return lda
+
+
+def reachability_analysis(node, decls=None):
+    """Perform reachability analysis in the AST rooted in ``node``. Return
+    a dictionary mapping symbols to scopes in which they are visible.
+
+    :param decls: an iterator of :class:`Decl`s which are known to be visible
+        within ``node``
+    """
+    symbols_vis, scopes = SymbolVisibility().visit(node)
+    for d in decls:
+        symbols_vis[d].extend(scopes)
+    return symbols_vis
 
 
 def explore_operator(node):

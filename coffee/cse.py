@@ -47,15 +47,16 @@ class Temporary(object):
     or an AugmentedAssig) that computes a temporary variable; that is, a variable
     that is read in more than one place."""
 
-    def __init__(self, node, main_loop, nest, reads_costs=None):
+    def __init__(self, node, main_loop, nest, reads=None, linear_reads_costs=None):
         self.level = -1
         self.pushed = False
-        self.is_read = []
+        self.readby = []
 
         self.node = node
         self.main_loop = main_loop
         self.nest = nest
-        self.reads_costs = reads_costs or OrderedDict()
+        self.reads = reads or []
+        self.linear_reads_costs = linear_reads_costs or OrderedDict()
         self.flops = EstimateFlops().visit(node)
 
     @property
@@ -87,8 +88,8 @@ class Temporary(object):
         return self.symbol.urepr
 
     @property
-    def reads(self):
-        return self.reads_costs.keys() if self.reads_costs else []
+    def linear_reads(self):
+        return self.linear_reads_costs.keys() if self.linear_reads_costs else []
 
     @property
     def loops(self):
@@ -105,28 +106,28 @@ class Temporary(object):
 
     @property
     def project(self):
-        return len(self.reads)
+        return len(self.linear_reads)
 
     @property
     def is_ssa(self):
-        return self.symbol not in self.is_read
+        return self.symbol not in self.readby
 
     @property
     def is_static_init(self):
         return isinstance(self.expr, ArrayInit)
 
     def reconstruct(self):
-        temporary = Temporary(self.node, self.main_loop,
-                              self.nest, OrderedDict(self.reads_costs))
+        temporary = Temporary(self.node, self.main_loop, self.nest, list(self.reads),
+                              OrderedDict(self.linear_reads_costs))
         temporary.level = self.level
-        temporary.is_read = list(self.is_read)
+        temporary.readby = list(self.readby)
         return temporary
 
     def __str__(self):
-        return "%s: level=%d, flops/iter=%d, reads=[%s], isread=[%s]" % \
+        return "%s: level=%d, flops/iter=%d, linear_reads=[%s], isread=[%s]" % \
             (self.symbol, self.level, self.flops,
-             ", ".join([str(i) for i in self.reads]),
-             ", ".join([str(i) for i in self.is_read]))
+             ", ".join([str(i) for i in self.linear_reads]),
+             ", ".join([str(i) for i in self.readby]))
 
 
 class CSEUnpicker(object):
@@ -136,7 +137,7 @@ class CSEUnpicker(object):
     creating factorization and code motion opportunities.
 
     The cost model exploits one particular property of loops, namely linearity in
-    some symbols (further information concerning loop linearity is available in
+    symbols (further information concerning loop linearity is available in the module
     ``expression.py``)."""
 
     def __init__(self, exprs, header, hoisted, decls, expr_graph):
@@ -154,27 +155,29 @@ class CSEUnpicker(object):
     def linear_dims(self):
         return self.exprs.values()[0].linear_dims
 
-    def _push_temporaries(self, temporaries, loop, trace, global_trace):
+    def _push_temporaries(self, temporaries, trace, global_trace, ra):
 
         def is_pushable(temporary):
-            reads = [global_trace[r.urepr] for r in temporary.reads]
             # To be pushable ...
             if not temporary.is_ssa:
                 # ... must be written only once
                 return False
-            if not temporary.is_read:
+            if not temporary.readby:
                 # ... must actually be read by some other temporaries (the output
                 # variables are not)
                 return False
             if temporary.is_static_init:
                 # ... its rvalue must not be an array initializer
                 return False
-            if not all(not r.reads or
-                       r.pushed or
-                       loop == r.main_loop or
-                       temporary.main_loop.dim in r.rank for r in reads):
-                # ... all the read temporaries must still be accessible
-                return False
+            pushed_in = [global_trace.get(rb.urepr) for rb in temporary.readby]
+            pushed_in = set(rb.main_loop.children[0] for rb in pushed_in if rb)
+            for s in temporary.reads:
+                # ... all the read temporaries must be accessible in the loops in which
+                # they will be pushed
+                if s.urepr in global_trace and global_trace[s.urepr].pushed:
+                    continue
+                if any(l not in ra[self.decls[s.symbol]] for l in pushed_in):
+                    return False
             return True
 
         to_replace, modified_temporaries = {}, OrderedDict()
@@ -183,12 +186,12 @@ class CSEUnpicker(object):
             if not is_pushable(t):
                 continue
             to_replace[t.symbol] = t.expr or t.symbol
-            for ir in t.is_read:
-                modified_temporaries[ir.urepr] = trace.get(ir.urepr,
-                                                           global_trace[ir.urepr])
+            for rb in t.readby:
+                modified_temporaries[rb.urepr] = trace.get(rb.urepr,
+                                                           global_trace[rb.urepr])
             # The temporary is going to be pushed, so we can remove it as long as
             # it is not needed somewhere else
-            if t.node in t.main_loop.body and all(ir.urepr in trace for ir in t.is_read):
+            if t.node in t.main_loop.body and all(rb.urepr in trace for rb in t.readby):
                 global_trace[t.urepr].pushed = True
                 t.main_loop.body.remove(t.node)
                 self.decls.pop(t.name, None)
@@ -203,11 +206,12 @@ class CSEUnpicker(object):
 
         # Update the temporaries
         for t in modified_temporaries:
-            for r, c in t.reads_costs.items():
+            for r, c in t.linear_reads_costs.items():
                 if r.urepr in replaced:
-                    t.reads_costs.pop(r)
-                    for p, p_c in global_trace[r.urepr].reads_costs.items() or [(r, 0)]:
-                        t.reads_costs[p] = c + p_c
+                    t.linear_reads_costs.pop(r)
+                    r_linear_reads_costs = global_trace[r.urepr].linear_reads_costs
+                    for p, p_c in r_linear_reads_costs.items() or [(r, 0)]:
+                        t.linear_reads_costs[p] = c + p_c
 
     def _transform_temporaries(self, temporaries):
         from rewriter import ExpressionRewriter
@@ -215,7 +219,7 @@ class CSEUnpicker(object):
         # Never attempt to transform the main expression
         temporaries = [t for t in temporaries if t.node not in self.exprs]
 
-        lda = ldanalysis(self.header, key='symbol', value='dim')
+        lda = loops_analysis(self.header, key='symbol', value='dim')
 
         # Expand + Factorize
         rewriters = OrderedDict()
@@ -226,11 +230,11 @@ class CSEUnpicker(object):
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
             ew.expand(mode='all', lda=lda)
-            ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.reads}, lda=lda)
+            ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.linear_reads}, lda=lda)
             ew.factorize(mode='heuristic')
             rewriters[t] = ew
 
-        lda = ldanalysis(self.header, value='dim')
+        lda = loops_analysis(self.header, value='dim')
 
         # Code motion
         for t, ew in rewriters.items():
@@ -238,16 +242,17 @@ class CSEUnpicker(object):
 
     def _analyze_expr(self, expr, lda):
         finder = FindInstances(Symbol)
-        syms = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
-        syms = [s for s in syms if any(l in self.linear_dims for l in lda[s])]
+        reads = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
+        reads = [s for s in reads if s.symbol in self.decls]
+        syms = [s for s in reads if any(l in self.linear_dims for l in lda[s])]
 
-        syms_costs = OrderedDict()
+        linear_reads_costs = OrderedDict()
 
         def wrapper(node, found=0):
             if isinstance(node, Symbol):
                 if node in syms:
-                    syms_costs.setdefault(node, 0)
-                    syms_costs[node] += found
+                    linear_reads_costs.setdefault(node, 0)
+                    linear_reads_costs[node] += found
                 return
             elif isinstance(node, (EmptyStatement, ArrayInit)):
                 return
@@ -258,7 +263,7 @@ class CSEUnpicker(object):
                 wrapper(o, found)
         wrapper(expr)
 
-        return syms_costs
+        return reads, linear_reads_costs
 
     def _analyze_loop(self, loop, nest, lda, global_trace):
         trace = OrderedDict()
@@ -267,22 +272,22 @@ class CSEUnpicker(object):
             if not isinstance(node, Writer):
                 not_ssa = [trace[w] for w in in_written(node, key='urepr') if w in trace]
                 for t in not_ssa:
-                    t.is_read.append(t.symbol)
+                    t.readby.append(t.symbol)
                 continue
-            syms_costs = self._analyze_expr(node.rvalue, lda)
-            for s in syms_costs.keys():
+            reads, linear_reads_costs = self._analyze_expr(node.rvalue, lda)
+            for s in linear_reads_costs.keys():
                 if s.urepr in global_trace:
                     temporary = global_trace[s.urepr]
-                    temporary.is_read.append(node.lvalue)
+                    temporary.readby.append(node.lvalue)
                     temporary = temporary.reconstruct()
                     temporary.level = -1
                     trace[s.urepr] = temporary
                 else:
                     temporary = trace.setdefault(s.urepr, Temporary(s, loop, nest))
-                    temporary.is_read.append(node.lvalue)
-            new_temporary = Temporary(node, loop, nest, syms_costs)
+                    temporary.readby.append(node.lvalue)
+            new_temporary = Temporary(node, loop, nest, reads, linear_reads_costs)
             new_temporary.level = max([trace[s.urepr].level for s
-                                       in new_temporary.reads] or [-2]) + 1
+                                       in new_temporary.linear_reads] or [-2]) + 1
             trace[node.lvalue.urepr] = new_temporary
 
         return trace
@@ -330,18 +335,19 @@ class CSEUnpicker(object):
                 t_inloop_cost = 0
 
                 # Calculate the operation count for /t/ if we applied expansion + fact
-                reads = []
-                for read, cost in t.reads_costs.items():
+                linear_reads = []
+                for read, cost in t.linear_reads_costs.items():
                     if read.urepr in new_trace:
-                        reads.extend(new_trace[read.urepr].reads or [read.urepr])
+                        linear_reads.extend(new_trace[read.urepr].linear_reads or
+                                            [read.urepr])
                         t_outloop_cost += new_trace[read.urepr].project*cost
                     else:
-                        reads.extend([read.urepr])
+                        linear_reads.extend([read.urepr])
 
                 # Factorization will kill duplicates and increase the number of sums
                 # in the outer loop
-                fact_syms = {s.urepr if isinstance(s, Symbol) else s for s in reads}
-                t_outloop_cost += len(reads) - len(fact_syms)
+                fact_syms = {s.urepr if isinstance(s, Symbol) else s for s in linear_reads}
+                t_outloop_cost += len(linear_reads) - len(fact_syms)
 
                 # Note: if n=len(fact_syms), then we'll have n prods, n-1 sums
                 t_inloop_cost += 2*len(fact_syms) - 1
@@ -352,14 +358,14 @@ class CSEUnpicker(object):
 
                 # Update the trace because we want to track the cost after "pushing" the
                 # temporaries on which /t/ depends into /t/ itself
-                new_trace[t.urepr].reads_costs = {s: 1 for s in fact_syms}
+                new_trace[t.urepr].linear_reads_costs = {s: 1 for s in fact_syms}
 
             # Some temporaries at levels < /i/ may also appear in:
             # 1) subsequent loops
             # 2) levels beyond /i/
             for t in list(flatten([levels[j] for j in range(level)])):
-                if any(ir.urepr not in new_trace for ir in t.is_read) or \
-                        any(new_trace[ir.urepr].level > level for ir in t.is_read):
+                if any(rb.urepr not in new_trace for rb in t.readby) or \
+                        any(new_trace[rb.urepr].level > level for rb in t.readby):
                     # Note: condition 1) is basically saying "if I'm read from
                     # a temporary that is not in this loop's trace, then I must
                     # be read in some other loops".
@@ -385,8 +391,11 @@ class CSEUnpicker(object):
         return best
 
     def unpick(self):
+        # Collect all necessary info
+        external_decls = [d for d in self.decls.values() if d.scope == EXTERNAL]
         fors = visit(self.header, info_items=['fors'])['fors']
-        lda = ldanalysis(self.header, value='dim')
+        lda = loops_analysis(self.header, value='dim')
+        ra = reachability_analysis(self.header, external_decls)
 
         # Collect all loops to be analyzed
         nests = OrderedDict()
@@ -395,7 +404,7 @@ class CSEUnpicker(object):
                 if loop.is_linear:
                     nests[loop] = nest
 
-        # Analysis of loops
+        # Analyze loops
         global_trace = OrderedDict()
         mapper = OrderedDict()
         for loop, nest in nests.items():
@@ -420,7 +429,7 @@ class CSEUnpicker(object):
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):
-                self._push_temporaries(levels[i-1], loop, trace, global_trace)
+                self._push_temporaries(levels[i-1], trace, global_trace, ra)
                 self._transform_temporaries(levels[i])
 
         # Clean up
