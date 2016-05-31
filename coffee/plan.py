@@ -36,6 +36,7 @@
 import system
 from base import *
 from utils import *
+from citations import update_citations
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
 from expression import MetaExpr
@@ -164,6 +165,8 @@ class ASTKernel(object):
             params = {}
         else:
             params = opts
+
+        update_citations(params)
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
