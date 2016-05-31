@@ -33,6 +33,7 @@
 
 """Handle article citations based on the employed optimizations."""
 
+
 def update_citations(params):
     """Update citations list for the known COFFEE users."""
 

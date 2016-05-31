@@ -34,7 +34,6 @@
 """This file contains the hierarchy of classes that implement a kernel's
 Abstract Syntax Tree (AST)."""
 
-from collections import namedtuple
 from copy import deepcopy as dcopy
 from math import isnan
 import numbers
@@ -325,7 +324,6 @@ class SparseArrayInit(ArrayInit):
         """
         super(SparseArrayInit, self).__init__(values, precision)
 
-        # It's more practice to handle namedtuples
         from utils import Region
         nonzero = [[Region(size, ofs) for size, ofs in dim] for dim in nonzero]
         self.nonzero = tuple(nonzero)
