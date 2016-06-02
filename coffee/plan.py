@@ -37,7 +37,6 @@
 arch = {}
 compiler = {}
 isa = {}
-blas = {}
 verbose = False
 initialized = False
 
@@ -61,7 +60,6 @@ class ASTKernel(object):
     def __init__(self, ast, include_dirs=None):
         self.ast = ast
         self.include_dirs = include_dirs or []
-        self.blas = False
 
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
@@ -268,17 +266,16 @@ class ASTKernel(object):
         return self.ast.gencode()
 
 
-def init_coffee(_isa, _compiler, _blas, _arch='default'):
+def init_coffee(_isa, _compiler, _arch='default'):
     """Initialize COFFEE."""
 
-    global arch, isa, compiler, blas, initialized
+    global arch, isa, compiler, initialized
 
     # Populate dictionaries with keywords for backend-specific (hardware,
     # compiler, ...) optimizations
     arch = _init_arch(_arch)
     isa = _init_isa(_isa)
     compiler = _init_compiler(_compiler)
-    blas = _init_blas(_blas)
     if isa and compiler:
         initialized = True
 
@@ -377,16 +374,3 @@ def _init_compiler(compiler):
         }
 
     return {}
-
-
-def _init_blas(blas):
-    """Initialize a dictionary of blas-specific keywords for code generation."""
-
-    import os
-
-    blas_dict = {
-        'dir': os.environ.get("PYOP2_BLAS_DIR", ""),
-        'namespace': ''
-    }
-
-    return blas_dict
