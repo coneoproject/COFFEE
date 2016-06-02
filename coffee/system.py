@@ -36,6 +36,7 @@
 import sys
 
 from base import *
+from logger import Logger
 
 
 __all__ = ['arch', 'compiler', 'isa', 'options', 'initialized']
@@ -84,7 +85,7 @@ def coffee_init(**kwargs):
     if all([architecture, compiler, isa]):
         initialized = True
 
-    options['verbose'] = True
+    options.register('logging', Logger.current(), Logger.set_level)
     options.register('architecture', architecture_id, set_architecture)
     options.register('compiler', compiler_id, set_compiler)
     options.register('isa', isa_id, set_isa)
@@ -191,3 +192,13 @@ def set_isa(isa_id):
         }
 
     return {}
+
+
+def set_min_log_level():
+    """Minimize logging output."""
+    global options
+    options['logging'] = 'func_warning'
+
+
+def set_max_log_level():
+    """Maximize logging output."""

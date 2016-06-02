@@ -35,12 +35,12 @@ from math import ceil
 from copy import deepcopy as dcopy
 from collections import OrderedDict
 from itertools import product
-from warnings import warn as warning
 import numpy
 
 from base import *
 from utils import *
 import system
+from logger import Logger
 from coffee.visitors import FindInstances
 
 
@@ -487,9 +487,9 @@ class LoopVectorizer(object):
         vs = VectStrategy
         if opts not in [vs.SPEC_UAJ_PADD, vs.SPEC_UAJ_PADD_FULL,
                         vs.SPEC_PADD, vs.SPEC_PEEL]:
-            warning("Don't know how to vectorize option %s, giving up." % opts)
+            Logger.out("Don't know how to vectorize %s" % opts, "func_warning")
         if system.isa['inst_set'] == 'SSE':
-            warning("Don't know how to specialize vectorization for SSE")
+            Logger.out("Don't know how to specialize vectorization for SSE", "func_warning")
 
         layout = None
         for stmt, expr_info in self.exprs.items():

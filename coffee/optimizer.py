@@ -35,7 +35,6 @@ import operator
 import resource
 from collections import OrderedDict
 from itertools import combinations
-from warnings import warn as warning
 from math import factorial as fact
 
 import system
@@ -44,6 +43,7 @@ from utils import *
 from scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from rewriter import ExpressionRewriter
 from cse import CSEUnpicker
+from logger import Logger
 from coffee.visitors import FindInstances, ProjectExpansion
 
 
@@ -609,7 +609,7 @@ class LoopOptimizer(object):
                 resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY,
                                                            resource.RLIM_INFINITY))
             except resource.error:
-                warning("Stack may blow up, and could not increase its size.")
+                Logger.out("Stack may blow up, could not increase its size.", "func_warning")
 
     @property
     def expr_loops(self):
