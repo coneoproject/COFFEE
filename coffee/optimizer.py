@@ -38,7 +38,7 @@ from itertools import combinations
 from warnings import warn as warning
 from math import factorial as fact
 
-import plan
+import system
 from base import *
 from utils import *
 from scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
@@ -372,7 +372,7 @@ class LoopOptimizer(object):
         # The memory threshold. The total size of temporaries will not have to
         # be greated than this value. If we predict that injection will lead
         # to too much temporary space, we have to partially drop it
-        threshold = plan.arch['cache_size'] * 1.2
+        threshold = system.architecture['cache_size'] * 1.2
 
         # 1) Find out and unroll injectable loops. For unrolling we create new
         # expressions; that is, for now, we do not modify the AST in place.
@@ -501,7 +501,7 @@ class LoopOptimizer(object):
                     # /cost/ * /sizeof(term)/.
                     size = [l.size for l in expr_info.linear_loops]
                     size = reduce(operator.mul, size, 1)
-                    storage_increase = cost * size * plan.arch[expr_info.type]
+                    storage_increase = cost * size * system.architecture[expr_info.type]
 
                     # Track the injectable sub-expression and its cost/save. The
                     # final decision of whether to actually perform injection or not

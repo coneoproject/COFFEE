@@ -34,7 +34,7 @@
 from sys import maxint
 import operator
 
-from plan import verbose
+from system import options
 from base import *
 from utils import *
 from coffee.visitors import EstimateFlops
@@ -382,7 +382,7 @@ class CSEUnpicker(object):
 
             cse = self._cost_cse(fact_levels, (level + 1, bounds[1]))
 
-        if verbose:
+        if options['verbose']:
             print BLUE % ("Cost model :: unpicking CSE between levels [%d, %d]:" % bounds),
             print BLUE % ("cost=%d (cse=%d, outloop=%d, inloop_fact=%d, inloop_cse=%d)" %
                           (uptolevel_cost, cse_cost, total_outloop_cost,
@@ -424,7 +424,7 @@ class CSEUnpicker(object):
                 if local_best[2] < global_best[2]:
                     global_best = local_best
 
-            if verbose:
+            if options['verbose']:
                 print BLUE % ("Cost_model :: Best [%d, %d] (cost=%d)" % global_best)
 
             # Transform the loop
