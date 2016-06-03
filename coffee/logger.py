@@ -33,14 +33,8 @@
 
 """The COFFEE logger."""
 
-from collections import OrderedDict
 import logging
 import sys
-try:
-    from mpi4py import MPI
-    rank = MPI.COMM_WORLD.Get_rank()
-except ImportError:
-    rank = 0
 
 
 logger = logging.getLogger('COFFEE')
@@ -68,16 +62,16 @@ RED = '\033[1;37;31m%s\033[0m'
 BLUE = '\033[1;37;34m%s\033[0m'
 GREEN = '\033[1;37;32m%s\033[0m'
 
-COLORS = OrderedDict([
-    (DEBUG, RED),
-    (INFO, GREEN),
-    (COST_MODEL, BLUE),
-    (PERF_OK, GREEN),
-    (PERF_WARN, BLUE),
-    (WARNING, BLUE),
-    (ERROR, RED),
-    (CRITICAL, RED)
-])
+COLORS = {
+    DEBUG: RED,
+    INFO: GREEN,
+    COST_MODEL: BLUE,
+    PERF_OK: GREEN,
+    PERF_WARN: BLUE,
+    WARNING: BLUE,
+    ERROR: RED,
+    CRITICAL: RED
+}
 
 
 def set_log_level(level):
@@ -104,9 +98,8 @@ def log(msg, level=INFO, *args, **kwargs):
     """
     assert level in [DEBUG, INFO, COST_MODEL, PERF_OK, PERF_WARN, WARNING, ERROR, CRITICAL]
 
-    if rank == 0:
-        color = COLORS[level] if sys.stdout.isatty() and sys.stderr.isatty() else '%s'
-        logger.log(level, color % msg, *args, **kwargs)
+    color = COLORS[level] if sys.stdout.isatty() and sys.stderr.isatty() else '%s'
+    logger.log(level, color % msg, *args, **kwargs)
 
 
 def warn(msg, *args, **kwargs):
