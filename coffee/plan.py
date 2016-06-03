@@ -39,7 +39,7 @@ from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
 from expression import MetaExpr
-from logger import Logger
+from logger import log, warn, PERF_OK, PERF_WARN
 from coffee.visitors import FindInstances, EstimateFlops
 
 from collections import defaultdict, OrderedDict
@@ -82,13 +82,13 @@ class ASTKernel(object):
                          for (loop, header), exprs in nests.items()]
             # Combining certain optimizations is meaningless/forbidden.
             if dead_ops_elimination and split:
-                Logger.out("Split forbidden with dead-ops elimination", "func_warning")
+                warn("Split forbidden with dead-ops elimination")
                 return
             if dead_ops_elimination and v_type and v_type != VectStrategy.AUTO:
-                Logger.out("Vect forbidden with dead-ops elimination", "func_warning")
+                warn("Vect forbidden with dead-ops elimination")
                 return
             if rewrite == 'auto' and len(info['exprs']) > 1:
-                Logger.out("Rewrite auto forbidden with multiple exprs", "func_warning")
+                warn("Rewrite auto forbidden with multiple exprs")
                 rewrite = 4
 
             ### Optimization pipeline ###
@@ -176,10 +176,9 @@ class ASTKernel(object):
 
         tot_time = time.time() - start_time
 
-        out_string = "COFFEE finished in %g seconds (flops: %d -> %d)" % \
+        output = "COFFEE finished in %g seconds (flops: %d -> %d)" % \
             (tot_time, flops_pre, flops_post)
-        out_level = 'info' if flops_post <= flops_pre else 'perf_warning'
-        Logger.out(out_string, out_level)
+        log(output, PERF_OK if flops_post <= flops_pre else PERF_WARN)
 
     def plan_gpu(self):
         """Transform the kernel suitably for GPU execution.

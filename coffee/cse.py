@@ -38,7 +38,7 @@ from base import *
 from utils import *
 from coffee.visitors import EstimateFlops
 from expression import MetaExpr
-from logger import Logger
+from logger import log, COST_MODEL
 
 
 class Temporary(object):
@@ -382,10 +382,9 @@ class CSEUnpicker(object):
 
             cse = self._cost_cse(fact_levels, (level + 1, bounds[1]))
 
-        Logger.out('CSE :: unpicking between levels [%d, %d]:' % bounds, 'verbose')
-        Logger.out('CSE :: cost=%d (cse=%d, outloop=%d, inloop_fact=%d, inloop_cse=%d)' %
-                   (uptolevel_cost, cse_cost, total_outloop_cost, level_inloop_cost, cse),
-                   'verbose')
+        log('CSE: unpicking between levels [%d, %d]:' % bounds, COST_MODEL)
+        log('CSE: cost=%d (cse=%d, outloop=%d, inloop_fact=%d, inloop_cse=%d)' %
+            (uptolevel_cost, cse_cost, total_outloop_cost, level_inloop_cost, cse), COST_MODEL)
 
         return best
 
@@ -423,7 +422,7 @@ class CSEUnpicker(object):
                 if local_best[2] < global_best[2]:
                     global_best = local_best
 
-            Logger.out("Cost_model :: Best [%d, %d] (cost=%d)" % global_best, 'verbose')
+            log("-- Best: [%d, %d] (cost=%d) --" % global_best, COST_MODEL)
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):

@@ -40,7 +40,7 @@ from coffee.visitors import *
 from hoister import Hoister
 from expander import Expander
 from factorizer import Factorizer
-from logger import Logger
+from logger import warn
 
 
 class ExpressionRewriter(object):
@@ -189,7 +189,7 @@ class ExpressionRewriter(object):
                 should_expand = lambda n: lda.get(n.symbol) and \
                     not lda[n.symbol].issubset(set(self.expr_info.linear_dims))
         else:
-            Logger.out('Skipping unknown expansion strategy.', 'func_warning')
+            warn('Skipping unknown expansion strategy.')
             return
 
         self.expr_expander.expand(should_expand, **kwargs)
@@ -280,7 +280,7 @@ class ExpressionRewriter(object):
             elif mode == 'constants':
                 should_factorize = lambda n: not lda.get(n.symbol)
         else:
-            Logger.out('Skipping unknown factorization strategy.', 'func_warning')
+            warn('Skipping unknown factorization strategy.')
             return
 
         # Perform the factorization
@@ -324,7 +324,7 @@ class ExpressionRewriter(object):
                 parent.children[parent.children.index(node)] = reassociated_node
 
             else:
-                Logger.out('Unexpected node %s' % typ(node), 'func_warning')
+                warn('Unexpected node %s while reassociating' % typ(node))
 
         reorder = reorder if reorder else lambda n: (n.rank, n.dim)
         _reassociate(self.stmt.rvalue, self.stmt)

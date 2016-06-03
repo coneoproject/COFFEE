@@ -33,7 +33,7 @@
 
 from base import *
 from utils import *
-from logger import Logger
+from logger import warn
 
 
 class Extractor(object):
@@ -366,7 +366,7 @@ class Hoister(object):
                         wrap_loop = ()
                         offset = place.children[place.children.index(self.stmt)]
                 else:
-                    Logger.out("Skipping unexpected code motion case.", "func_warning")
+                    warn("Skipping unexpected code motion case.")
                     return
 
                 loop_size = tuple([l.size for l in wrap_loop])

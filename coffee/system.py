@@ -36,7 +36,7 @@
 import sys
 
 from base import *
-from logger import Logger
+from logger import LOG_DEFAULT, set_log_level
 
 
 __all__ = ['arch', 'compiler', 'isa', 'options', 'initialized']
@@ -85,7 +85,7 @@ def coffee_init(**kwargs):
     if all([architecture, compiler, isa]):
         initialized = True
 
-    options.register('logging', Logger.current(), Logger.set_level)
+    options.register('logging', LOG_DEFAULT, set_log_level)
     options.register('architecture', architecture_id, set_architecture)
     options.register('compiler', compiler_id, set_compiler)
     options.register('isa', isa_id, set_isa)

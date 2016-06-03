@@ -31,69 +31,83 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""Simple logging infrastructure."""
+"""The COFFEE logger."""
 
 from collections import OrderedDict
+import logging
 import sys
+try:
+    from mpi4py import MPI
+    rank = MPI.COMM_WORLD.Get_rank()
+except ImportError:
+    rank = 0
 
 
-class Logger(object):
-    """Basic logging infrastructure."""
+logger = logging.getLogger('COFFEE')
+_ch = logging.StreamHandler()
+logger.addHandler(_ch)
 
-    LEVELS = OrderedDict([
-        ('func_warning', '\033[1;37;31m%s\033[0m'),  # red
-        ('info', '\033[1;37;32m%s\033[0m'),  # green
-        ('perf_warning', '\033[1;37;34m%s\033[0m'),  # blue
-        ('verbose', '\033[1;37;34m%s\033[0m'),  # blue
-    ])
+# Add extra levels between INFO (value=20) and WARNING (value=30)
+DEBUG = logging.DEBUG
+INFO = logging.INFO
+COST_MODEL = 21
+PERF_OK = 28
+PERF_WARN = 29
+WARNING = logging.WARNING
+ERROR = logging.ERROR
+CRITICAL = logging.CRITICAL
 
-    DEFAULT = 'info'
-    CURRENT = 'info'
+logging.addLevelName(COST_MODEL, "COST_MODEL")
+logging.addLevelName(PERF_OK, "PERF_OK")
+logging.addLevelName(PERF_WARN, "PERF_WARN")
 
-    @staticmethod
-    def out(output, level='info'):
-        """Print ``output`` if ``level`` is below the system verbosity threshold."""
-        assert level in Logger.LEVELS
+LOG_DEFAULT = PERF_OK
+logger.setLevel(LOG_DEFAULT)
 
-        msg_value = Logger.LEVELS.keys().index(level)
-        system_value = Logger.LEVELS.keys().index(Logger.CURRENT)
+RED = '\033[1;37;31m%s\033[0m'
+BLUE = '\033[1;37;34m%s\033[0m'
+GREEN = '\033[1;37;32m%s\033[0m'
 
-        # Colors if the terminal supports it (disabled e.g. when piped to file)
-        if sys.stdout.isatty() and sys.stderr.isatty():
-            color = Logger.LEVELS[level]
-        else:
-            color = "%s"
+COLORS = OrderedDict([
+    (DEBUG, RED),
+    (INFO, GREEN),
+    (COST_MODEL, BLUE),
+    (PERF_OK, GREEN),
+    (PERF_WARN, BLUE),
+    (WARNING, BLUE),
+    (ERROR, RED),
+    (CRITICAL, RED)
+])
 
-        if msg_value <= system_value:
-            print (color % output)
 
-    @staticmethod
-    def current():
-        """Get the current log level."""
-        return Logger.CURRENT
+def set_log_level(level):
+    """Set the log level of the COFFEE logger.
 
-    @staticmethod
-    def default():
-        """Get the default log level."""
-        return Logger.DEFAULT
+    :arg level: accepted values are: DEBUG, INFO, COST_MODEL, PERF_OK, PERF_WARN, WARNING,
+        ERROR, CRITICAL
+    """
+    logger.setLevel(level)
 
-    @staticmethod
-    def reset_level():
-        """Set to the default log level."""
-        Logger.CURRENT = Logger.DEFAULT
 
-    @staticmethod
-    def set_level(level):
-        """Set a different log level."""
-        assert level in Logger.LEVELS
-        Logger.CURRENT = level
+def set_log_noperf():
+    """Do not print performance-related messages."""
+    logger.setLevel(WARNING)
 
-    @staticmethod
-    def set_min_level():
-        """Set to minimum log level."""
-        Logger.CURRENT = 'func_warning'
 
-    @staticmethod
-    def set_max_level():
-        """Set to maximum log level."""
-        Logger.CURRENT = 'verbose'
+def log(msg, level=INFO, *args, **kwargs):
+    """Wrapper of the main Python's logging function. Print 'msg % args' with
+    the severity 'level'.
+
+    :arg msg: the message to be printed.
+    :arg level: accepted values are: DEBUG, INFO, COST_MODEL, PERF_OK, PERF_WARN, WARNING,
+        ERROR, CRITICAL
+    """
+    assert level in [DEBUG, INFO, COST_MODEL, PERF_OK, PERF_WARN, WARNING, ERROR, CRITICAL]
+
+    if rank == 0:
+        color = COLORS[level] if sys.stdout.isatty() and sys.stderr.isatty() else '%s'
+        logger.log(level, color % msg, *args, **kwargs)
+
+
+def warn(msg, *args, **kwargs):
+    log(msg, WARNING, *args, **kwargs)

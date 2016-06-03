@@ -40,7 +40,7 @@ import numpy
 from base import *
 from utils import *
 import system
-from logger import Logger
+from logger import warn
 from coffee.visitors import FindInstances
 
 
@@ -487,9 +487,9 @@ class LoopVectorizer(object):
         vs = VectStrategy
         if opts not in [vs.SPEC_UAJ_PADD, vs.SPEC_UAJ_PADD_FULL,
                         vs.SPEC_PADD, vs.SPEC_PEEL]:
-            Logger.out("Don't know how to vectorize %s" % opts, "func_warning")
+            warn("Don't know how to specialize vectorization for %s" % opts)
         if system.isa['inst_set'] == 'SSE':
-            Logger.out("Don't know how to specialize vectorization for SSE", "func_warning")
+            warn("Don't know how to specialize vectorization for SSE")
 
         layout = None
         for stmt, expr_info in self.exprs.items():
