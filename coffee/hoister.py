@@ -31,10 +31,9 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from warnings import warn as warning
-
 from base import *
 from utils import *
+from logger import warn
 
 
 class Extractor(object):
@@ -367,7 +366,7 @@ class Hoister(object):
                         wrap_loop = ()
                         offset = place.children[place.children.index(self.stmt)]
                 else:
-                    warning("Unexpected code motion case. Skipping.")
+                    warn("Skipping unexpected code motion case.")
                     return
 
                 loop_size = tuple([l.size for l in wrap_loop])

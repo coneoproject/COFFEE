@@ -35,7 +35,6 @@
 
 from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict
-import sys
 
 import networkx as nx
 
@@ -882,17 +881,3 @@ def postprocess(node):
 
     _postprocess(node, None)
     make_blocks()
-
-
-# Colors if the terminal supports it (disabled e.g. when piped to file)
-# This code is partly extracted from ``https://bitbucket.org/fenics-project/ufl``
-if sys.stdout.isatty() and sys.stderr.isatty():
-    RED = "\033[1;37;31m%s\033[0m"
-    BLUE = "\033[1;37;34m%s\033[0m"
-    GREEN = "\033[1;37;32m%s\033[0m"
-    HEADER = "\033[95m%s\033[0m"
-else:
-    RED = "%s"
-    BLUE = "%s"
-    GREEN = "%s"
-    HEADER = "%s"

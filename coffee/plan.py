@@ -33,24 +33,16 @@
 
 """COFFEE's optimization plan constructor."""
 
-# The following global variables capture the internal state of COFFEE
-arch = {}
-compiler = {}
-isa = {}
-blas = {}
-verbose = False
-initialized = False
-
+import system
 from base import *
 from utils import *
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
 from expression import MetaExpr
+from logger import log, warn, PERF_OK, PERF_WARN
 from coffee.visitors import FindInstances, EstimateFlops
 
 from collections import defaultdict, OrderedDict
-from warnings import warn as warning
-import sys
 import time
 
 
@@ -61,7 +53,6 @@ class ASTKernel(object):
     def __init__(self, ast, include_dirs=None):
         self.ast = ast
         self.include_dirs = include_dirs or []
-        self.blas = False
 
     def plan_cpu(self, opts):
         """Transform and optimize the kernel suitably for CPU execution."""
@@ -91,12 +82,13 @@ class ASTKernel(object):
                          for (loop, header), exprs in nests.items()]
             # Combining certain optimizations is meaningless/forbidden.
             if dead_ops_elimination and split:
-                raise RuntimeError("Split forbidden with zero-valued blocks avoidance")
+                warn("Split forbidden with dead-ops elimination")
+                return
             if dead_ops_elimination and v_type and v_type != VectStrategy.AUTO:
-                raise RuntimeError("SIMDization forbidden with zero-valued blocks avoidance")
+                warn("Vect forbidden with dead-ops elimination")
+                return
             if rewrite == 'auto' and len(info['exprs']) > 1:
-                warning("Rewrite mode=auto not supported with multiple expressions")
-                warning("Switching to rewrite mode=4")
+                warn("Rewrite auto forbidden with multiple exprs")
                 rewrite = 4
 
             ### Optimization pipeline ###
@@ -118,14 +110,12 @@ class ASTKernel(object):
                     loop_opt.precompute(precompute)
 
                 # 4) Vectorization
-                if initialized and flatten(loop_opt.expr_linear_loops):
+                if system.initialized and flatten(loop_opt.expr_linear_loops):
                     vect = LoopVectorizer(loop_opt, kernel)
                     if align_pad:
                         # Padding and data alignment
                         vect.autovectorize()
                     if v_type and v_type != VectStrategy.AUTO:
-                        if isa['inst_set'] == 'SSE':
-                            raise RuntimeError("SSE vectorization not supported")
                         # Specialize vectorization for the memory access pattern
                         # of the expression
                         vect.specialize(v_type, v_param)
@@ -135,8 +125,6 @@ class ASTKernel(object):
             kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
             kernel.pred.insert(0, 'inline')
             kernel.pred.insert(0, 'static')
-
-            return loop_opts
 
         start_time = time.time()
 
@@ -188,9 +176,9 @@ class ASTKernel(object):
 
         tot_time = time.time() - start_time
 
-        out_string = "COFFEE finished in %g seconds (flops: %d -> %d)" % \
+        output = "COFFEE finished in %g seconds (flops: %d -> %d)" % \
             (tot_time, flops_pre, flops_post)
-        print (GREEN if flops_post <= flops_pre else BLUE) % out_string
+        log(output, PERF_OK if flops_post <= flops_pre else PERF_WARN)
 
     def plan_gpu(self):
         """Transform the kernel suitably for GPU execution.
@@ -266,127 +254,3 @@ class ASTKernel(object):
     def gencode(self):
         """Generate a string representation of the AST."""
         return self.ast.gencode()
-
-
-def init_coffee(_isa, _compiler, _blas, _arch='default'):
-    """Initialize COFFEE."""
-
-    global arch, isa, compiler, blas, initialized
-
-    # Populate dictionaries with keywords for backend-specific (hardware,
-    # compiler, ...) optimizations
-    arch = _init_arch(_arch)
-    isa = _init_isa(_isa)
-    compiler = _init_compiler(_compiler)
-    blas = _init_blas(_blas)
-    if isa and compiler:
-        initialized = True
-
-    # Allow visits of ASTs that become huge due to transformation. The constant
-    # /4000/ was empirically found to be an acceptable value
-    sys.setrecursionlimit(4000)
-
-
-def _init_arch(arch):
-    """Set architecture-specific parameters."""
-
-    # In the following, all sizes are in Bytes
-    if arch == 'default':
-        # The default architecture is a conventional multi-core CPU, such as
-        # an Intel Haswell
-        return {
-            'cache_size': 256 * 10**3,  # The private, closest memory to the core
-            'double': 8
-        }
-
-    else:
-        return {
-            'cache_size': 0,
-            'double': sys.maxint
-        }
-
-
-def _init_isa(isa):
-    """Set the instruction set architecture (isa)."""
-
-    if isa == 'sse':
-        return {
-            'inst_set': 'SSE',
-            'avail_reg': 16,
-            'alignment': 16,
-            'dp_reg': 2,  # Number of double values per register
-            'reg': lambda n: 'xmm%s' % n
-        }
-
-    if isa == 'avx':
-        return {
-            'inst_set': 'AVX',
-            'avail_reg': 16,
-            'alignment': 32,
-            'dp_reg': 4,  # Number of double values per register
-            'reg': lambda n: 'ymm%s' % n,
-            'zeroall': '_mm256_zeroall ()',
-            'setzero': AVXSetZero(),
-            'decl_var': '__m256d',
-            'align_array': lambda p: '__attribute__((aligned(%s)))' % p,
-            'symbol_load': lambda s, r, o=None: AVXLoad(s, r, o),
-            'symbol_set': lambda s, r, o=None: AVXSet(s, r, o),
-            'store': lambda m, r: AVXStore(m, r),
-            'mul': lambda r1, r2: AVXProd(r1, r2),
-            'div': lambda r1, r2: AVXDiv(r1, r2),
-            'add': lambda r1, r2: AVXSum(r1, r2),
-            'sub': lambda r1, r2: AVXSub(r1, r2),
-            'l_perm': lambda r, f: AVXLocalPermute(r, f),
-            'g_perm': lambda r1, r2, f: AVXGlobalPermute(r1, r2, f),
-            'unpck_hi': lambda r1, r2: AVXUnpackHi(r1, r2),
-            'unpck_lo': lambda r1, r2: AVXUnpackLo(r1, r2)
-        }
-
-    return {}
-
-
-def _init_compiler(compiler):
-    """Set compiler-specific keywords. """
-
-    if compiler == 'intel':
-        return {
-            'name': 'intel',
-            'cmd': 'icc',
-            'align': lambda o: '__attribute__((aligned(%s)))' % o,
-            'align_forloop': '#pragma vector aligned',
-            'force_simdization': '#pragma simd',
-            'AVX': '-xAVX',
-            'SSE': '-xSSE',
-            'ipo': '-ip',
-            'native_opt': '-xHost',
-            'vect_header': '#include <immintrin.h>'
-        }
-
-    if compiler == 'gnu':
-        return {
-            'name': 'gnu',
-            'cmd': 'gcc',
-            'align': lambda o: '__attribute__((aligned(%s)))' % o,
-            'align_forloop': '',
-            'force_simdization': '',
-            'AVX': '-mavx',
-            'SSE': '-msse',
-            'ipo': '',
-            'native_opt': '-mtune=native',
-            'vect_header': '#include <immintrin.h>'
-        }
-
-    return {}
-
-
-def _init_blas(blas):
-    """Initialize a dictionary of blas-specific keywords for code generation."""
-
-    import os
-
-    blas_dict = {
-        'dir': os.environ.get("PYOP2_BLAS_DIR", ""),
-        'namespace': ''
-    }
-
-    return blas_dict
