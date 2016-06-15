@@ -479,6 +479,7 @@ class Flattener(Visitor):
 
     def __init__(self):
         super(Flattener, self).__init__()
+        self.args = []
         self.found = []
 
     def visit_object(self, o, *args, **kwargs):
@@ -496,24 +497,24 @@ class Flattener(Visitor):
     def visit_FunDecl(self, o, *args, **kwargs):
         double_pointer_args = [i for i in o.args if '**' in i.typ]
         for i in o.args:
-            if '**' in i.typ and 'w' in i.lvalue.symbol:
+            if '**' in i.typ and any(j in i.lvalue.symbol for j in ['w', 'arg']):
                 i.typ = i.typ.replace('**', '*')
-                self.found.append(i.lvalue.symbol)
+                self.args.append(i.lvalue.symbol)
         ops, _ = o.operands()
         for op in o.children:
             self.visit(op)
 
     def visit_Decl(self, o, *args, **kwargs):
         found = None
-        for i in self.found:
+        for i in self.args:
             if i in o.lvalue.symbol:
                 found = i
                 o.typ = o.typ.replace('*', '')
                 break
         if found:
-            self.found.remove(found)
+            self.found.append(found)
 
     def visit_Symbol(self, o, *args, **kwargs):
-        if o.symbol in self.found:
+        if o.symbol in self.args and o.symbol not in self.found:
             o.rank = o.rank[:-1]
             o.offset = o.offset[:-1]
