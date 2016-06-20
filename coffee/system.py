@@ -136,8 +136,6 @@ def coffee_init(**kwargs):
 def coffee_reconfigure(**kwargs):
     """Reconfigure the internal state of COFFEE."""
 
-    global options
-
     options['optimizations'] = kwargs.get('optlevel')
 
 
@@ -265,16 +263,6 @@ def set_isa(isa_id):
         }
 
     return {}
-
-
-def set_min_log_level():
-    """Minimize logging output."""
-    global options
-    options['logging'] = 'func_warning'
-
-
-def set_max_log_level():
-    """Maximize logging output."""
 
 
 O0 = OptimizationLevel('O0')
