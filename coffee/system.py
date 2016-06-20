@@ -191,7 +191,7 @@ def set_compiler(compiler_id):
         * 'intel' (aka icc)
     """
 
-    if compiler == 'gnu':
+    if compiler_id == 'gnu':
         return {
             'name': 'gnu',
             'cmd': 'gcc',
@@ -205,7 +205,7 @@ def set_compiler(compiler_id):
             'vect_header': '#include <immintrin.h>'
         }
 
-    if compiler == 'intel':
+    if compiler_id == 'intel':
         return {
             'name': 'intel',
             'cmd': 'icc',
@@ -229,7 +229,7 @@ def set_isa(isa_id):
         * 'avx'
     """
 
-    if isa == 'sse':
+    if isa_id == 'sse':
         return {
             'inst_set': 'SSE',
             'avail_reg': 16,
@@ -238,7 +238,7 @@ def set_isa(isa_id):
             'reg': lambda n: 'xmm%s' % n
         }
 
-    if isa == 'avx':
+    if isa_id == 'avx':
         return {
             'inst_set': 'AVX',
             'avail_reg': 16,
