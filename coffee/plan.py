@@ -36,7 +36,6 @@
 import system
 from base import *
 from utils import *
-from citations import update_citations
 from optimizer import CPULoopOptimizer, GPULoopOptimizer
 from vectorizer import LoopVectorizer, VectStrategy
 from expression import MetaExpr
@@ -56,22 +55,41 @@ class ASTKernel(object):
         self.include_dirs = include_dirs or []
 
     def plan_cpu(self, opts):
-        """Transform and optimize the kernel suitably for CPU execution."""
+        """Optimize this :class:`ASTKernel` for CPU execution.
 
-        def _generate_cpu_code(self, kernel, **kwargs):
-            """Generate kernel code according to the various optimization options."""
+        :param opts: a dictionary of optimizations to be applied. For a description
+            of the recognized optimizations, please refer to the ``system.set_opt_level``
+            documentation. If equal to ``None``, the default optimizations in
+            ``system.options['optimizations']`` are applied; these are either the
+            optimizations set when COFFEE was initialized or those changed through
+            a call to ``set_opt_level``. In this way, a default set of optimizations
+            is applied to all kernels, but users are also allowed to select
+            specific transformations for individual kernels.
+        """
 
-            rewrite = kwargs.get('rewrite')
-            vectorize = kwargs.get('vectorize')
-            v_type, v_param = vectorize if vectorize else (None, None)
-            align_pad = kwargs.get('align_pad')
-            split = kwargs.get('split')
-            precompute = kwargs.get('precompute')
-            dead_ops_elimination = kwargs.get('dead_ops_elimination')
+        start_time = time.time()
+
+        finder = FindInstances(FunDecl, stop_when_found=True)
+        kernels = finder.visit(self.ast, ret=FindInstances.default_retval())[FunDecl]
+
+        if opts is None:
+            opts = system.OptimizationLevel.retrieve(system.options['optimizations'])
+        else:
+            opts = system.OptimizationLevel.retrieve(opts.get('optlevel', {}))
+
+        flops_pre = EstimateFlops().visit(self.ast)
+
+        for kernel in kernels:
+            rewrite = opts.get('rewrite')
+            vectorize = opts.get('vectorize', (None, None))
+            align_pad = opts.get('align_pad')
+            split = opts.get('split')
+            precompute = opts.get('precompute')
+            dead_ops_elimination = opts.get('dead_ops_elimination')
 
             info = visit(kernel)
             decls = info['decls']
-            # Structure up expressions and related metadata
+            # Collect expressions and related metadata
             nests = defaultdict(OrderedDict)
             for stmt, expr_info in info['exprs'].items():
                 parent, nest, linear_dims = expr_info
@@ -81,19 +99,21 @@ class ASTKernel(object):
                 nests[nest[0]].update({stmt: metaexpr})
             loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
                          for (loop, header), exprs in nests.items()]
-            # Combining certain optimizations is meaningless/forbidden.
+
+            # Combining certain optimizations is forbidden.
             if dead_ops_elimination and split:
                 warn("Split forbidden with dead-ops elimination")
                 return
-            if dead_ops_elimination and v_type and v_type != VectStrategy.AUTO:
+            if dead_ops_elimination and vectorize[0]:
                 warn("Vect forbidden with dead-ops elimination")
                 return
             if rewrite == 'auto' and len(info['exprs']) > 1:
                 warn("Rewrite auto forbidden with multiple exprs")
                 rewrite = 4
 
-            ### Optimization pipeline ###
+            # Main Ootimization pipeline
             for loop_opt in loop_opts:
+
                 # 0) Expression Rewriting
                 if rewrite:
                     loop_opt.rewrite(rewrite)
@@ -102,24 +122,20 @@ class ASTKernel(object):
                 if dead_ops_elimination:
                     loop_opt.eliminate_zeros()
 
-                # 2) Splitting
+                # 2) Code specialization
                 if split:
                     loop_opt.split(split)
-
-                # 3) Precomputation
                 if precompute:
                     loop_opt.precompute(precompute)
-
-                # 4) Vectorization
                 if system.initialized and flatten(loop_opt.expr_linear_loops):
                     vect = LoopVectorizer(loop_opt, kernel)
                     if align_pad:
                         # Padding and data alignment
                         vect.autovectorize()
-                    if v_type and v_type != VectStrategy.AUTO:
+                    if vectorize[0] and vectorize[0] != VectStrategy.AUTO:
                         # Specialize vectorization for the memory access pattern
                         # of the expression
-                        vect.specialize(v_type, v_param)
+                        vect.specialize(*vectorize)
 
             # Ensure kernel is always marked static inline
             # Remove either or both of static and inline (so that we get the order right)
@@ -127,55 +143,9 @@ class ASTKernel(object):
             kernel.pred.insert(0, 'inline')
             kernel.pred.insert(0, 'static')
 
-        start_time = time.time()
-
-        retval = FindInstances.default_retval()
-        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast,
-                                                                     ret=retval)[FunDecl]
-
-        if opts.get('Ofast'):
-            params = {
-                'rewrite': 2,
-                'align_pad': True,
-                'vectorize': (VectStrategy.SPEC_UAJ_PADD, 2),
-                'precompute': 'noloops'
-            }
-        elif opts.get('O4'):
-            params = {
-                'rewrite': 2,
-                'align_pad': True,
-                'dead_ops_elimination': True
-            }
-        elif opts.get('O3'):
-            params = {
-                'rewrite': 2,
-                'align_pad': True,
-                'dead_ops_elimination': True
-            }
-        elif opts.get('O2'):
-            params = {
-                'rewrite': 2,
-                'dead_ops_elimination': True
-            }
-        elif opts.get('O1'):
-            params = {
-                'rewrite': 1
-            }
-        elif opts.get('O0'):
-            params = {}
-        else:
-            params = opts
-
-        update_citations(params)
-
-        # The optimization passes are performed individually (i.e., "locally") for
-        # each function (or "kernel") found in the provided AST
-        flops_pre = EstimateFlops().visit(self.ast)
-        for kernel in kernels:
-            # Generate a specific code version
-            _generate_cpu_code(self, kernel, **params)
             # Post processing of the AST ensures higher-quality code
             postprocess(kernel)
+
         flops_post = EstimateFlops().visit(self.ast)
 
         tot_time = time.time() - start_time

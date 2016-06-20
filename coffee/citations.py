@@ -34,8 +34,21 @@
 """Handle article citations based on the employed optimizations."""
 
 
+# Papers describing COFFEE
+LUPORINI2015 = """
+Fabio Luporini and Ana Lucia Varbanescu and Florian Rathgeber and Gheorghe-Teodor Bercea \
+and J. Ramanujam and David A. Ham and Paul H. J. Kelly. Cross-Loop Optimization of \
+Arithmetic Intensity for Finite Element Local Assembly. ACM Transactions on Architecture \
+and Code Optimization, 2015.
+"""
+LUPORINI2016 = """
+Fabio Luporini and David A. Ham and Paul H. J. Kelly. An algorithm for the optimization \
+of finite element integration loops. Submitted to ACM TOMS, 2016.
+"""
+
+
 def update_citations(params):
-    """Update citations list for the known COFFEE users."""
+    """Update citations list for known COFFEE users."""
 
     # Firedrake
     try:
