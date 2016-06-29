@@ -145,13 +145,13 @@ class MainExtractor(Extractor):
                 return (dep_l, self.EXT)
             elif not dep_l:
                 # E.g. alpha*A[i,j]
-                if not set(self.expr_info.linear_dims) & dep_r or \
-                        not (self._try(left, dep_l) or self._try(right, dep_r)):
+                self._try(left, dep_l)
+                if not (set(self.expr_info.linear_dims) & dep_r and self._try(left, dep_l)):
                     return (dep_r, self.EXT)
             elif not dep_r:
                 # E.g. A[i,j]*alpha
-                if not set(self.expr_info.linear_dims) & dep_l or \
-                        not (self._try(right, dep_r) or self._try(left, dep_l)):
+                self._try(right, dep_r)
+                if not (set(self.expr_info.linear_dims) & dep_l and self._try(left, dep_l)):
                     return (dep_l, self.EXT)
             elif dep_l.issubset(dep_r):
                 # E.g. A[i]*B[i,j]
