@@ -31,13 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-try:
-    from collections import OrderedDict
-# OrderedDict was added in Python 2.7. Earlier versions can use ordereddict
-# from PyPI
-except ImportError:
-    from ordereddict import OrderedDict
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from itertools import product
 from copy import deepcopy as dcopy
 
@@ -526,7 +520,7 @@ class ZeroRemover(LoopScheduler):
 
         if isinstance(node, Symbol):
             itspace = []
-            def_itspace = [tuple((l.dim, (l.size, 0)) for l, p in nest)]
+            def_itspace = [tuple((l.dim, Region(l.size, 0)) for l, p in nest)]
             nz_bounds = zip(*nz_syms.get(node.symbol, []))
             for i, (r, o, nz_bs) in enumerate(zip(node.rank, node.offset, nz_bounds)):
                 if o[0] != 1 or isinstance(o[1], str) or is_const_dim(r):
@@ -542,15 +536,15 @@ class ZeroRemover(LoopScheduler):
                 # Now I can intersect the loop's iteration space with the non
                 # zero-valued regions
                 offset = o[1]
-                r_size_ofs = []
+                r_region = []
                 for nz_b in nz_bs:
                     nz_b_size, nz_b_offset = nz_b
                     end = nz_b_size + nz_b_offset
                     start = max(offset, nz_b_offset)
                     r_offset = start - offset
                     r_size = max(min(offset + loop.size, end) - start, 0)
-                    r_size_ofs.append((r, (r_size, r_offset)))
-                itspace.append(r_size_ofs)
+                    r_region.append((r, Region(r_size, r_offset)))
+                itspace.append(r_region)
             itspace = zip(*itspace) or def_itspace
             return itspace
 
@@ -562,26 +556,26 @@ class ZeroRemover(LoopScheduler):
             itspace_r = self._track_nz_expr(node.right, nz_syms, nest)
             itspace = OrderedDict()
             for l in itspace_l:
-                for i, size_ofs in l:
-                    itspace.setdefault(i, []).append(size_ofs)
+                for i, region in l:
+                    itspace.setdefault(i, []).append(region)
             asdict = OrderedDict()
             for r in itspace_r:
-                for i, size_ofs in r:
-                    asdict.setdefault(i, []).append(size_ofs)
+                for i, region in r:
+                    asdict.setdefault(i, []).append(region)
             itspace_r = asdict
-            for i, size_ofs in itspace_r.items():
+            for i, region in itspace_r.items():
                 if i not in itspace:
-                    itspace[i] = size_ofs
+                    itspace[i] = region
                 elif isinstance(node, (Prod, Div)):
                     result = []
-                    for j in product(itspace[i], size_ofs):
+                    for j in product(itspace[i], region):
                         # Products over zero-valued regions are ininfluent
                         result += [ItSpace(mode=1).intersect(j)]
                     itspace[i] = result
                 elif isinstance(node, (Sum, Sub)):
                     # Sums over zeros remove the zero-valued region (in other words,
                     # the non zero-valued regions get /merged/)
-                    itspace[i] = ItSpace(mode=1).merge(itspace[i] + size_ofs)
+                    itspace[i] = ItSpace(mode=1).merge(itspace[i] + region)
                 else:
                     raise RuntimeError("Zero-avoidance: unexpected op %s", str(node))
             itspace = [zip(itspace, i) for i in product(*itspace.values())]
@@ -705,7 +699,7 @@ class ZeroRemover(LoopScheduler):
             if not d.nonzero:
                 continue
             for nz_b in product(*d.nonzero):
-                entries = [range(i[1], i[1] + i[0]) for i in nz_b]
+                entries = [range(i.ofs, i.ofs + i.size) for i in nz_b]
                 if not np.all(d.init.values[np.ix_(*entries)] == 0.0):
                     nz_syms[s].append(nz_b)
 

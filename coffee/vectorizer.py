@@ -33,9 +33,8 @@
 
 from math import ceil
 from copy import deepcopy as dcopy
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from itertools import product
-import numpy
 
 from base import *
 from utils import *
@@ -48,13 +47,13 @@ class VectStrategy(object):
 
     """Supported vectorization modes."""
 
-    """Generate scalar code suitable to compiler auto-vectorization"""
+    """Generate scalar code suitable for compiler auto-vectorization"""
     AUTO = 1
 
     """Specialized (intrinsics-based) vectorization using padding"""
     SPEC_PADD = 2
 
-    """Specialized (intrinsics-based) vectorization using peel loop"""
+    """Specialized (intrinsics-based) vectorization using a peeling loop"""
     SPEC_PEEL = 3
 
     """Specialized (intrinsics-based) vectorization composed with unroll-and-jam
@@ -78,10 +77,10 @@ class LoopVectorizer(object):
         self.expr_graph = loop_opt.expr_graph
         self.nz_syms = loop_opt.nz_syms
 
-    def autovectorize(self):
+    def autovectorize(self, p_dim=-1):
         """Generate code suitable for compiler auto-vectorization.
 
-        Three main transformations may be applied here:
+        Three code transformations may be applied here:
 
             * Padding
             * Data alignment
@@ -95,12 +94,12 @@ class LoopVectorizer(object):
 
             * Pad the innermost dimension of all n-dimensional arrays to the nearest
                 multiple of the vector length.
-            * Round up, to the nearest multiple of the vector length, bounds of all
+            * Round up, to the nearest multiple of the vector length, the bounds of all
                 innermost loops in which padded arrays are accessed.
             * Since padding may induce data alignment of multi-dimensional arrays
             (in practice, this depends on the presence of offsets as well), add
             suitable '#pragma' to innermost loops to tell the backend compiler
-            about this property.
+            if this property holds.
 
         Padding works as follows. Assume a vector length of size 4, and consider
         the following piece of code: ::
@@ -135,316 +134,239 @@ class LoopVectorizer(object):
 
         Finally, all arrays are decorated with suitable attributes to enforce
         alignment to (the size in bytes of) the vector length.
+
+        :arg p_dim: the array dimension that should be padded (defaults to the
+            innermost, or -1)
         """
-        info = visit(self.header, info_items=['fors'])
-        _inner_loops = inner_loops(self.loop)
-
-        # Padding and data alignment occur along the innermost dimension
-        p_dim = -1
-
-        if any([l.increment != 1 for l, _ in flatten(info['fors'])]):
-            # Loop increments must be equal to 1, because at the moment the
-            # machinery for ensuring the correctness of the transformation for
-            # non-uniform and non-unitary increments is missing
-            return
-
-        elif sum(self.loop.size > i.size*4 for i in _inner_loops) > (len(_inner_loops)/2):
-            # The outermost loop is much larger than the inner loops: in this case,
-            # rather transpose the storage layout
-            self._transpose_layout()
-
-        else:
-            # Pad and align data
-            buffer = self._pad(p_dim)
+        buffer = self._pad(p_dim)
+        if buffer:
             self._align_data(buffer, p_dim)
 
     def _pad(self, p_dim):
         """Apply padding."""
-        info = visit(self.header, info_items=['symbols_dep', 'symbols_mode', 'symbol_refs'])
+        info = visit(self.header, info_items=['fors', 'symbols_dep',
+                                              'symbols_mode', 'symbol_refs'])
         symbols_dep = info['symbols_dep']
         symbols_mode = info['symbols_mode']
         symbol_refs = info['symbol_refs']
         retval = FindInstances.default_retval()
         to_invert = FindInstances(Invert).visit(self.header, ret=retval)[Invert]
-        align = system.compiler['align'](system.isa['alignment'])
 
-        buffer = None
+        # Loop increments different than 1 are unsupported
+        if any([l.increment != 1 for l, _ in flatten(info['fors'])]):
+            return None
+
+        DSpace = namedtuple('DSpace', ['region', 'nest', 'symbols'])
+        ISpace = namedtuple('ISpace', ['region', 'nest', 'bag'])
+
+        buf_decl = None
         for decl_name, decl in self.decls.items():
-            if numpy.prod(decl.sym.rank) == 1:
+            if not decl.size or decl.is_pointer_type:
                 continue
 
-            p_rank = decl.sym.rank[:p_dim] + (vect_roundup(decl.sym.rank[p_dim]),)
+            p_rank = decl.size[:p_dim] + (vect_roundup(decl.size[p_dim]),)
+            if decl.size[p_dim] == 1 or p_rank == decl.size:
+                continue
+
             if decl.scope == LOCAL:
-                if p_rank != decl.sym.rank:
-                    # Padding
-                    decl.pad(p_rank)
-                # Alignment
-                decl.attr.append(align)
+                decl.pad(p_rank)
                 continue
-            # Don't try and pad function arguments that are pointer-valued
-            if decl.is_pointer_type:
-                continue
-            # Examined symbol is a FunDecl argument, so a buffer might be required
-            access_modes, dataspaces = [], []
-            p_info = OrderedDict()
-            # A- Analyze occurrences of the FunDecl argument in the AST
-            for s, _ in symbol_refs[decl_name]:
-                if s is decl.sym or not s.rank:
-                    continue
-                # ... the access mode (READ, WRITE, ...)
-                access_modes.append(symbols_mode[s])
-                # ... the offset along the innermost dimension
-                p_offset = s.offset[p_dim][1]
-                # ... and the iteration and the data spaces
-                loops = tuple(l for l in symbols_dep[s] if l.dim in s.rank)
-                # Don't bad if we didn't find the reference in a loop
-                if len(loops) == 0:
-                    continue
-                itspace = tuple((l.start, l.end) for l in loops)
-                dataspace = {}
-                for l in loops:
-                    # Assume, initially, the dataspace spans the whole dimension,
-                    # then try to limit it based on available information
-                    index = s.rank.index(l.dim)
-                    l_dataspace = (0, decl.sym.rank[index])
-                    offset = s.offset[index][1]
-                    if not isinstance(offset, str):
-                        l_dataspace = (l.start + offset, l.end + offset)
-                    dataspace[index] = l_dataspace
-                assert len(dataspace) <= len(s.rank)
-                dataspaces.append(tuple(sorted((d[1] for d in dataspace.items()), key=lambda d: d[0])))
-                p_info.setdefault((itspace, p_offset), (loops, []))[1].append(s)
 
-            # B- Check dataspace overlap. Dataspaces ...
-            # ... should either completely overlap (will be mapped to the same buffer)
-            # ... or be disjoint
+            # At this point we are sure /decl/ is a FunDecl argument
+
+            # A) Can a buffer actually be allocated ?
+            symbols = [s for s, _ in symbol_refs[decl_name] if s is not decl.sym]
+            if not all(s.dim == decl.sym.dim and s.is_const_offset for s in symbols):
+                continue
+            periods = flatten([s.periods for s in symbols])
+            if not all(p == 1 for p in periods):
+                continue
+
+            # ... must be either READ or WRITE mode
+            modes = [symbols_mode[s][0] for s in symbols]
+            if not modes or any(m != modes[0] for m in modes):
+                continue
+            mode = modes[0]
+            if mode not in [READ, WRITE]:
+                continue
+
+            # ... accesses to entries in /decl/ must be explicit in all loop nests
+            deps = OrderedDict((s, [l for l in symbols_dep[s] if l.dim in s.rank])
+                               for s in symbols)
+            if not all(s.dim == len(n) for s, n in deps.items()):
+                continue
+
+            # ... organize symbols based on their dataspace
+            dspace_mapper = OrderedDict()
+            for s, n in deps.items():
+                n.sort(key=lambda l: s.rank.index(l.dim))
+                region = tuple(Region(l.size, l.start + i) for i, l in zip(s.strides, n))
+                dspace = DSpace(region=region, nest=n, symbols=[])
+                dspace_mapper.setdefault(dspace.region, dspace)
+                dspace.symbols.append(s)
+
+            # ... is there any overlap in the memory accesses? Memory accesses must:
+            # - either completely overlap (they will be mapped to the same buffer)
+            # - OR be disjoint
             will_break = False
-            for ds1, ds2 in product(dataspaces, dataspaces):
-                for d1, d2 in zip(ds1, ds2):
-                    if ItSpace(mode=0).intersect([d1, d2]) not in [(0, 0), d1]:
+            for regions1, regions2 in product(dspace_mapper.keys(), dspace_mapper.keys()):
+                for r1, r2 in zip(regions1, regions2):
+                    if ItSpace(mode=1).intersect([r1, r2]) not in [(0, 0), r1]:
                         will_break = True
             if will_break:
                 continue
 
-            # C- Create a padded temporary buffer for efficient vectorization
-            buf_name, buf_rank = '_%s' % decl_name, 0
-            itspace_mapper = OrderedDict()
-            for (itspace, p_offset), (loops, syms) in p_info.items():
-                if isinstance(p_offset, str):
-                    # Dangerous to pad since can't resolve the offset value
-                    continue
-                mapped = set()
-                for s in syms:
-                    original_s = dcopy(s)
-                    s.symbol = buf_name
-                    s.rank = (buf_rank,) + s.rank
-                    s.offset = ((1, 0),) + s.offset[:p_dim] + ((1, 0),)
-                    if s.offset not in mapped:
-                        # Map buffer symbol to each FunDecl symbol occurrence
-                        # avoiding duplicate, useless copies
-                        mapping = (original_s, dcopy(s))
-                        itspace_mapper.setdefault(itspace, (loops, []))[1].append(mapping)
-                        mapped.add(s.offset)
-                # Track the non zero-valued regions
-                nz = ((1, buf_rank),) + tuple((j-i, i+p_offset) for i, j in itspace)
-                self.nz_syms.setdefault(buf_name, []).append(nz)
-                # Prepare for the next buffer dimension
-                buf_rank += 1
-            if buf_rank == 0:
-                continue
-            buf_pad = (buf_rank,) + p_rank
-            buf_rank = (buf_rank,) + decl.sym.rank
-            init = ArrayInit(np.ndarray(shape=(1,)*len(buf_rank), buffer=np.array(0.0)))
-            buffer = Decl(decl.typ, Symbol(buf_name, buf_rank), init, attributes=[align])
-            buffer.scope = BUFFER
-            buffer.pad(buf_pad)
-            self.header.children.insert(0, buffer)
+            # ... initialize buffer-related data
+            buf_name = '_' + decl_name
+            buf_nz = self.nz_syms.setdefault(buf_name, [])
 
-            # D- Create and append a loop nest(s) for copying data into/from
-            # the temporary buffer. Depending on how the symbol is accessed
-            # (read only, read and write, incremented, etc.), different sort
-            # of copies are made
-            first, last = access_modes[0], access_modes[-1]
-            for itspace, (loops, mapper) in itspace_mapper.items():
-                if first[0] == READ:
-                    stmts = [Assign(b, s) for s, b in mapper]
-                    copy_back = ItSpace(mode=2).to_for(loops, stmts=stmts)
-                    insert_at_elem(self.header.children, buffer, copy_back[0], ofs=1)
-                if last[0] == WRITE:
+            # ... determine the non zero-valued region in the buffer
+            for n, region in enumerate(dspace_mapper.keys()):
+                p_region = (Region(region[p_dim].size, 0),)
+                buf_nz.append((Region(1, n),) + region[:p_dim] + p_region)
+
+            # ... replace symbols in the AST with proper buffer instances
+            itspace_mapper = OrderedDict()
+            for n, dspace in enumerate(dspace_mapper.values()):
+                itspace = ISpace(region=tuple((l.size, l.start) for l in dspace.nest),
+                                 nest=dspace.nest, bag=OrderedDict())
+                itspace = itspace_mapper.setdefault(itspace.region, itspace)
+                for s in dspace.symbols:
+                    original = Symbol(s.symbol, s.rank, s.offset)
+                    s.symbol = buf_name
+                    s.rank = (n,) + s.rank
+                    s.offset = ((1, 0),) + s.offset[:p_dim] + ((1, 0),)
+                    if s.urepr not in [i.urepr for i in itspace.bag.values()]:
+                        itspace.bag[original] = Symbol(s.symbol, s.rank, s.offset)
+
+            # ... insert the buffer into the AST
+            buf_dim = n + 1
+            buf_rank = (buf_dim,) + decl.size
+            init = ArrayInit(np.ndarray(shape=(1,)*len(buf_rank), buffer=np.array(0.0)))
+            buf_decl = Decl(decl.typ, Symbol(buf_name, buf_rank), init, scope=BUFFER)
+            buf_decl.pad((buf_dim,) + p_rank)
+            self.header.children.insert(0, buf_decl)
+
+            # C) Create a loop nest for copying data into/from the buffer
+            for itspace in itspace_mapper.values():
+
+                if mode == READ:
+                    stmts = [Assign(b, s) for s, b in itspace.bag.items()]
+                    copy_back = ItSpace(mode=2).to_for(itspace.nest, stmts=stmts)
+                    insert_at_elem(self.header.children, buf_decl, copy_back[0], ofs=1)
+
+                elif mode == WRITE:
                     # If extra information (a pragma) is present, telling that
                     # the argument does not need to be incremented because it does
                     # not contain any meaningful values, then we can safely write
-                    # to it. This is an optimization to avoid increments when not
-                    # necessarily required
-                    could_incr = WRITE in decl.pragma and len(itspace_mapper) == 1
-                    op = Assign if could_incr else last[1]
-                    stmts = [op(s, b) for s, b in mapper]
-                    copy_back = ItSpace(mode=2).to_for(loops, stmts=stmts)
+                    # to it. This optimization may avoid useless increments
+                    can_write = WRITE in decl.pragma and len(itspace_mapper) == 1
+                    op = Assign if can_write else Incr
+                    stmts = [op(s, b) for s, b in itspace.bag.items()]
+                    copy_back = ItSpace(mode=2).to_for(itspace.nest, stmts=stmts)
                     if to_invert:
                         insert_at_elem(self.header.children, to_invert[0], copy_back[0])
                     else:
                         self.header.children.append(copy_back[0])
 
-            # E) Update the global data structures
-            self.decls[buf_name] = buffer
-        return buffer
+            # D) Update the global data structures
+            self.decls[buf_name] = buf_decl
+
+        return buf_decl
 
     def _align_data(self, buffer, p_dim):
         """Apply data alignment. This boils down to:
 
+            * Decorate declarations with qualifiers for data alignment
             * Round up the bounds (i.e. /start/ and /end/ points) of loops such
             that all memory accesses get aligned to the vector length. Several
             checks ensure the correctness of the transformation.
-            * Decorate declarations with qualifiers for data alignment
         """
         vector_length = system.isa["dp_reg"]
+        align = system.compiler['align'](system.isa['alignment'])
 
+        # Array alignment
+        for decl in self.decls.values():
+            if decl.sym.rank and decl.scope == LOCAL:
+                decl.attr.append(align)
+
+        # Loop bounds adjustment
         for l in inner_loops(self.header):
-            should_round, should_vectorize = True, True
+            should_round = True
+
             for stmt in l.body:
-                sym = stmt.lvalue
-                expr = stmt.rvalue
-                sym_decl = self.decls.get(sym.symbol)
-                # Condition A: all lvalues must have the innermost loop as fastest
-                # varying dimension
+                sym, expr = stmt.lvalue, stmt.rvalue
+                decl = self.decls[sym.symbol]
+
+                # Condition A: the lvalue can be a scalar only if /stmt/ is not an
+                # augmented assignment, otherwise the extra iterations would alter
+                # its value
+                if not sym.rank and isinstance(stmt, AugmentedAssign):
+                    should_round = False
+                    break
+
+                # Condition B: the fastest varying dimension of the lvalue must be /l/
                 if sym.rank and not sym.rank[p_dim] == l.dim:
                     should_round = False
-                    should_vectorize = False
                     break
 
-                # Condition B: all lvalues must be paddable; that is, they cannot be
-                # kernel parameters
-                if sym_decl and sym_decl.scope == EXTERNAL:
+                # Condition C: the lvalue must have been padded
+                if sym.rank and decl.size[p_dim] != vect_roundup(decl.size[p_dim]):
                     should_round = False
                     break
 
-                # Condition C: statements using offsets to write buffers should
-                # not be aligned
-                if sym_decl and sym_decl.scope == BUFFER and sym.offset[p_dim][1] > 0:
-                    should_round = False
-                    break
-
-            # Condition D: extra iterations induced by bounds and offset rounding
-            # should /not/ alter the result.
-            lvalues, aligned_l = {}, dcopy(l)
-            for stmt in aligned_l.body:
-                sym = stmt.lvalue
-                expr = stmt.rvalue
-                lvalues[sym] = (0, 0, False)
                 symbols = [sym] + FindInstances(Symbol).visit(expr)[Symbol]
-                symbols = [s for s in symbols if any(r == l.dim for r in s.rank)]
+                symbols = [s for s in symbols if s.rank and any(r == l.dim for r in s.rank)]
+
+                # Condition D: the access pattern must be accessible
+                if any(not s.is_unit_period for s in symbols):
+                    # Cannot infer the access pattern so must break
+                    should_round = False
+                    break
+
+                # Condition E: extra iterations induced by bounds and offset rounding
+                # must not alter the computation
                 for s in symbols:
-                    if not should_round:
-                        # short circuit
-                        break
-
-                    # First of all, we need to be sure we can inspect the symbol
-                    # declaration
-                    decl = self.decls.get(s.symbol)
-                    if not decl:
+                    decl = self.decls[s.symbol]
+                    index = s.rank.index(l.dim)
+                    stride = s.strides[index]
+                    extra = range(stride + l.size, stride + vect_roundup(l.size))
+                    # Do any of the extra iterations alter the computation ?
+                    if any(i > decl.size[index] for i in extra):
+                        # ... outside of the legal region, abort
                         should_round = False
                         break
-                    # We can skip loop constants
-                    if not decl.sym.rank:
+                    if all(i >= decl.core[index] for i in extra):
+                        # ... in the padded region, pass
                         continue
-
-                    # Now we check if lowering the start point would be unsafe
-                    # because it would result in /not/ executing iterations
-                    # that should be executed
-                    offset = s.offset[p_dim][1]
-                    if isinstance(offset, str):
-                        # Unknown offset, cannot infer anything so must break
+                    nz = list(self.nz_syms.get(s.symbol))
+                    if not nz:
+                        # ... lacks the non zero-valued entries mapping, abort
                         should_round = False
                         break
-                    start = vect_rounddown(offset)
-                    end = start + vect_roundup(l.end)
-                    if end < offset + l.end:
+                    # ... get the non zero-valued entries in the right dimension
+                    nz_index = []
+                    for i in nz:
+                        can_skip = False
+                        for j, r in enumerate(s.rank[:index]):
+                            if not is_const_dim(r):
+                                continue
+                            if r not in range(i[j].ofs, i[j].ofs + i[j].size):
+                                # ... actually on a different outer dimension, safe
+                                # to avoid this check
+                                can_skip = True
+                        if not can_skip:
+                            nz_index.append(i[index])
+                    if any(i in range(ofs, size + ofs) for size, ofs in nz_index):
+                        # ... writing to a non-zero region, abort
                         should_round = False
                         break
-
-                    # It remains to check if the extra iterations would alter the
-                    # result because they would access non zero-valued entries
-                    extra = range(start, offset) + range(offset + l.end + 1, end + 1)
-                    for i in extra:
-                        # Declaration not padded to padded loop bounds
-                        if i > decl.size[p_dim]:
-                            should_round = False
-                            break
-                        if i >= decl.core[p_dim]:
-                            # In the padded region, safe
-                            continue
-                        # If /s/ is the buffer, need to access the actual dimension
-                        # written by /stmt/
-                        nz = self.nz_syms.get(s.symbol, [tuple((r, 0) for r in decl.core)])
-                        if buffer and s.symbol == buffer.sym.symbol:
-                            for j in list(nz):
-                                buf_dim = j[0]
-                                if s.rank[0] not in range(buf_dim[1], buf_dim[0]+buf_dim[1]):
-                                    nz.remove(j)
-                        # Now we can finally check if the i-th extra iteration falls in a
-                        # zero-valued region (in case, we are happy and round), or not
-                        if any(i in range(k, j + k) for j, k in [j[p_dim] for j in nz]):
-                            should_round = False
-                            break
-                    # Round down the start point
-                    ast_update_ofs(s, {l.dim: start})
-
-                    # Track the rounding in the lvalue and infer if the zero-valued
-                    # region in /sym/ has now become a /non/ zero-valued region.
-                    # Note: /sym/ is the first element in the /symbols/ list
-                    if s is sym:
-                        # Assume there's no need to remove the non zero-valued region ...
-                        lvalues[s] = (start, offset, False)
-                    else:
-                        # ... and then, maybe, change it as the rvalue is examined: ...
-                        if start == offset and lvalues[sym][0] < lvalues[sym][1] or \
-                                any(v[2] for k, v in lvalues.items() if str(k) == str(s)):
-                            # ... this is the case if at least one symbol in the rvalue
-                            # was not rounded while the lvalue was, /or/
-                            # if at least one symbol in the rvalue appeared as an lvalue
-                            # in a previoud /stmt/ and such lvalue was rounded down
-                            lvalues[sym] = lvalues[sym][:-1] + (True,)
 
             if should_round:
-                l.body = aligned_l.body
-                # Round up the end point
                 l.end = vect_roundup(l.end)
-                # It was safe to round an lvalue S, but now all subsequent
-                # accesses to the same symbol S /might/ have to be rounded too.
-                # This is the case /iff/:
-                # 1) in rounding, we are writing to the rounded region (e.g.,
-                # A[i+2] += B[i] ===> A[i] += B[i]: since B[i] wasn't rounded,
-                # it means that B[i] is != 0, so we are now writing to A[i],
-                # which was previously 0, instead of A[i+2]), /and/
-                # 2) the offset used by S', which is a later reference to S, falls
-                # in the rounded region (e.g., starting from the example above,
-                # if there's another line D[i] = A[i+2], then it must be D[i] = A[i],
-                # otherwise if it were D[i] = A[i+5] we should not round). Note
-                # how such an S' /cannot/ be an lvalue, since we have already
-                # enforced that rounding only happens over zero-valued regions.
-                # The first property is captured by /remove_nz/
-                for lvalue, (start, orig_ofs, remove_nz) in lvalues.items():
-                    if not remove_nz:
-                        # Property 1) above does not hold
-                        continue
-                    references = SymbolReferences().visit(self.header)[lvalue.symbol]
-                    references = [r for r, p in references]
-                    for r in references[references.index(lvalue)+1:]:
-                        r_rank, r_ofs = r.rank[p_dim], r.offset[p_dim][1]
-                        if r_ofs in range(orig_ofs, orig_ofs + l.end):
-                            ast_update_ofs(r, {r_rank: start - r_ofs}, increase=True)
-                    # The corresponding /nz_syms/ info should also be updated
-                    nz_lvalue = zip(*self.nz_syms.get(r.symbol, [((0, 0),)]))
-                    for i, (size, offset) in enumerate(nz_lvalue[p_dim]):
-                        if orig_ofs in range(offset, offset + size):
-                            self.nz_syms[r.symbol][i] = \
-                                self.nz_syms[r.symbol][i][:p_dim] + \
-                                ((size, offset-(orig_ofs-start)),)
-                if l.start % vector_length == 0 and l.size % vector_length == 0:
+                if all(i % vector_length == 0 for i in [l.start, l.size]):
                     l.pragma.add(system.compiler["align_forloop"])
-            # Enforce vectorization if loop size is a multiple of the vector length
-            if should_vectorize and l.size % vector_length == 0:
-                l.pragma.add(system.compiler['force_simdization'])
+                    l.pragma.add(system.compiler['force_simdization'])
 
     def _transpose_layout(self):
         dim = self.loop.dim
@@ -468,7 +390,7 @@ class LoopVectorizer(object):
 
             # Adjust the instances
             for s in syms:
-                s.rank = reversed(s.rank)
+                s.rank = tuple(reversed(s.rank))
 
     def specialize(self, opts, factor=1):
         """Generate code for specialized expression vectorization. Check for peculiar
