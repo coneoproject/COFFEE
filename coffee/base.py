@@ -788,8 +788,6 @@ class Decl(Writer):
     def gencode(self, not_scope=False):
         pointers = " " + " ".join(['*' + ' '.join(i) for i in self.pointers])
         prefix = ""
-        if self.pragma:
-            prefix = "\n".join(p for p in self.pragma) + "\n"
         if isinstance(self.init, EmptyStatement):
             return prefix + decl(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
                                  spacer(self.attr)) + semicolon(not_scope)
