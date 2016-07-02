@@ -227,35 +227,16 @@ def ast_make_expr(op, nodes, balance=True):
         return _ast_make_expr(nodes)
 
 
-def ast_make_alias(node1, node2):
-    """Return an object in which the LHS is represented by ``node1`` and the RHS
-    by ``node2``, and ``node1`` is an alias for ``node2``; that is, ``node1``
-    will point to the same memory region of ``node2``.
-
-    :type node1: either a ``Decl`` or a ``Symbol``. If a ``Decl`` is provided,
-                 the init field of the ``Decl`` is used to assign the alias.
-    :type node2: either a ``Decl`` or a ``Symbol``. If a ``Decl`` is provided,
-                 the symbol is extracted and used for the assignment.
+def ast_make_alias(node, alias_name):
     """
-    if not isinstance(node1, (Decl, Symbol)):
-        raise RuntimeError("Cannot assign a pointer to %s type" % type(node1))
-    if not isinstance(node2, (Decl, Symbol)):
-        raise RuntimeError("Cannot assign a pointer to %s type" % type(node1))
+    Create an alias of ``node`` (must be of type Decl). The alias symbol is
+    given the name ``alias_name``.
+    """
+    assert isinstance(node, Decl)
 
-    # Handle node2
-    if isinstance(node2, Decl):
-        node2 = node2.sym
-    node2.symbol = node2.symbol.strip('*')
-    node2.rank, node2.offset, node2.loop_dep = (), (), ()
-
-    # Handle node1
-    if isinstance(node1, Symbol):
-        node1.symbol = node1.symbol.strip('*')
-        node1.rank, node1.offset, node1.loop_dep = (), (), ()
-        return Assign(node1, node2)
-    else:
-        node1.init = node2
-    return node1
+    pointers = node.pointers + ['' for i in node.size]
+    return Decl(node.typ, alias_name, node.lvalue.symbol, qualifiers=node.qual,
+                scope=node.scope, pointers=pointers)
 
 
 ###########################################################
