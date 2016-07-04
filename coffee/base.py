@@ -627,8 +627,8 @@ class Assign(Statement, Writer):
         if self.pragma:
             prefix = "\n".join(p for p in self.pragma) + "\n"
         return prefix + \
-            assign(self.children[0].gencode(),
-                   self.children[1].gencode()) + \
+            assign(self.children[0].gencode(True),
+                   self.children[1].gencode(True)) + \
             semicolon(not_scope)
 
 
@@ -654,7 +654,7 @@ class AugmentedAssign(Statement, Writer):
         prefix = ""
         if self.pragma:
             prefix = "\n".join(p for p in self.pragma) + "\n"
-        return "%s%s %s %s%s" % (prefix, sym.gencode(), type(self).op, exp.gencode(), semicolon(not_scope))
+        return "%s%s %s %s%s" % (prefix, sym.gencode(True), type(self).op, exp.gencode(True), semicolon(not_scope))
 
 
 class Incr(AugmentedAssign):
@@ -794,8 +794,8 @@ class Decl(Writer):
             return prefix + decl(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
                                  spacer(self.attr)) + semicolon(not_scope)
         else:
-            return prefix + decl_init(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
-                                      spacer(self.attr), self.init.gencode(parent=self)) + \
+            return prefix + decl_init(spacer(self.qual), self.typ + pointers, self.sym.gencode(True),
+                                      spacer(self.attr), self.init.gencode(True, parent=self)) + \
                 semicolon(not_scope)
 
 
