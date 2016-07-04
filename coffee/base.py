@@ -831,13 +831,7 @@ class For(Statement):
         for (int i = 0, j = 0; ...)"""
 
     def __init__(self, init, cond, incr, body, pragma=None):
-        # If the body is a plain list, cast it to a Block.
-        if not isinstance(body, Block):
-            if not isinstance(body, list):
-                body = [body]
-            body = Block(body, open_scope=True)
-
-        super(For, self).__init__([body], pragma)
+        super(For, self).__init__([enforce_block(body)], pragma)
         self.init = init
         self.cond = cond
         self.incr = incr
@@ -966,7 +960,7 @@ class FunDecl(Statement):
         static inline void foo(int a, int b) {return;};"""
 
     def __init__(self, ret, name, args, body, pred=[], headers=None):
-        super(FunDecl, self).__init__([body])
+        super(FunDecl, self).__init__([enforce_block(body)])
         self.pred = pred
         self.ret = ret
         self.name = name
@@ -1240,6 +1234,15 @@ def c_flat_for(code, parent):
     parent.children.append(FlatBlock(code))
     parent.children.append(new_block)
     return new_block
+
+
+def enforce_block(body, open_scope=True):
+    """Wrap ``body`` in a Block if not already a Block."""
+    if not isinstance(body, Block):
+        if not isinstance(body, list):
+            body = [body]
+        body = Block(body, open_scope=open_scope)
+    return body
 
 
 # Access modes for a symbol ##
