@@ -83,50 +83,6 @@ def ast_replace(node, to_replace, copy=False, mode='all'):
     return n_replaced
 
 
-def ast_remove(node, to_remove, mode='all'):
-    """Remove the AST node ``to_remove`` from the tree rooted in ``node``.
-
-    :param mode: either ``all``, in which case ``to_remove`` is turned into a
-        string (if not a string already) and all of its occurrences are removed
-        from the AST; or ``symbol``, in which case only (all of) the references
-        to the provided ``to_remove`` node are cut away.
-    """
-
-    def _is_removable(n, tr):
-        n, tr = (str(n), str(tr)) if mode == 'all' else (n, tr)
-        return True if n == tr else False
-
-    def _ast_remove(node, parent, index, tr):
-        if _is_removable(node, tr):
-            return -1
-        if not node.children:
-            return index
-        _may_remove = [_ast_remove(n, node, i, tr) for i, n in enumerate(node.children)]
-        if all([i > -1 for i in _may_remove]):
-            # No removals occurred, so just return
-            return index
-        if all([i == -1 for i in _may_remove]):
-            # Removed all of the children, so I'm also going to remove myself
-            return -1
-        alive = [i for i in _may_remove if i > -1]
-        if len(alive) > 1:
-            # Some children were removed, but not all of them, so no surgery needed
-            return index
-        # One child left, need to reattach it as child of my parent
-        alive = alive[0]
-        parent.children[index] = node.children[alive]
-        return index
-
-    if mode not in ['all', 'symbol']:
-        raise ValueError
-
-    try:
-        if all(_ast_remove(node, None, None, tr) == -1 for tr in to_remove):
-            return -1
-    except TypeError:
-        return _ast_remove(node, None, None, to_remove)
-
-
 def ast_update_ofs(node, ofs, **kwargs):
     """Change the offsets of the iteration space variables of the symbols rooted
     in ``node``.
@@ -227,35 +183,16 @@ def ast_make_expr(op, nodes, balance=True):
         return _ast_make_expr(nodes)
 
 
-def ast_make_alias(node1, node2):
-    """Return an object in which the LHS is represented by ``node1`` and the RHS
-    by ``node2``, and ``node1`` is an alias for ``node2``; that is, ``node1``
-    will point to the same memory region of ``node2``.
-
-    :type node1: either a ``Decl`` or a ``Symbol``. If a ``Decl`` is provided,
-                 the init field of the ``Decl`` is used to assign the alias.
-    :type node2: either a ``Decl`` or a ``Symbol``. If a ``Decl`` is provided,
-                 the symbol is extracted and used for the assignment.
+def ast_make_alias(node, alias_name):
     """
-    if not isinstance(node1, (Decl, Symbol)):
-        raise RuntimeError("Cannot assign a pointer to %s type" % type(node1))
-    if not isinstance(node2, (Decl, Symbol)):
-        raise RuntimeError("Cannot assign a pointer to %s type" % type(node1))
+    Create an alias of ``node`` (must be of type Decl). The alias symbol is
+    given the name ``alias_name``.
+    """
+    assert isinstance(node, Decl)
 
-    # Handle node2
-    if isinstance(node2, Decl):
-        node2 = node2.sym
-    node2.symbol = node2.symbol.strip('*')
-    node2.rank, node2.offset, node2.loop_dep = (), (), ()
-
-    # Handle node1
-    if isinstance(node1, Symbol):
-        node1.symbol = node1.symbol.strip('*')
-        node1.rank, node1.offset, node1.loop_dep = (), (), ()
-        return Assign(node1, node2)
-    else:
-        node1.init = node2
-    return node1
+    pointers = node.pointers + ['' for i in node.size]
+    return Decl(node.typ, alias_name, node.lvalue.symbol, qualifiers=node.qual,
+                scope=node.scope, pointers=pointers)
 
 
 ###########################################################
