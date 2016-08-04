@@ -39,7 +39,7 @@ from base import *
 from utils import *
 from expression import copy_metaexpr
 from rewriter import ExpressionRewriter
-from exceptions import ControlFlowError
+from exceptions import ControlFlowError, UnexpectedNode
 from coffee.visitors import FindLoopNests
 
 
@@ -287,7 +287,7 @@ class ExpressionFissioner(LoopScheduler):
                     return counter
 
             else:
-                raise RuntimeError("Fission: found unknown node: %s" % str(node))
+                raise UnexpectedNode("Fission: %s" % str(node))
 
         def cut(self, node, expr_info):
             left, right = ExpressionFissioner.Cutter.cut(self, node)
@@ -377,7 +377,7 @@ class ExpressionFissioner(LoopScheduler):
                     return None
 
             else:
-                raise RuntimeError("Fission error: found unknown node: %s" % str(node))
+                raise UnexpectedNode("Fission: %s" % str(node))
 
         def cut(self, node, expr_info):
             left, right = ExpressionFissioner.Cutter.cut(self, node)
@@ -581,7 +581,7 @@ class ZeroRemover(LoopScheduler):
                     # the non zero-valued regions get /merged/)
                     itspace[i] = ItSpace(mode=1).merge(itspace[i] + region)
                 else:
-                    raise RuntimeError("Zero-avoidance: unexpected op %s", str(node))
+                    raise UnexpectedNode("Zero-avoidance: %s", str(node))
             itspace = [zip(itspace, i) for i in product(*itspace.values())]
             itspace = list(set([tuple(i) for i in itspace]))
             return itspace

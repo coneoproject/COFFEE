@@ -33,5 +33,10 @@
 
 
 class ControlFlowError(Exception):
-    """An AST is being analyzed, and an unexpected node is encountered."""
+    """The control flow prevents an AST transformation."""
+    pass
+
+
+class UnexpectedNode(Exception):
+    """A particular node prevents an AST transformation."""
     pass

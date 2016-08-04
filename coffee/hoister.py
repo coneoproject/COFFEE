@@ -60,7 +60,7 @@ class Extractor(object):
             should_extract = lambda d: True
             return AggressiveExtractor(stmt, expr_info, should_extract)
         else:
-            raise RuntimeError("Requested an invalud Extractor (%s)" % mode)
+            raise RuntimeError("Requested an invalid Extractor (%s)" % mode)
 
     def __init__(self, stmt, expr_info, should_extract):
         self.stmt = stmt
