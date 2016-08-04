@@ -68,6 +68,11 @@ class Temporary(object):
         return self.symbol.rank if self.symbol else None
 
     @property
+    def is_bilinear(self):
+        linear_loops = [l for l in self.loops if l.dim in self.rank]
+        return len(linear_loops) == 2
+
+    @property
     def symbol(self):
         if isinstance(self.node, Writer):
             return self.node.lvalue
@@ -116,6 +121,15 @@ class Temporary(object):
     def is_static_init(self):
         return isinstance(self.expr, ArrayInit)
 
+    def depends(self, others):
+        """Return True if ``self`` reads a temporary or is read by a temporary
+        that appears in the iterator ``others``, False otherwise."""
+        dependencies = self.linear_reads + self.reads
+        for t in others:
+            if any(s.urepr == t.urepr for s in dependencies):
+                return True
+        return False
+
     def reconstruct(self):
         temporary = Temporary(self.node, self.main_loop, self.nest, list(self.reads),
                               OrderedDict(self.linear_reads_costs))
@@ -157,7 +171,7 @@ class CSEUnpicker(object):
 
     def _push_temporaries(self, temporaries, trace, global_trace, ra):
 
-        def is_pushable(temporary):
+        def is_pushable(temporary, temporaries):
             # To be pushable ...
             if not temporary.is_ssa:
                 # ... must be written only once
@@ -168,6 +182,9 @@ class CSEUnpicker(object):
                 return False
             if temporary.is_static_init:
                 # ... its rvalue must not be an array initializer
+                return False
+            if temporary.depends(temporaries):
+                # ... it cannot depend on other temporaries in the same level
                 return False
             pushed_in = [global_trace.get(rb.urepr) for rb in temporary.readby]
             pushed_in = set(rb.main_loop.children[0] for rb in pushed_in if rb)
@@ -183,7 +200,7 @@ class CSEUnpicker(object):
         to_replace, modified_temporaries = {}, OrderedDict()
         for t in temporaries:
             # Track temporaries to be pushed from /level-1/ into the later /level/s
-            if not is_pushable(t):
+            if not is_pushable(t, temporaries):
                 continue
             to_replace[t.symbol] = t.expr or t.symbol
             for rb in t.readby:
@@ -239,6 +256,8 @@ class CSEUnpicker(object):
         # Code motion
         for t, ew in rewriters.items():
             ew.licm(mode='only_outlinear', lda=lda, global_cse=True)
+            if t.is_bilinear:
+                ew.licm(mode='only_linear')
 
     def _analyze_expr(self, expr, lda):
         finder = FindInstances(Symbol)

@@ -35,6 +35,7 @@ import itertools
 
 from base import *
 from utils import *
+from exceptions import UnexpectedNode
 
 
 class Expander(object):
@@ -110,7 +111,7 @@ class Expander(object):
                 return ([node], self.GROUP)
 
         else:
-            raise RuntimeError("Expansion error: unknown node: %s" % str(node))
+            raise UnexpectedNode("Expansion: %s" % str(node))
 
     def expand(self, should_expand, **kwargs):
         expressions = kwargs.get('subexprs', [(self.stmt.rvalue, self.stmt)])

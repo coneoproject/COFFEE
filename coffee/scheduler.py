@@ -39,6 +39,7 @@ from base import *
 from utils import *
 from expression import copy_metaexpr
 from rewriter import ExpressionRewriter
+from exceptions import ControlFlowError, UnexpectedNode
 from coffee.visitors import FindLoopNests
 
 
@@ -251,7 +252,7 @@ class ExpressionFissioner(LoopScheduler):
     class CutterSum(Cutter):
 
         def _cut(self, node, parent, side, topsum=None):
-            if isinstance(node, (Symbol, FunCall)):
+            if isinstance(node, (Symbol, FunCall, Ternary)):
                 return 0
 
             elif isinstance(node, Div):
@@ -286,7 +287,7 @@ class ExpressionFissioner(LoopScheduler):
                     return counter
 
             else:
-                raise RuntimeError("Fission error: found unknown node: %s" % str(node))
+                raise UnexpectedNode("Fission: %s" % str(node))
 
         def cut(self, node, expr_info):
             left, right = ExpressionFissioner.Cutter.cut(self, node)
@@ -376,7 +377,7 @@ class ExpressionFissioner(LoopScheduler):
                     return None
 
             else:
-                raise RuntimeError("Fission error: found unknown node: %s" % str(node))
+                raise UnexpectedNode("Fission: %s" % str(node))
 
         def cut(self, node, expr_info):
             left, right = ExpressionFissioner.Cutter.cut(self, node)
@@ -551,6 +552,9 @@ class ZeroRemover(LoopScheduler):
         elif isinstance(node, FunCall):
             return self._track_nz_expr(node.children[0], nz_syms, nest)
 
+        elif isinstance(node, Ternary):
+            raise ControlFlowError
+
         else:
             itspace_l = self._track_nz_expr(node.left, nz_syms, nest)
             itspace_r = self._track_nz_expr(node.right, nz_syms, nest)
@@ -577,7 +581,7 @@ class ZeroRemover(LoopScheduler):
                     # the non zero-valued regions get /merged/)
                     itspace[i] = ItSpace(mode=1).merge(itspace[i] + region)
                 else:
-                    raise RuntimeError("Zero-avoidance: unexpected op %s", str(node))
+                    raise UnexpectedNode("Zero-avoidance: %s", str(node))
             itspace = [zip(itspace, i) for i in product(*itspace.values())]
             itspace = list(set([tuple(i) for i in itspace]))
             return itspace
@@ -660,8 +664,8 @@ class ZeroRemover(LoopScheduler):
             for n in node.children:
                 self._track_nz_blocks(n, nz_syms, nz_info, nest, node, candidates)
 
-        elif isinstance(node, (If, Switch, FunCall)):
-            raise RuntimeError("zero blocks tracking: illegal control flow")
+        else:
+            raise ControlFlowError
 
     def _reschedule_itspace(self, root, candidates):
         """Consider two statements A and B, and their iteration space. If the
@@ -705,7 +709,11 @@ class ZeroRemover(LoopScheduler):
 
         # Track the propagation of non zero-valued blocks through symbolic
         # execution. This populates /nz_info/ and updates /nz_syms/
-        self._track_nz_blocks(root, nz_syms, nz_info, candidates=candidates)
+        try:
+            self._track_nz_blocks(root, nz_syms, nz_info, candidates=candidates)
+        except ControlFlowError:
+            # Couldn't perform symbolic execution due to runtime-dependent data
+            return nz_syms, OrderedDict()
 
         # At this point we know where non-zero blocks are located, so we have
         # to create proper loop nests to access them
@@ -792,8 +800,9 @@ class ZeroRemover(LoopScheduler):
                                     self.hoisted, self.expr_graph)
             ew.factorize('heuristic')
 
-        self.exprs.clear()
-        self.exprs.update(new_exprs)
+        if new_exprs:
+            self.exprs.clear()
+            self.exprs.update(new_exprs)
 
     def _should_skip(self, zero_decls):
         """Return False if, based on heuristics, it seems worth skipping the
