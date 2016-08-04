@@ -68,6 +68,11 @@ class Temporary(object):
         return self.symbol.rank if self.symbol else None
 
     @property
+    def is_bilinear(self):
+        linear_loops = [l for l in self.loops if l.dim in self.rank]
+        return len(linear_loops) == 2
+
+    @property
     def symbol(self):
         if isinstance(self.node, Writer):
             return self.node.lvalue
@@ -251,6 +256,8 @@ class CSEUnpicker(object):
         # Code motion
         for t, ew in rewriters.items():
             ew.licm(mode='only_outlinear', lda=lda, global_cse=True)
+            if t.is_bilinear:
+                ew.licm(mode='only_linear')
 
     def _analyze_expr(self, expr, lda):
         finder = FindInstances(Symbol)
