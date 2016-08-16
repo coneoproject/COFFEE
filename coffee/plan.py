@@ -138,12 +138,6 @@ class ASTKernel(object):
                         # of the expression
                         vect.specialize(*vectorize)
 
-            # Ensure kernel is always marked static inline
-            # Remove either or both of static and inline (so that we get the order right)
-            kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
-            kernel.pred.insert(0, 'inline')
-            kernel.pred.insert(0, 'static')
-
             # Post processing of the AST ensures higher-quality code
             postprocess(kernel)
 
