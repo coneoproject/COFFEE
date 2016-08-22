@@ -265,7 +265,7 @@ class ArrayInit(Expr):
         f_int = "%%.%df" % 1
         eps = 10.0**(-self.precision)
         if not isinstance(v, numbers.Number):
-            return v.gencode()
+            return v.gencode(not_scope=True)
         elif isnan(v):
             return "NAN"
         elif abs(v - round(v, 1)) < eps:
