@@ -435,10 +435,11 @@ class Symbol(Expr):
     * 1: array
     * 2: matrix, etc.
 
-    :param tuple rank: entries represent the iteration variables the symbol
+    :param symbol: the Symbol name.
+    :param rank: entries represent the iteration variables the symbol
         depends on, or explicit numbers representing the entry of a tensor the
         symbol is accessing, or the size of the tensor itself.
-    :param list offset: an iterator of 2-tuple (period, stride), one 2-tuple for
+    :param offset: an iterator of 2-tuple (period, stride), one 2-tuple for
         each entry in rank. The period is the multiplier of the rank, while
         stride is a quantity summed to the rank. E.g., if rank=(i, j) and
         offset=((1, 0), (3, 2)), printing a symbol 'a' returns the string
@@ -490,7 +491,7 @@ class Symbol(Expr):
         iteration space, and offset."""
         return (self.symbol, self.rank, self.offset)
 
-    def gencode(self, not_scope=True, parent=None):
+    def _genpoints(self):
         points = ""
         if not self.offset:
             for p in self.rank:
@@ -503,7 +504,16 @@ class Symbol(Expr):
                     points += point_ofs_stride(p, ofs[1])
                 else:
                     points += point_ofs(p, ofs)
-        return str(self.symbol) + points
+        return points
+
+    def gencode(self, not_scope=True, parent=None):
+        return str(self.symbol) + self._genpoints()
+
+
+class SymbolIndirection(Symbol):
+
+    def gencode(self, not_scope=True, parent=None):
+        return "(*%s)%s" % (str(self.symbol), self._genpoints())
 
 
 # Vector expression classes ###
@@ -735,14 +745,20 @@ class Decl(Writer):
 
     @property
     def size(self):
-        """Return the size of the declared variable. In particular, return
+        """Return the size of the pointed region. In particular, return
 
-        * ``()``, if it is a scalar
+        * ``()``, if it is a scalar or it is unknown
         * a tuple, if it is a N-dimensional array, such that each entry
           represents the size of an array dimension (e.g. ``double A[20][10]``
           -> ``(20, 10)``)
         """
         return self.sym.rank or ()
+
+    @property
+    def dimension(self):
+        """Return the dimension of the declared variable (0 if it's a scalar,
+        1 for 1-dimensional arrays, etc.)."""
+        return len(self.pointers) + len(self.sym.rank)
 
     @property
     def core(self):
@@ -787,13 +803,12 @@ class Decl(Writer):
 
     def gencode(self, not_scope=False):
         pointers = " " + " ".join(['*' + ' '.join(i) for i in self.pointers])
-        prefix = ""
         if isinstance(self.init, EmptyStatement):
-            return prefix + decl(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
-                                 spacer(self.attr)) + semicolon(not_scope)
+            return decl(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
+                        spacer(self.attr)) + semicolon(not_scope)
         else:
-            return prefix + decl_init(spacer(self.qual), self.typ + pointers, self.sym.gencode(True),
-                                      spacer(self.attr), self.init.gencode(True, parent=self)) + \
+            return decl_init(spacer(self.qual), self.typ + pointers, self.sym.gencode(True),
+                             spacer(self.attr), self.init.gencode(True, parent=self)) + \
                 semicolon(not_scope)
 
 

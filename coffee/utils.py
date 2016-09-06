@@ -186,12 +186,24 @@ def ast_make_expr(op, nodes, balance=True):
 def ast_make_alias(node, alias_name):
     """
     Create an alias of ``node`` (must be of type Decl). The alias symbol is
-    given the name ``alias_name``.
+    given the name ``alias_name``. For example: ::
+
+        (node, alias_name) --> output
+        (double * a, b) --> double * b = a
+        (double a[1], b) --> double * b = a
+        (double a[1][1], b) --> double (*b)[1] = a
     """
     assert isinstance(node, Decl)
 
-    pointers = node.pointers + ['' for i in node.size]
-    return Decl(node.typ, alias_name, node.lvalue.symbol, qualifiers=node.qual,
+    pointers = list(node.pointers)
+    if len(node.size) == 1:
+        pointers += ['']
+    if len(node.size) > 1:
+        symbol = SymbolIndirection(alias_name, node.size[1:])
+    else:
+        symbol = Symbol(alias_name, node.size[1:])
+
+    return Decl(node.typ, symbol, node.lvalue.symbol, qualifiers=node.qual,
                 scope=node.scope, pointers=pointers)
 
 
