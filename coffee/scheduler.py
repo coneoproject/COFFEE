@@ -116,7 +116,7 @@ class SSALoopMerger(LoopScheduler):
 
     def merge(self, root):
         """Merge perfect loop nests in ``root``."""
-        found_nests = defaultdict(list)
+        found_nests = OrderedDict()
         # Collect iteration spaces visiting the tree rooted in /root/
         for n in root.children:
             if isinstance(n, For):
@@ -127,7 +127,7 @@ class SSALoopMerger(LoopScheduler):
                     # Note that only inner loops can be fused, and that they must
                     # share the same parent node
                     key = (tuple(l.header for l in loops), loops_parents[-1])
-                    found_nests[key].append(loops[-1])
+                    found_nests.setdefault(key, []).append(loops[-1])
 
         all_merged, merged_loops = [], []
         # A perfect loop nest L1 is mergeable in a loop nest L2 if
