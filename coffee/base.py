@@ -195,7 +195,7 @@ class UnaryExpr(Expr):
         return type(self)(expr)
 
     def gencode(self, not_scope=True, parent=None):
-        return "%s%s" % (type(self).op, self.children[0].gencode(not_scope)) + semicolon(not_scope)
+        return "%s(%s)" % (type(self).op, self.children[0].gencode(not_scope)) + semicolon(not_scope)
 
     def __deepcopy__(self, memo):
         """Unary expressions always need to be copied as plain new objects,
