@@ -683,8 +683,11 @@ class ExpressionGraph(object):
     def has_dependency(self):
         """Return True if a read-after-write (raw) or write-after-read (war)
         dependency appears in the graph, False otherwise."""
-        sources, targets = zip(*self.deps.edges())
-        return True if set(sources) & set(targets) else False
+        if self.deps.edges():
+            sources, targets = zip(*self.deps.edges())
+            return True if set(sources) & set(targets) else False
+        else:
+            return False
 
     def is_read(self, expr, target_sym=None):
         """Return True if any symbols in ``expr`` is read by ``target_sym``,
