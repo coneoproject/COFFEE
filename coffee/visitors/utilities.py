@@ -188,8 +188,10 @@ class Evaluate(Visitor):
             mapper.append(mapper_dim)
         for i, dim in enumerate(mapper[:-1]):
             # Group indices iff contiguous /and/ same codomain
+            def grouper(arg):
+                m, n = arg
+                return m-n, dim[n]
             ranges = []
-            grouper = lambda (m, n): (m-n, dim[n])
             for k, g in itertools.groupby(enumerate(sorted(dim.keys())), grouper):
                 group = map(operator.itemgetter(1), g)
                 ranges.append((group[-1]-group[0]+1, group[0]))
