@@ -38,7 +38,7 @@ from collections import defaultdict, OrderedDict, namedtuple
 
 import networkx as nx
 
-from base import *
+from coffee.base import *
 from coffee.visitors.inspectors import *
 
 

@@ -69,7 +69,7 @@ class Node(object):
     """The base class of the AST."""
 
     def __init__(self, children=None, pragma=None):
-        self.children = map(as_symbol, children) if children else []
+        self.children = list(map(as_symbol, children)) if children else []
         # Pragmas are used to attach semantical information to nodes
         self._pragma = self._format_pragma(pragma)
 
@@ -324,7 +324,7 @@ class SparseArrayInit(ArrayInit):
         """
         super(SparseArrayInit, self).__init__(values, precision)
 
-        from utils import Region
+        from coffee.utils import Region
         nonzero = [[Region(size, ofs) for size, ofs in dim] for dim in nonzero]
         self.nonzero = tuple(nonzero)
 
