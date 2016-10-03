@@ -138,9 +138,8 @@ class LoopVectorizer(object):
         :arg p_dim: the array dimension that should be padded (defaults to the
             innermost, or -1)
         """
-        buffer = self._pad(p_dim)
-        if buffer:
-            self._align_data(buffer, p_dim)
+        self._pad(p_dim)
+        self._align_data(p_dim)
 
     def _pad(self, p_dim):
         """Apply padding."""
@@ -272,9 +271,7 @@ class LoopVectorizer(object):
             # D) Update the global data structures
             self.decls[buf_name] = buf_decl
 
-        return buf_decl
-
-    def _align_data(self, buffer, p_dim):
+    def _align_data(self, p_dim):
         """Apply data alignment. This boils down to:
 
             * Decorate declarations with qualifiers for data alignment
@@ -332,6 +329,10 @@ class LoopVectorizer(object):
                     stride = s.strides[index]
                     extra = range(stride + l.size, stride + vect_roundup(l.size))
                     # Do any of the extra iterations alter the computation ?
+                    if s.dim != len(decl.size):
+                        # ... cannot access the declaration dimension
+                        should_round = False
+                        break
                     if any(i > decl.size[index] for i in extra):
                         # ... outside of the legal region, abort
                         should_round = False
@@ -340,7 +341,7 @@ class LoopVectorizer(object):
                         # ... in the padded region, pass
                         continue
                     nz = list(self.nz_syms.get(s.symbol))
-                    if not nz:
+                    if len(nz) != len(s.rank):
                         # ... lacks the non zero-valued entries mapping, abort
                         should_round = False
                         break
