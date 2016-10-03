@@ -212,8 +212,8 @@ def set_compiler(compiler_id):
             'align': lambda o: '__attribute__((aligned(%s)))' % o,
             'align_forloop': '#pragma vector aligned',
             'force_simdization': '#pragma simd',
-            'AVX': '-xAVX',
-            'SSE': '-xSSE',
+            'AVX': '',
+            'SSE': '',
             'ipo': '-ip',
             'native_opt': '-xHost',
             'vect_header': '#include <immintrin.h>'
