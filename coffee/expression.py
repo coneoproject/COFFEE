@@ -31,7 +31,9 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from utils import *
+from __future__ import absolute_import
+
+from .utils import *
 from collections import OrderedDict
 
 

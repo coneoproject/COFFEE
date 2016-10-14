@@ -32,14 +32,15 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """COFFEE's optimization plan constructor."""
+from __future__ import absolute_import
 
-import system
-from base import *
-from utils import *
-from optimizer import CPULoopOptimizer, GPULoopOptimizer
-from vectorizer import LoopVectorizer, VectStrategy
-from expression import MetaExpr
-from logger import log, warn, PERF_OK, PERF_WARN
+import coffee
+from .base import *
+from .utils import *
+from .optimizer import CPULoopOptimizer, GPULoopOptimizer
+from .vectorizer import LoopVectorizer, VectStrategy
+from .expression import MetaExpr
+from .logger import log, warn, PERF_OK, PERF_WARN
 from coffee.visitors import FindInstances, EstimateFlops
 
 from collections import defaultdict, OrderedDict
@@ -58,9 +59,9 @@ class ASTKernel(object):
         """Optimize this :class:`ASTKernel` for CPU execution.
 
         :param opts: a dictionary of optimizations to be applied. For a description
-            of the recognized optimizations, please refer to the ``system.set_opt_level``
+            of the recognized optimizations, please refer to the ``coffee.set_opt_level``
             documentation. If equal to ``None``, the default optimizations in
-            ``system.options['optimizations']`` are applied; these are either the
+            ``coffee.options['optimizations']`` are applied; these are either the
             optimizations set when COFFEE was initialized or those changed through
             a call to ``set_opt_level``. In this way, a default set of optimizations
             is applied to all kernels, but users are also allowed to select
@@ -73,9 +74,9 @@ class ASTKernel(object):
         kernels = finder.visit(self.ast, ret=FindInstances.default_retval())[FunDecl]
 
         if opts is None:
-            opts = system.OptimizationLevel.retrieve(system.options['optimizations'])
+            opts = coffee.OptimizationLevel.retrieve(coffee.options['optimizations'])
         else:
-            opts = system.OptimizationLevel.retrieve(opts.get('optlevel', {}))
+            opts = coffee.OptimizationLevel.retrieve(opts.get('optlevel', {}))
 
         flops_pre = EstimateFlops().visit(self.ast)
 
@@ -127,7 +128,7 @@ class ASTKernel(object):
                     loop_opt.split(split)
                 if precompute:
                     loop_opt.precompute(precompute)
-                if system.initialized and flatten(loop_opt.expr_linear_loops):
+                if coffee.initialized and flatten(loop_opt.expr_linear_loops):
                     vect = LoopVectorizer(loop_opt, kernel)
                     if align_pad:
                         # Padding and data alignment

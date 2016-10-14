@@ -31,15 +31,17 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import absolute_import
+
 from collections import OrderedDict, defaultdict
 from itertools import product
 from copy import deepcopy as dcopy
 
-from base import *
-from utils import *
-from expression import copy_metaexpr
-from rewriter import ExpressionRewriter
-from exceptions import ControlFlowError, UnexpectedNode
+from .base import *
+from .utils import *
+from .expression import copy_metaexpr
+from .rewriter import ExpressionRewriter
+from .exceptions import ControlFlowError, UnexpectedNode
 from coffee.visitors import FindLoopNests
 
 
