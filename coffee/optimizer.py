@@ -31,20 +31,23 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import absolute_import
+
 import operator
 import resource
 from collections import OrderedDict
 from itertools import combinations
 from math import factorial as fact
 
-import system
-from base import *
-from utils import *
-from scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
-from rewriter import ExpressionRewriter
-from cse import CSEUnpicker
-from logger import warn
+from . import system
+from .base import *
+from .utils import *
+from .scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
+from .rewriter import ExpressionRewriter
+from .cse import CSEUnpicker
+from .logger import warn
 from coffee.visitors import FindInstances, ProjectExpansion
+from functools import reduce
 
 
 class LoopOptimizer(object):

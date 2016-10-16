@@ -31,14 +31,17 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from sys import maxint
+from __future__ import absolute_import
+
+from sys import maxsize
 import operator
 
-from base import *
-from utils import *
+from .base import *
+from .utils import *
 from coffee.visitors import EstimateFlops
-from expression import MetaExpr
-from logger import log, COST_MODEL
+from .expression import MetaExpr
+from .logger import log, COST_MODEL
+from functools import reduce
 
 
 class Temporary(object):
@@ -231,7 +234,7 @@ class CSEUnpicker(object):
                         t.linear_reads_costs[p] = c + p_c
 
     def _transform_temporaries(self, temporaries):
-        from rewriter import ExpressionRewriter
+        from .rewriter import ExpressionRewriter
 
         # Never attempt to transform the main expression
         temporaries = [t for t in temporaries if t.node not in self.exprs]
@@ -343,9 +346,9 @@ class CSEUnpicker(object):
         for s, t in trace.items():
             new_trace[s] = t.reconstruct()
 
-        best = (bounds[0], bounds[0], maxint)
+        best = (bounds[0], bounds[0], maxsize)
         fact_levels = {k: v for k, v in levels.items() if k > bounds[0] and k <= bounds[1]}
-        for level, temporaries in sorted(fact_levels.items(), key=lambda (i, j): i):
+        for level, temporaries in sorted(fact_levels.items(), key=lambda i_j: i_j[0]):
             level_inloop_cost = 0
             for t in temporaries:
                 # The operation count, after fact+licm, outside /loop/, induced by /t/

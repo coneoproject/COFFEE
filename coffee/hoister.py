@@ -31,9 +31,11 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from base import *
-from utils import *
-from logger import warn
+from __future__ import absolute_import
+
+from .base import *
+from .utils import *
+from .logger import warn
 
 
 class Extractor(object):

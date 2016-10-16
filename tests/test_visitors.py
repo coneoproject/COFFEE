@@ -2,6 +2,7 @@ import pytest
 from coffee.base import *
 from coffee.visitors import *
 from collections import Counter
+from functools import reduce
 
 
 @pytest.mark.parametrize("key",

@@ -31,15 +31,17 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import absolute_import
+
 from math import ceil
 from copy import deepcopy as dcopy
 from collections import OrderedDict, namedtuple
 from itertools import product
 
-from base import *
-from utils import *
-import system
-from logger import warn
+from .base import *
+from .utils import *
+from . import system
+from .logger import warn
 from coffee.visitors import FindInstances
 
 

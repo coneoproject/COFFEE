@@ -33,6 +33,7 @@
 
 """This file contains the hierarchy of classes that implement a kernel's
 Abstract Syntax Tree (AST)."""
+from __future__ import absolute_import
 
 from copy import deepcopy as dcopy
 from math import isnan
@@ -461,12 +462,12 @@ class Symbol(Expr):
 
     @property
     def is_const(self):
-        from utils import is_const_dim
+        from .utils import is_const_dim
         return not self.rank or all(is_const_dim(r) for r in self.rank)
 
     @property
     def is_const_offset(self):
-        from utils import is_const_dim, flatten
+        from .utils import is_const_dim, flatten
         return not self.offset or all(is_const_dim(o) for o in flatten(self.offset))
 
     @property

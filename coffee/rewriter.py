@@ -31,16 +31,18 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import absolute_import
+
 from collections import Counter
 import pulp as ilp
 
-from base import *
-from utils import *
+from .base import *
+from .utils import *
 from coffee.visitors import *
-from hoister import Hoister
-from expander import Expander
-from factorizer import Factorizer
-from logger import warn
+from .hoister import Hoister
+from .expander import Expander
+from .factorizer import Factorizer
+from .logger import warn
 
 
 class ExpressionRewriter(object):

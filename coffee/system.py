@@ -33,137 +33,12 @@
 
 """Provide mechanisms to initialize COFFEE or change its state."""
 
-import sys
+from __future__ import absolute_import
 
-from base import *
-from citations import update_citations
-from vectorizer import VectStrategy
-from logger import LOG_DEFAULT, set_log_level, warn
+from coffee.base import *
 
 
-__all__ = ['architecture', 'compiler', 'isa', 'options', 'initialized',
-           'O0', 'O1', 'O2', 'O3', 'Ofast']
-
-
-class Options(dict):
-
-    def __init__(self):
-        self._callbacks = {}
-
-    def __setitem__(self, key, value):
-        super(Options, self).__setitem__(key, value)
-        self.maybe_update_backend(key, value)
-
-    def register(self, key, value=None, callback=None):
-        self[key] = value
-        if callback:
-            self._callbacks[key] = callback
-
-    def maybe_update_backend(self, key, value):
-        if key in self._callbacks:
-            self._callbacks[key](value)
-
-
-class OptimizationLevel(dict):
-
-    _KNOWN = {}
-
-    @classmethod
-    def retrieve(cls, optlevel):
-        """Retrieve the set of transformations corresponding to ``optlevel``.
-
-        :param optlevel: may be an :class:`OptimizationLevel` itself (in which
-        case ``optlevel`` itself is returned) or the name of the level (a string).
-        """
-        if isinstance(optlevel, OptimizationLevel):
-            return optlevel
-        elif isinstance(optlevel, str) and optlevel in cls._KNOWN:
-            return cls._KNOWN[optlevel]
-        elif not optlevel:
-            return O0
-        else:
-            warn("Unrecognized optimization specified.")
-            return O0
-
-    def __init__(self, name, **kwargs):
-        self.name = name
-
-        for key, value in kwargs.iteritems():
-            self[key] = value
-
-        OptimizationLevel._KNOWN[name] = self
-
-
-def coffee_init(**kwargs):
-    """Initialize COFFEE.
-
-    :param compiler: Options: ``gnu``, ``intel``. By knowing the backend compiler,
-        COFFEE can generate specialized code (e.g., by inserting suitable loop pragmas).
-    :param isa: Options: ``sse``, ``avx``. The instruction set architecture tells
-        COFFEE the vector length and the available intrinsics so that optimized
-        vector code (or scalar code suitable for compiler auto-vectorization) is
-        generated.
-    :param architecture: Options: ``default``, ``intel``.
-    :param optlevel: Options: ``O0`` (default), ``O1``, ``O2``, ``O3``, ``Ofast``.
-        The higher the optimization level, the more aggresively are the transformations.
-        For more details, refer to the ``set_opt_level``'s documentation.
-    """
-
-    global initialized, options, architecture, compiler, isa
-
-    architecture_id = kwargs.get('architecture', 'default')
-    compiler_id = kwargs.get('compiler')
-    isa_id = kwargs.get('isa')
-    optlevel = kwargs.get('optlevel', O0)
-
-    architecture = set_architecture(architecture_id)
-    compiler = set_compiler(compiler_id)
-    isa = set_isa(isa_id)
-
-    if all([architecture, compiler, isa]):
-        initialized = True
-
-    options['architecture'] = architecture_id
-    options['compiler'] = compiler_id
-    options['isa'] = isa_id
-    options['optimizations'] = optlevel
-
-    # Allow visits of ASTs that become huge due to transformation. The constant
-    # /4000/ was empirically found to be an acceptable value
-    sys.setrecursionlimit(4000)
-
-
-def coffee_reconfigure(**kwargs):
-    """Reconfigure the internal state of COFFEE."""
-
-    options['optimizations'] = kwargs.get('optlevel')
-
-
-def set_opt_level(optlevel):
-    """Set the default optimization level.
-
-    :param optlevel: accepted values are: ::
-
-        ``O0``: No optimizations are applied at all (default).
-        ``O1``: Apply generalized loop-invariant code motion. Refer to
-            ``citations.LUPORINI2015`` for more information.
-        ``O2``: Apply sharing elimination and elimination of useless floating
-            point operations (e.g., a + 0 == a). Refer to ``citations.LUPORINI2016``
-            for more information.
-        ``O3``: Apply ``O2`` and enforce data alignment through array padding.
-            This maximizes the impact of compiler auto-vectorization, as thoroughly
-            discussed in ``citations.LUPORINI2015``.
-        ``Ofast``: Apply ``O3``, but resort to explicit outer-product vectorization
-            instead. Vector promotion is also attempted to maximize vectorization in
-            the outer loops. Refer to ``citations.LUPORINI2015`` for more information.
-
-        Alternatively, one can craft a new composite transformation by creating a
-        new :class:`OptimizationLevel`.
-    """
-
-    optimizations = OptimizationLevel.retrieve(optlevel)
-
-    update_citations(optimizations)
+__all__ = ['architecture', 'compiler', 'isa']
 
 
 def set_architecture(architecture_id):
@@ -264,22 +139,6 @@ def set_isa(isa_id):
 
     return {}
 
-
-O0 = OptimizationLevel('O0')
-O1 = OptimizationLevel('O1', rewrite=1)
-O2 = OptimizationLevel('O2', rewrite=2, dead_ops_elimination=True)
-O3 = OptimizationLevel('O3', align_pad=True, **O2)
-Ofast = OptimizationLevel('Ofast', vectorize=(VectStrategy.SPEC_UAJ_PADD, 2),
-                          precompute='noloops', **O3)
-
-initialized = False
-
-options = Options()
-options.register('logging', LOG_DEFAULT, set_log_level)
-options.register('architecture', callback=set_architecture)
-options.register('compiler', callback=set_compiler)
-options.register('isa', callback=set_isa)
-options.register('optimizations', O0.name, callback=set_opt_level)
 
 architecture = {}
 compiler = {}
