@@ -87,7 +87,7 @@ class OptimizationLevel(dict):
     def __init__(self, name, **kwargs):
         self.name = name
 
-        for key, value in kwargs.iteritems():
+        for key, value in kwargs.items():
             self[key] = value
 
         OptimizationLevel._KNOWN[name] = self
