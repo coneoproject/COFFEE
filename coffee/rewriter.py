@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, division
 
 from collections import Counter
 import pulp as ilp
@@ -340,9 +340,9 @@ class ExpressionRewriter(object):
         for i in divisions:
             if isinstance(i.right, Symbol):
                 if isinstance(i.right.symbol, (int, float)):
-                    to_replace[i] = Prod(i.left, 1.0 / i.right.symbol)
+                    to_replace[i] = Prod(i.left, 1 / i.right.symbol)
                 elif isinstance(i.right.symbol, str) and i.right.symbol.isdigit():
-                    to_replace[i] = Prod(i.left, 1.0 / float(i.right.symbol))
+                    to_replace[i] = Prod(i.left, 1 / float(i.right.symbol))
                 else:
                     to_replace[i] = Prod(i.left, Div(1.0, i.right))
         ast_replace(self.stmt, to_replace, copy=True, mode='symbol')

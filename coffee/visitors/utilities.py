@@ -1,4 +1,4 @@
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, division
 
 import itertools
 import operator
@@ -358,7 +358,7 @@ class EstimateFlops(Visitor):
 
     def visit_For(self, o, *args, **kwargs):
         body_flops = sum(self.visit(b) for b in o.body)
-        return (o.size / o.increment) * body_flops
+        return (o.size // o.increment) * body_flops
 
     def visit_Invert(self, o, *args, **kwargs):
         ops, _ = o.operands()
