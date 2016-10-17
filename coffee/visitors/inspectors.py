@@ -1,4 +1,4 @@
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, division
 from coffee.visitor import Visitor
 from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol, EmptyStatement
 from collections import defaultdict, OrderedDict, Counter

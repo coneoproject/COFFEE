@@ -33,7 +33,7 @@
 
 """This file contains the hierarchy of classes that implement a kernel's
 Abstract Syntax Tree (AST)."""
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, division
 
 from copy import deepcopy as dcopy
 from math import isnan

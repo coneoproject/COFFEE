@@ -33,6 +33,8 @@
 
 """Utility functions for the inspection, transformation, and creation of ASTs."""
 
+from __future__ import absolute_import, print_function, division
+
 from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict, namedtuple
 
@@ -171,7 +173,7 @@ def ast_make_expr(op, nodes, balance=True):
         return nodes[0] if len(nodes) == 1 else op(nodes[0], _ast_make_expr(nodes[1:]))
 
     def _ast_make_bal_expr(nodes):
-        half = len(nodes) / 2
+        half = len(nodes) // 2
         return nodes[0] if len(nodes) == 1 else op(_ast_make_bal_expr(nodes[:half]),
                                                    _ast_make_bal_expr(nodes[half:]))
 

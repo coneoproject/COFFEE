@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, division
 
 import operator
 import resource
@@ -479,7 +479,7 @@ class LoopOptimizer(object):
                             # _n=number of unique elements, _k=group size
                             _n = injectable[j[0]][1]
                             _k = len(j)
-                            partial *= fact(_n + _k - 1)/(fact(_k)*fact(_n - 1))
+                            partial *= fact(_n + _k - 1)//(fact(_k)*fact(_n - 1))
                         increase_factor += partial
                     increase_factor = increase_factor or 1
                     if increase_factor > save_factor:

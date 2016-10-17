@@ -32,7 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """COFFEE's optimization plan constructor."""
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, division
 
 import coffee
 from .base import *

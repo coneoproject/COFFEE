@@ -31,7 +31,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function, division
 
 from math import ceil
 from copy import deepcopy as dcopy
@@ -633,7 +633,7 @@ class OuterProduct(object):
         typ = system.isa["decl_var"]
         vect_len = system.isa["dp_reg"]
         # Do as many times as the unroll factor
-        spins = int(ceil(n_regs / float(vect_len)))
+        spins = int(ceil(n_regs / vect_len))
         for i in range(spins):
             # In-register permutations
             tmp = [Symbol(regs.get_reg(), ()) for r in range(vect_len)]
@@ -688,7 +688,7 @@ class OuterProduct(object):
         self.loops[1].incr.children[1] = Symbol(cols)
 
         stmts, decls, vrs = [], {}, {}
-        rows_per_col = rows / cols
+        rows_per_col = rows // cols
         rows_to_peel = rows % cols
         peeling = 0
         for i in range(cols):
@@ -735,7 +735,7 @@ class OuterProduct(object):
 def vect_roundup(x):
     """Return x rounded up to the vector length. """
     word_len = system.isa.get("dp_reg") or 1
-    return int(ceil(x / float(word_len))) * word_len
+    return int(ceil(x / word_len)) * word_len
 
 
 def vect_rounddown(x):

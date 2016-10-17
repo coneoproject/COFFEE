@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 """Handle article citations based on the employed optimizations."""
+from __future__ import absolute_import, print_function, division
 
 
 # Papers describing COFFEE
