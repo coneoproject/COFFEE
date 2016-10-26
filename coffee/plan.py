@@ -111,6 +111,9 @@ class ASTKernel(object):
                 warn("Rewrite auto forbidden with multiple exprs")
                 rewrite = 4
 
+            # Preprocess the kernel prior to optimization
+            preprocess(kernel, fors=info['fors'])
+
             # Main Ootimization pipeline
             for loop_opt in loop_opts:
 
