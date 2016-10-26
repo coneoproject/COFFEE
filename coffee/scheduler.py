@@ -103,11 +103,12 @@ class SSALoopMerger(LoopScheduler):
               A[i] = B[i] + C[i]
               D[i] = A[i]
         """
-        to_replace = {}
         for loop in merged_loops:
+            to_replace = {}
             for stmt in loop.body:
                 ast_replace(stmt, to_replace, copy=True)
-                to_replace[stmt.rvalue] = stmt.lvalue
+                if not isinstance(stmt, AugmentedAssign):
+                    to_replace[stmt.rvalue] = stmt.lvalue
 
     def merge(self, root):
         """Merge perfect loop nests in ``root``."""
