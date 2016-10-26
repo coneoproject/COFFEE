@@ -769,6 +769,19 @@ def uniquify(exprs):
     return OrderedDict([(e.urepr, e) for e in exprs]).values()
 
 
+def remove_empty_loops(node):
+    """Remove all empty loops within node."""
+
+    for nest in visit(node, info_items=['fors'])['fors']:
+        to_remove = (None, None)
+        for loop, parent in reversed(nest):
+            if not loop.body or all(i == to_remove[0] for i in loop.body):
+                to_remove = (loop, parent)
+        if all(to_remove):
+            loop, parent = to_remove
+            parent.children.remove(loop)
+
+
 def postprocess(node):
     """Rearrange the Nodes in the AST rooted in ``node`` to improve the code quality
     when unparsing the tree."""
