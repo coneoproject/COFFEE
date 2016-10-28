@@ -33,7 +33,6 @@
 
 from __future__ import absolute_import, print_function, division
 
-from sys import maxsize
 import operator
 
 from .base import *
@@ -113,7 +112,7 @@ class Temporary(object):
 
     @property
     def project(self):
-        return len(self.linear_reads)
+        return len(self.linear_reads)//self.linearity_degree
 
     @property
     def is_ssa(self):
@@ -248,6 +247,7 @@ class CSEUnpicker(object):
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
             ew.expand(mode='all', lda=lda)
+            ew.reassociate(lambda i: all(r != t.main_loop.dim for r in lda[i.symbol]))
             ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.linear_reads}, lda=lda)
             ew.factorize(mode='heuristic')
             rewriters[t] = ew
@@ -330,21 +330,23 @@ class CSEUnpicker(object):
 
     def _cost_fact(self, trace, levels, bounds):
         # Check parameters
-        bounds = bounds or (min(levels.keys()), max(levels.keys()))
         assert len(bounds) == 2 and bounds[1] >= bounds[0]
         assert bounds[0] in levels.keys() and bounds[1] in levels.keys()
 
         # Determine current costs of individual loop regions
-        cse_cost = self._cost_cse(levels, (min(levels.keys()), bounds[0]))
-        uptolevel_cost = cse_cost
-        level_inloop_cost, total_outloop_cost, cse = 0, 0, 0
+        input_cost = self._cost_cse(levels, (min(levels.keys()), max(levels.keys())))
+        uptolevel_cost, post_cse_cost = input_cost, input_cost
+        level_inloop_cost, total_outloop_cost = 0, 0
 
         # We are going to modify a copy of the temporaries dict
         new_trace = OrderedDict()
         for s, t in trace.items():
             new_trace[s] = t.reconstruct()
 
-        best = (bounds[0], bounds[0], maxsize)
+        # Cost induced by the untransformed temporaries
+        pre_cse_cost = self._cost_cse(levels, (min(levels.keys()), bounds[0]))
+
+        best = (bounds[0], bounds[0], uptolevel_cost)
         fact_levels = {k: v for k, v in levels.items() if k > bounds[0] and k <= bounds[1]}
         for level, temporaries in sorted(fact_levels.items(), key=lambda i_j: i_j[0]):
             level_inloop_cost = 0
@@ -363,27 +365,28 @@ class CSEUnpicker(object):
                         t_outloop_cost += new_trace[read.urepr].project*cost
                     else:
                         linear_reads.extend([read.urepr])
+                factors = {s.urepr if isinstance(s, Symbol) else s for s in linear_reads}
+                factors = {s for s in factors if t.main_loop.dim in s[1]}
 
-                # Factorization will kill duplicates and increase the number of sums
-                # in the outer loop
-                fact_syms = {s.urepr if isinstance(s, Symbol) else s for s in linear_reads}
-                t_outloop_cost += len(linear_reads) - len(fact_syms)
+                # Factorization increases the number of sums in the outer loops
+                t_outloop_cost += len(linear_reads) - len(factors)
 
-                # With n := len(fact_syms) and k := linearity degree of t,
-                # we'll end up having n/k prods and n/k -1 sums
-                t_inloop_cost += 2*(len(fact_syms)//t.linearity_degree) - 1
+                # With n := len(factors) and k := linearity degree of t,
+                # we'll end up creating n/k prods and n/k -1 sums
+                t_inloop_cost += 2*len(factors) - 1
 
-                # Add to the total and scale up by the corresponding number of iterations
+                # Add to the total scaling up by the corresponding iterations
                 total_outloop_cost += t_outloop_cost*t.niters_after_licm
                 level_inloop_cost += t_inloop_cost*t.niters
 
-                # Update the trace because we want to track the cost after "pushing" the
-                # Temporaries where /t/ depends on /t/ itself
-                new_trace[t.urepr].linear_reads_costs = {s: 1 for s in fact_syms}
+                # Update the trace because we want to track the cost after "pushing"
+                # the temporaries where /t/ depends on /t/ itself
+                new_trace[t.urepr].linear_reads_costs = {s: 1 for s in factors}
+                from IPython import embed; embed()
 
-            # Some temporaries at levels < /i/ may also appear in:
+            # Some temporaries at levels < /level/ may also appear in:
             # 1) subsequent loops
-            # 2) levels beyond /i/
+            # 2) levels beyond /level/
             for t in list(flatten([levels[j] for j in range(level)])):
                 if any(rb.urepr not in new_trace for rb in t.readby) or \
                         any(new_trace[rb.urepr].level > level for rb in t.readby):
@@ -392,21 +395,20 @@ class CSEUnpicker(object):
                     # be read in some other loops".
                     level_inloop_cost += t.flops*t.niters
 
-            # Total cost = cost_after_fact_up_to_level + cost_inloop_cse
-            #            = cost_hoisted_subexprs + cost_inloop_fact + cost_inloop_cse
-            uptolevel_cost = cse_cost + total_outloop_cost + level_inloop_cost
-            uptolevel_cost += self._cost_cse(fact_levels, (level + 1, bounds[1]))
-            from IPython import embed; embed()
+            post_cse_cost = self._cost_cse(fact_levels, (level + 1, bounds[1]))
+
+            # Compute the total cost
+            total_inloop_cost = pre_cse_cost + level_inloop_cost + post_cse_cost
+            uptolevel_cost = total_outloop_cost + total_inloop_cost
 
             # Update the best alternative
             if uptolevel_cost < best[2]:
                 best = (bounds[0], level, uptolevel_cost)
 
-            cse = self._cost_cse(fact_levels, (level + 1, bounds[1]))
-
-        log('CSE: unpicking between levels [%d, %d]:' % bounds, COST_MODEL)
-        log('CSE: cost=%d (cse=%d, outloop=%d, inloop_fact=%d, inloop_cse=%d)' %
-            (uptolevel_cost, cse_cost, total_outloop_cost, level_inloop_cost, cse), COST_MODEL)
+            log('[CSE]: unpicking between [%d, %d]:' % (bounds[0], level), COST_MODEL)
+            log('       flops: %d -> %d (hoist=%d, preCSE=%d, fact=%d, postCSE=%d)' %
+                (input_cost, uptolevel_cost, total_outloop_cost, pre_cse_cost,
+                 level_inloop_cost, post_cse_cost), COST_MODEL)
 
         return best
 
@@ -445,6 +447,7 @@ class CSEUnpicker(object):
                     global_best = local_best
 
             log("-- Best: [%d, %d] (cost=%d) --" % global_best, COST_MODEL)
+            global_best = (-1, 6)
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):
