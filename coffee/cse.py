@@ -71,9 +71,8 @@ class Temporary(object):
         return self.symbol.rank if self.symbol else None
 
     @property
-    def is_bilinear(self):
-        linear_loops = [l for l in self.loops if l.dim in self.rank]
-        return len(linear_loops) == 2
+    def linearity_degree(self):
+        return len([l for l in self.loops if l.is_linear])
 
     @property
     def symbol(self):
@@ -244,8 +243,7 @@ class CSEUnpicker(object):
         # Expand + Factorize
         rewriters = OrderedDict()
         for t in temporaries:
-            expr_info = MetaExpr(self.type, t.main_loop.children[0], t.nest,
-                                 tuple(l.dim for l in t.loops if l.is_linear))
+            expr_info = MetaExpr(self.type, t.main_loop.children[0], t.nest)
             ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
@@ -259,7 +257,7 @@ class CSEUnpicker(object):
         # Code motion
         for t, ew in rewriters.items():
             ew.licm(mode='only_outlinear', lda=lda, global_cse=True)
-            if t.is_bilinear:
+            if t.linearity_degree > 1:
                 ew.licm(mode='only_linear')
 
     def _analyze_expr(self, expr, lda):
@@ -371,15 +369,16 @@ class CSEUnpicker(object):
                 fact_syms = {s.urepr if isinstance(s, Symbol) else s for s in linear_reads}
                 t_outloop_cost += len(linear_reads) - len(fact_syms)
 
-                # Note: if n=len(fact_syms), then we'll have n prods, n-1 sums
-                t_inloop_cost += 2*len(fact_syms) - 1
+                # With n := len(fact_syms) and k := linearity degree of t,
+                # we'll end up having n/k prods and n/k -1 sums
+                t_inloop_cost += 2*(len(fact_syms)//t.linearity_degree) - 1
 
                 # Add to the total and scale up by the corresponding number of iterations
                 total_outloop_cost += t_outloop_cost*t.niters_after_licm
                 level_inloop_cost += t_inloop_cost*t.niters
 
                 # Update the trace because we want to track the cost after "pushing" the
-                # temporaries on which /t/ depends into /t/ itself
+                # Temporaries where /t/ depends on /t/ itself
                 new_trace[t.urepr].linear_reads_costs = {s: 1 for s in fact_syms}
 
             # Some temporaries at levels < /i/ may also appear in:
@@ -397,6 +396,7 @@ class CSEUnpicker(object):
             #            = cost_hoisted_subexprs + cost_inloop_fact + cost_inloop_cse
             uptolevel_cost = cse_cost + total_outloop_cost + level_inloop_cost
             uptolevel_cost += self._cost_cse(fact_levels, (level + 1, bounds[1]))
+            from IPython import embed; embed()
 
             # Update the best alternative
             if uptolevel_cost < best[2]:
