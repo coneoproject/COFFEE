@@ -78,6 +78,10 @@ class MetaExpr(object):
         return tuple(d for d in self.dims if d not in self.linear_dims)
 
     @property
+    def reduction_dims(self):
+        return tuple(l.dim for l in self.reduction_loops)
+
+    @property
     def loops(self):
         return zip(*self._loops_info)[0]
 
@@ -118,6 +122,25 @@ class MetaExpr(object):
         return tuple([i for i in self.loops_info if i not in self.linear_loops_info])
 
     @property
+    def reduction_loops(self):
+        stmts = FindInstances((Writer, Incr)).visit(self.outermost_loop)
+        if stmts[Incr]:
+            writers = flatten(stmts.values())
+            return tuple(l for l in self.loops
+                         if all(l.dim not in i.lvalue.rank for i in writers))
+        else:
+            return ()
+
+    @property
+    def reduction_loops_parents(self):
+        retval = self.reduction_loops_info
+        return zip(*retval)[1] if retval else ()
+
+    @property
+    def reduction_loops_info(self):
+        return tuple((l, p) for l, p in self.loops_info if l in self.reduction_loops)
+
+    @property
     def perfect_loops(self):
         """Return the loops in a perfect loop nest for the expression."""
         return [l for l in self.loops if is_perfect_loop(l)]
@@ -141,6 +164,22 @@ class MetaExpr(object):
     @property
     def outermost_linear_loop_parent(self):
         return self.linear_loops_parents[0] if len(self.linear_loops_parents) > 0 else None
+
+    @property
+    def innermost_loop(self):
+        return self.loops[-1] if len(self.loops) > 0 else None
+
+    @property
+    def innermost_parent(self):
+        return self.loops_parents[-1] if len(self.loops_parents) > 0 else None
+
+    @property
+    def innermost_linear_loop(self):
+        return self.linear_loops[-1] if len(self.linear_loops) > 0 else None
+
+    @property
+    def innermost_linear_loop_parent(self):
+        return self.linear_loops_parents[-1] if len(self.linear_loops_parents) > 0 else None
 
     @property
     def dimension(self):
