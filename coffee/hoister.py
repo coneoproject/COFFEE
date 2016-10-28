@@ -35,7 +35,6 @@ from __future__ import absolute_import, print_function, division
 
 from .base import *
 from .utils import *
-from .logger import warn
 
 
 class Extractor(object):
@@ -46,7 +45,7 @@ class Extractor(object):
     @staticmethod
     def factory(mode, stmt, expr_info):
         if mode == 'normal':
-            should_extract = lambda d: True
+            should_extract = lambda d: d != set(expr_info.dims)
             return MainExtractor(stmt, expr_info, should_extract)
         elif mode == 'only_const':
             # Do not extract unless constant in all loops
@@ -163,10 +162,14 @@ class MainExtractor(Extractor):
                 # E.g. A[i,j]*B[i]
                 if not self._try(right, dep_r):
                     return (dep_n, self.EXT)
-            else:
-                # E.g. A[i]*B[j]
+            elif dep_l | dep_r == set(self.expr_info.dims):
+                # E.g. A[i]*B[j] within two loops i and j
                 self._try(left, dep_l)
                 self._try(right, dep_r)
+                return (dep_n, self.STOP)
+            else:
+                # E.g. A[i]*B[j] within at least three loops
+                return (dep_n, self.EXT)
         elif info_r == self.EXT:
             self._try(right, dep_r)
         elif info_l == self.EXT:
@@ -233,10 +236,8 @@ class AggressiveExtractor(Extractor):
 
 class Hoister(object):
 
-    # How many times the hoister was invoked
-    _handled = 0
     # Temporary variables template
-    _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
+    _template = "ct%d"
 
     def __init__(self, stmt, expr_info, header, decls, hoisted):
         """Initialize the Hoister."""
@@ -245,11 +246,6 @@ class Hoister(object):
         self.header = header
         self.decls = decls
         self.hoisted = hoisted
-
-        # Increment counters for unique variable names
-        self.nextracted = 0
-        self.expr_id = Hoister._handled
-        Hoister._handled += 1
 
     def _filter(self, dep, subexprs, make_unique=True, sharing=None):
         """Filter hoistable subexpressions."""
@@ -286,6 +282,40 @@ class Hoister(object):
         reads = [s.symbol for s in reads[Symbol]]
         return set.isdisjoint(set(reads), set(written))
 
+    def _locate(self, dep, subexprs, mode):
+        # TODO apply `in_written` to all loops in mapper ONCE, in `licm`,
+        #      and then update it as exprs are hoisted
+        outer = self.expr_info.outermost_loop
+        inner = self.expr_info.innermost_loop
+
+        # Start assuming no "real" hoisting can take place
+        # E.g.: for i {a[i]*(t1 + t2);} --> for i {t3 = t1 + t2; a[i]*t3;}
+        place, offset = inner.block, self.stmt
+
+        if mode != 'aggressive':
+            # "Standard" code motion case, i.e. moving /subexprs/ as far as
+            # possible in the loop nest such that dependencies are honored
+            loops = list(reversed(self.expr_info.loops))
+            candidates = [l.block for l in loops[1:]] + [self.header]
+
+            for loop, candidate in zip(loops, candidates):
+                if not self._is_hoistable(subexprs, loop):
+                    break
+                if loop.dim not in dep:
+                    place, offset = candidate, loop
+
+            # Determine how much extra memory and whether clone loops are needed
+            jumped = loops[:candidates.index(place)]
+            clone = tuple(l for l in reversed(jumped) if l.dim in dep)
+        else:
+            # Hoist outside of the loop nest, even though this doesn't
+            # result in any operation count reduction
+            if all(self._is_hoistable(subexpr, outer)):
+                place, offset = self.header, outer
+                clone = tuple(self.expr_info.loops)
+
+        return place, offset, clone
+
     def extract(self, mode, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
         lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
@@ -298,11 +328,6 @@ class Hoister(object):
         iterative = kwargs.get('iterative', True)
         lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
         global_cse = kwargs.get('global_cse', False)
-
-        expr_dims_loops = self.expr_info.loops_from_dims
-        expr_outermost_loop = self.expr_info.outermost_loop
-        expr_outermost_linear_loop = self.expr_info.outermost_linear_loop
-        is_bilinear = self.expr_info.is_bilinear
 
         extractor = Extractor.factory(mode, self.stmt, self.expr_info)
         extracted = True
@@ -318,64 +343,16 @@ class Hoister(object):
                 if not subexprs:
                     continue
 
-                # 2) Determine the loop nest level where invariant expressions
-                # should be hoisted. The goal is to hoist them as far as possible
-                # in the loop nest, while minimising temporary storage.
-                # We distinguish several cases:
-                depth = len(dep)
-                if depth == 0:
-                    # As scalar, outside of the loop nest;
-                    place = self.header
-                    wrap_loop = ()
-                    offset = expr_outermost_loop
-                elif depth == 1 and len(expr_dims_loops) == 1:
-                    # As scalar, within the only loop present
-                    place = expr_outermost_loop.children[0]
-                    wrap_loop = ()
-                    offset = place.children[place.children.index(self.stmt)]
-                elif depth == 1 and len(expr_dims_loops) > 1:
-                    if expr_dims_loops[dep[0]] == expr_outermost_loop:
-                        # As scalar, within the outermost loop
-                        place = expr_outermost_loop.children[0]
-                        wrap_loop = ()
-                        offset = od_find_next(expr_dims_loops, dep[0])
-                    else:
-                        # As vector, outside of the loop nest;
-                        place = self.header
-                        wrap_loop = (expr_dims_loops[dep[0]],)
-                        offset = expr_outermost_loop
-                elif mode == 'aggressive' and set(dep) == set(self.expr_info.dims) and \
-                        not any([self.expr_graph.is_written(e) for e in subexprs]):
-                    # As n-dimensional vector (n == depth), outside of the loop nest
-                    place = self.header
-                    wrap_loop = tuple(expr_dims_loops.values())
-                    offset = expr_outermost_loop
-                elif depth == 2:
-                    if self._is_hoistable(subexprs, expr_outermost_linear_loop):
-                        # As vector, within the outermost loop imposing the dependency
-                        place = expr_dims_loops[dep[0]].children[0]
-                        wrap_loop = tuple(expr_dims_loops[dep[i]] for i in range(1, depth))
-                        offset = od_find_next(expr_dims_loops, dep[0])
-                    elif expr_outermost_linear_loop.dim == dep[-1] and is_bilinear:
-                        # As scalar, within the closest loop imposing the dependency
-                        place = expr_dims_loops[dep[-1]].children[0]
-                        wrap_loop = ()
-                        offset = od_find_next(expr_dims_loops, dep[-1])
-                    else:
-                        # As scalar, within the closest loop imposing the dependency
-                        place = expr_dims_loops[dep[-1]].children[0]
-                        wrap_loop = ()
-                        offset = place.children[place.children.index(self.stmt)]
-                else:
-                    warn("Skipping unexpected code motion case.")
-                    return
+                # 2) Determine the outermost loop where invariant expressions
+                # can be hoisted without breaking data dependencies.
+                place, offset, clone = self._locate(dep, subexprs, mode)
 
-                loop_size = tuple([l.size for l in wrap_loop])
-                loop_dim = tuple([l.dim for l in wrap_loop])
+                loop_size = tuple(l.size for l in clone)
+                loop_dim = tuple(l.dim for l in clone)
 
                 # 3) Create the required new AST nodes
                 symbols, decls, stmts = [], [], []
-                for i, e in enumerate(subexprs):
+                for e in subexprs:
                     already_hoisted = False
                     if global_cse and self.hoisted.get_symbol(e):
                         name = self.hoisted.get_symbol(e)
@@ -384,12 +361,7 @@ class Hoister(object):
                                 place.children.index(decl) < place.children.index(offset):
                             already_hoisted = True
                     if not already_hoisted:
-                        name = self._hoisted_sym % {
-                            'loop_dep': '_'.join(dep) if dep else 'c',
-                            'expr_id': self.expr_id,
-                            'round': self.nextracted,
-                            'i': i
-                        }
+                        name = self._template % (len(self.hoisted) + len(stmts))
                         stmts.append(Assign(Symbol(name, loop_dim), dcopy(e)))
                         decl = Decl(self.expr_info.type, Symbol(name, loop_size),
                                     scope=LOCAL)
@@ -398,31 +370,28 @@ class Hoister(object):
                     symbols.append(Symbol(name, loop_dim))
 
                 # 4) Replace invariant sub-expressions with temporaries
-                to_replace = dict(zip(subexprs, symbols))
-                n_replaced = ast_replace(self.stmt.rvalue, to_replace)
+                ast_replace(self.stmt.rvalue, dict(zip(subexprs, symbols)))
 
                 # 5) Update data dependencies
-                for s, e in zip(symbols, subexprs):
-                    lda[s] = dep
+                lda.update({s: set(dep) for s in symbols})
 
                 # 6) Modify the AST adding the hoisted expressions
-                if wrap_loop:
-                    outer_wrap_loop = ast_make_for(stmts, wrap_loop[-1])
-                    for l in reversed(wrap_loop[:-1]):
-                        outer_wrap_loop = ast_make_for([outer_wrap_loop], l)
-                    code = decls + [outer_wrap_loop]
-                    wrap_loop = outer_wrap_loop
+                if clone:
+                    outer_clone = ast_make_for(stmts, clone[-1])
+                    for l in reversed(clone[:-1]):
+                        outer_clone = ast_make_for([outer_clone], l)
+                    code = decls + [outer_clone]
+                    clone = outer_clone
                 else:
                     code = decls + stmts
-                    wrap_loop = None
+                    clone = None
                 # Insert the new nodes at the right level in the loop nest
                 offset = place.children.index(offset)
                 place.children[offset:offset] = code
                 # Track hoisted symbols
                 for i, j in zip(stmts, decls):
-                    self.hoisted[j.sym.symbol] = (i, j, wrap_loop, place)
+                    self.hoisted[j.sym.symbol] = (i, j, clone, place)
 
-            self.nextracted += 1
             if not iterative:
                 break
 
