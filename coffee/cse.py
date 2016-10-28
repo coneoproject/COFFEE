@@ -33,7 +33,6 @@
 
 from __future__ import absolute_import, print_function, division
 
-from sys import maxsize
 import operator
 
 from .base import *
@@ -50,7 +49,7 @@ class Temporary(object):
     or an AugmentedAssig) that computes a temporary variable; that is, a variable
     that is read in more than one place."""
 
-    def __init__(self, node, main_loop, nest, reads=None, linear_reads_costs=None):
+    def __init__(self, node, main_loop, nest, linear_reads_costs=None):
         self.level = -1
         self.pushed = False
         self.readby = []
@@ -58,7 +57,6 @@ class Temporary(object):
         self.node = node
         self.main_loop = main_loop
         self.nest = nest
-        self.reads = reads or []
         self.linear_reads_costs = linear_reads_costs or OrderedDict()
         self.flops = EstimateFlops().visit(node)
 
@@ -71,9 +69,8 @@ class Temporary(object):
         return self.symbol.rank if self.symbol else None
 
     @property
-    def is_bilinear(self):
-        linear_loops = [l for l in self.loops if l.dim in self.rank]
-        return len(linear_loops) == 2
+    def linearity_degree(self):
+        return len(self.main_linear_loops)
 
     @property
     def symbol(self):
@@ -96,6 +93,10 @@ class Temporary(object):
         return self.symbol.urepr
 
     @property
+    def reads(self):
+        return FindInstances(Symbol).visit(self.expr)[Symbol] if self.expr else []
+
+    @property
     def linear_reads(self):
         return self.linear_reads_costs.keys() if self.linear_reads_costs else []
 
@@ -104,17 +105,27 @@ class Temporary(object):
         return zip(*self.nest)[0]
 
     @property
-    def niters(self):
-        return reduce(operator.mul, [l.size for l in self.loops], 1)
+    def main_linear_loops(self):
+        return [l for l in self.main_loops if l.is_linear]
 
     @property
-    def niters_after_licm(self):
-        return reduce(operator.mul,
-                      [l.size for l in self.loops if l is not self.main_loop], 1)
+    def main_linear_nest(self):
+        return [(l, p) for l, p in self.main_nest if l in self.linear_loops]
 
     @property
-    def project(self):
-        return len(self.linear_reads)
+    def main_loops(self):
+        index = self.loops.index(self.main_loop)
+        return [l for l in self.loops[:index + 1]]
+
+    @property
+    def main_nest(self):
+        return [(l, p) for l, p in self.nest if l in self.main_loops]
+
+    @property
+    def flops_projection(self):
+        # #muls + #sums
+        nmuls = len(self.linear_reads)
+        return (nmuls) + (nmuls - 1)
 
     @property
     def is_ssa(self):
@@ -123,6 +134,35 @@ class Temporary(object):
     @property
     def is_static_init(self):
         return isinstance(self.expr, ArrayInit)
+
+    @property
+    def is_increment(self):
+        return isinstance(self.node, Incr)
+
+    @property
+    def reductions(self):
+        return [l for l in self.main_loops if l.dim not in self.rank]
+
+    @property
+    def nreductions(self):
+        return len(self.reductions)
+
+    def niters(self, mode='all', handle=None):
+        assert mode in ['all', 'outer', 'nonlinear', 'in', 'out']
+        handle = handle or []
+        limit = self.loops.index(self.main_loop)
+        loops = self.loops[:limit + 1]
+        if mode == 'all':
+            sizes = [l.size for l in loops]
+        elif mode == 'outer':
+            sizes = [l.size for l in loops if l is not self.main_loop]
+        elif mode == 'nonlinear':
+            sizes = [l.size for l in loops if not l.is_linear]
+        elif mode == 'in':
+            sizes = [l.size for l in loops if l.dim in handle]
+        else:
+            sizes = [l.size for l in loops if l.dim not in handle]
+        return reduce(operator.mul, sizes, 1)
 
     def depends(self, others):
         """Return True if ``self`` reads a temporary or is read by a temporary
@@ -134,7 +174,7 @@ class Temporary(object):
         return False
 
     def reconstruct(self):
-        temporary = Temporary(self.node, self.main_loop, self.nest, list(self.reads),
+        temporary = Temporary(self.node, self.main_loop, self.nest,
                               OrderedDict(self.linear_reads_costs))
         temporary.level = self.level
         temporary.readby = list(self.readby)
@@ -191,7 +231,8 @@ class CSEUnpicker(object):
                 return False
             pushed_in = [global_trace.get(rb.urepr) for rb in temporary.readby]
             pushed_in = set(rb.main_loop.children[0] for rb in pushed_in if rb)
-            for s in temporary.reads:
+            reads = [s for s in temporary.reads if not s.is_number]
+            for s in reads:
                 # ... all the read temporaries must be accessible in the loops in which
                 # they will be pushed
                 if s.urepr in global_trace and global_trace[s.urepr].pushed:
@@ -211,13 +252,14 @@ class CSEUnpicker(object):
                                                            global_trace[rb.urepr])
             # The temporary is going to be pushed, so we can remove it as long as
             # it is not needed somewhere else
-            if t.node in t.main_loop.body and all(rb.urepr in trace for rb in t.readby):
+            if t.node in t.main_loop.body and\
+                    all(rb.urepr in global_trace for rb in t.readby):
                 global_trace[t.urepr].pushed = True
                 t.main_loop.body.remove(t.node)
                 self.decls.pop(t.name, None)
 
-        # Transform the AST (note: node replacement must happend in the order
-        # in which temporaries have been encountered)
+        # Transform the AST (note: node replacement must happen in the order
+        # in which the temporaries have been encountered)
         modified_temporaries = sorted(modified_temporaries.values(),
                                       key=lambda t: global_trace.keys().index(t.urepr))
         for t in modified_temporaries:
@@ -244,14 +286,13 @@ class CSEUnpicker(object):
         # Expand + Factorize
         rewriters = OrderedDict()
         for t in temporaries:
-            expr_info = MetaExpr(self.type, t.main_loop.children[0], t.nest,
-                                 tuple(l.dim for l in t.loops if l.is_linear))
+            expr_info = MetaExpr(self.type, t.main_loop.block, t.main_nest)
             ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
             ew.expand(mode='all', lda=lda)
+            ew.reassociate(lambda i: all(r != t.main_loop.dim for r in lda[i.symbol]))
             ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.linear_reads}, lda=lda)
-            ew.factorize(mode='heuristic')
             rewriters[t] = ew
 
         lda = loops_analysis(self.header, value='dim')
@@ -259,14 +300,14 @@ class CSEUnpicker(object):
         # Code motion
         for t, ew in rewriters.items():
             ew.licm(mode='only_outlinear', lda=lda, global_cse=True)
-            if t.is_bilinear:
+            if t.linearity_degree > 1:
                 ew.licm(mode='only_linear')
 
-    def _analyze_expr(self, expr, lda):
+    def _analyze_expr(self, expr, loop, lda):
         finder = FindInstances(Symbol)
         reads = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
         reads = [s for s in reads if s.symbol in self.decls]
-        syms = [s for s in reads if any(l in self.linear_dims for l in lda[s])]
+        syms = [s for s in reads if any(d in loop.dim for d in lda[s])]
 
         linear_reads_costs = OrderedDict()
 
@@ -288,16 +329,18 @@ class CSEUnpicker(object):
         return reads, linear_reads_costs
 
     def _analyze_loop(self, loop, nest, lda, global_trace):
-        trace = OrderedDict()
+        linear_dims = [l.dim for l, _ in nest if l.is_linear]
 
+        trace = OrderedDict()
         for node in loop.body:
             if not isinstance(node, Writer):
                 not_ssa = [trace[w] for w in in_written(node, key='urepr') if w in trace]
                 for t in not_ssa:
                     t.readby.append(t.symbol)
                 continue
-            reads, linear_reads_costs = self._analyze_expr(node.rvalue, lda)
-            for s in linear_reads_costs.keys():
+            reads, linear_reads_costs = self._analyze_expr(node.rvalue, loop, lda)
+            affected = [s for s in reads if any(i in linear_dims for i in lda[s])]
+            for s in affected:
                 if s.urepr in global_trace:
                     temporary = global_trace[s.urepr]
                     temporary.readby.append(node.lvalue)
@@ -307,7 +350,7 @@ class CSEUnpicker(object):
                 else:
                     temporary = trace.setdefault(s.urepr, Temporary(s, loop, nest))
                     temporary.readby.append(node.lvalue)
-            new_temporary = Temporary(node, loop, nest, reads, linear_reads_costs)
+            new_temporary = Temporary(node, loop, nest, linear_reads_costs)
             new_temporary.level = max([trace[s.urepr].level for s
                                        in new_temporary.linear_reads] or [-2]) + 1
             trace[node.lvalue.urepr] = new_temporary
@@ -327,86 +370,95 @@ class CSEUnpicker(object):
             levels = {i: levels[i] for i in range(lb, up)}
         cost = 0
         for level, temporaries in levels.items():
-            cost += sum(t.flops*t.niters for t in temporaries)
+            cost += sum(t.flops*t.niters('all') for t in temporaries)
         return cost
 
-    def _cost_fact(self, trace, levels, bounds):
+    def _cost_fact(self, trace, levels, lda, bounds):
         # Check parameters
-        bounds = bounds or (min(levels.keys()), max(levels.keys()))
         assert len(bounds) == 2 and bounds[1] >= bounds[0]
         assert bounds[0] in levels.keys() and bounds[1] in levels.keys()
 
         # Determine current costs of individual loop regions
-        cse_cost = self._cost_cse(levels, (min(levels.keys()), bounds[0]))
-        uptolevel_cost = cse_cost
-        level_inloop_cost, total_outloop_cost, cse = 0, 0, 0
+        input_cost = self._cost_cse(levels, (min(levels.keys()), max(levels.keys())))
+        uptolevel_cost, post_cse_cost = input_cost, input_cost
+        level_inloop_cost, total_outloop_cost = 0, 0
 
         # We are going to modify a copy of the temporaries dict
         new_trace = OrderedDict()
         for s, t in trace.items():
             new_trace[s] = t.reconstruct()
 
-        best = (bounds[0], bounds[0], maxsize)
+        # Cost induced by the untransformed temporaries
+        pre_cse_cost = self._cost_cse(levels, (min(levels.keys()), bounds[0]))
+
+        best = (bounds[0], bounds[0], uptolevel_cost)
         fact_levels = {k: v for k, v in levels.items() if k > bounds[0] and k <= bounds[1]}
         for level, temporaries in sorted(fact_levels.items(), key=lambda i_j: i_j[0]):
             level_inloop_cost = 0
             for t in temporaries:
-                # The operation count, after fact+licm, outside /loop/, induced by /t/
-                t_outloop_cost = 0
-                # The operation count, after fact+licm, within /loop/, induced by /t/
-                t_inloop_cost = 0
-
-                # Calculate the operation count for /t/ if we applied expansion + fact
-                linear_reads = []
+                # Compute the cost induced by /t/ in the outer loops after fact+licm
+                t_outloop_cost, linear_reads = 0, []
                 for read, cost in t.linear_reads_costs.items():
-                    if read.urepr in new_trace:
-                        linear_reads.extend(new_trace[read.urepr].linear_reads or
-                                            [read.urepr])
-                        t_outloop_cost += new_trace[read.urepr].project*cost
+                    traced = new_trace.get(read.urepr)
+                    if traced and traced.level >= bounds[0]:
+                        handle = traced.linear_reads or [read]
+                        if cost:
+                            for i in handle:
+                                # One prod in the closest linear loop
+                                t_outloop_cost += t.niters('out', lda[i])
+                                # The rest falls outside of the linear loops
+                                t_outloop_cost += (cost - 1)*t.niters('nonlinear')
                     else:
-                        linear_reads.extend([read.urepr])
+                        handle = [read]
+                    linear_reads.extend(handle)
+                factors = {as_urepr(i): i for i in linear_reads}.values()
+                # Take into account the increased number of sums (due to fact)
+                hoist_region = set.union(*[lda[i] for i in factors])
+                niters = t.niters('out', hoist_region)
+                t_outloop_cost += (len(linear_reads) - len(factors))*niters
+                total_outloop_cost += t_outloop_cost
 
-                # Factorization will kill duplicates and increase the number of sums
-                # in the outer loop
-                fact_syms = {s.urepr if isinstance(s, Symbol) else s for s in linear_reads}
-                t_outloop_cost += len(linear_reads) - len(fact_syms)
+                # Compute the cost induced by /t/ in the main loop after fact+licm
+                # We end up creating n prods and n -1 sums
+                t_inloop_cost = 2*len(factors) - 1
+                level_inloop_cost += t_inloop_cost*t.niters('all')
 
-                # Note: if n=len(fact_syms), then we'll have n prods, n-1 sums
-                t_inloop_cost += 2*len(fact_syms) - 1
+                # Take into account any hoistable reductions
+                if t.is_increment:
+                    for i in factors:
+                        handle = [l.dim for l in t.reductions if l.dim not in i.rank]
+                        level_inloop_cost -= t.niters('all') - t.niters('out', handle)
 
-                # Add to the total and scale up by the corresponding number of iterations
-                total_outloop_cost += t_outloop_cost*t.niters_after_licm
-                level_inloop_cost += t_inloop_cost*t.niters
+                # Keep the trace up-to-date
+                linear_reads_costs = {i: 1 for i in factors}
+                new_trace[t.urepr].linear_reads_costs = linear_reads_costs
 
-                # Update the trace because we want to track the cost after "pushing" the
-                # temporaries on which /t/ depends into /t/ itself
-                new_trace[t.urepr].linear_reads_costs = {s: 1 for s in fact_syms}
-
-            # Some temporaries at levels < /i/ may also appear in:
-            # 1) subsequent loops
-            # 2) levels beyond /i/
+            # Some temporaries within levels < /level/ might also appear in
+            # subsequent loops or levels beyond /level/, so they still contribute
+            # to the operation count
             for t in list(flatten([levels[j] for j in range(level)])):
                 if any(rb.urepr not in new_trace for rb in t.readby) or \
                         any(new_trace[rb.urepr].level > level for rb in t.readby):
-                    # Note: condition 1) is basically saying "if I'm read from
+                    # Note: condition 1) is basically saying "if I'm read by
                     # a temporary that is not in this loop's trace, then I must
                     # be read in some other loops".
-                    level_inloop_cost += t.flops*t.niters
+                    level_inloop_cost += \
+                        new_trace[t.urepr].flops_projection*t.niters('all')
 
-            # Total cost = cost_after_fact_up_to_level + cost_inloop_cse
-            #            = cost_hoisted_subexprs + cost_inloop_fact + cost_inloop_cse
-            uptolevel_cost = cse_cost + total_outloop_cost + level_inloop_cost
-            uptolevel_cost += self._cost_cse(fact_levels, (level + 1, bounds[1]))
+            post_cse_cost = self._cost_cse(fact_levels, (level + 1, bounds[1]))
+
+            # Compute the total cost
+            total_inloop_cost = pre_cse_cost + level_inloop_cost + post_cse_cost
+            uptolevel_cost = total_outloop_cost + total_inloop_cost
 
             # Update the best alternative
             if uptolevel_cost < best[2]:
                 best = (bounds[0], level, uptolevel_cost)
 
-            cse = self._cost_cse(fact_levels, (level + 1, bounds[1]))
-
-        log('CSE: unpicking between levels [%d, %d]:' % bounds, COST_MODEL)
-        log('CSE: cost=%d (cse=%d, outloop=%d, inloop_fact=%d, inloop_cse=%d)' %
-            (uptolevel_cost, cse_cost, total_outloop_cost, level_inloop_cost, cse), COST_MODEL)
+            log('[CSE]: unpicking between [%d, %d]:' % (bounds[0], level), COST_MODEL)
+            log('       flops: %d -> %d (hoist=%d, preCSE=%d, fact=%d, postCSE=%d)' %
+                (input_cost, uptolevel_cost, total_outloop_cost, pre_cse_cost,
+                 level_inloop_cost, post_cse_cost), COST_MODEL)
 
         return best
 
@@ -415,7 +467,6 @@ class CSEUnpicker(object):
         external_decls = [d for d in self.decls.values() if d.scope == EXTERNAL]
         fors = visit(self.header, info_items=['fors'])['fors']
         lda = loops_analysis(self.header, value='dim')
-        ra = reachability_analysis(self.header, external_decls)
 
         # Collect all loops to be analyzed
         nests = OrderedDict()
@@ -440,7 +491,7 @@ class CSEUnpicker(object):
             current_cost = self._cost_cse(levels, (min_level, max_level))
             global_best = (min_level, min_level, current_cost)
             for i in sorted(levels.keys()):
-                local_best = self._cost_fact(trace, levels, (i, max_level))
+                local_best = self._cost_fact(trace, levels, lda, (i, max_level))
                 if local_best[2] < global_best[2]:
                     global_best = local_best
 
@@ -448,6 +499,7 @@ class CSEUnpicker(object):
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):
+                ra = reachability_analysis(self.header, external_decls)
                 self._push_temporaries(levels[i-1], trace, global_trace, ra)
                 self._transform_temporaries(levels[i])
 
