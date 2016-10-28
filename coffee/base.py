@@ -894,6 +894,10 @@ class For(Statement):
         return (self.start, self.size, self.increment)
 
     @property
+    def block(self):
+        return self.children[0]
+
+    @property
     def body(self):
         return self.children[0].children
 
