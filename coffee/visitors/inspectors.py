@@ -195,9 +195,6 @@ class FindCoffeeExpressions(Visitor):
 
     """
 
-    def extract_linear_dimensions(self, symbol):
-        return tuple(i for i in symbol.rank if isinstance(i, str) and not i.isdigit())
-
     def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
@@ -216,8 +213,8 @@ class FindCoffeeExpressions(Visitor):
             if len(opts) < 3:
                 continue
             if opts[1] == "coffee" and opts[2] == "expression":
-                # (parent, loop-nest, rank)
-                ret[o] = (parent, None, self.extract_linear_dimensions(o.lvalue))
+                # (parent, loop-nest)
+                ret[o] = (parent, None)
                 return ret
         return ret
 
@@ -238,7 +235,7 @@ class FindCoffeeExpressions(Visitor):
         # Add nest structure to new items
         keys = ret.keys()[nval:]
         for k in keys:
-            p, nest, rank = ret[k]
+            p, nest = ret[k]
             if nest is None:
                 # Statement is directly underneath this loop, so the
                 # loop nest structure is just the current loop
@@ -247,7 +244,7 @@ class FindCoffeeExpressions(Visitor):
                 # Inside a nested set of loops, so prepend current
                 # loop info to nest structure
                 nest = [me] + nest
-            ret[k] = p, nest, rank
+            ret[k] = p, nest
         return ret
 
 
