@@ -286,6 +286,35 @@ class Hoister(object):
         reads = [s.symbol for s in reads[Symbol]]
         return set.isdisjoint(set(reads), set(written))
 
+    def _locate(self, dep, subexprs, mode):
+        # TODO add check that exprs can only live in innermost loops
+        # TODO add lookup method to Block ?
+        # TODO apply `in_written` to all loops in mapper ONCE, in `licm`,
+        #      and then update it as exprs are hoisted
+        # TODO replace od_find_next with a `next_loop` method in expr ?
+        outer = self.expr_info.outermost_loop
+        inner = self.expr_info.innermost_loop
+
+        loops = list(reversed(self.expr_info.loops))
+        candidates = [l.block for l in loops[1:]] + [self.header]
+
+        # Start assuming no real hoisting can take place -- subexprs only "moved"
+        # right before the main expression
+        place, offset = inner.block, self.stmt
+
+        # Then, determine how far in the loop nest can /subexprs/ be computed
+        for loop, candidate in zip(loops, candidates):
+            if not self._is_hoistable(subexprs, loop):
+                break
+            if loop.dim not in dep:
+                place, offset = candidate, loop
+
+        # Finally, determine how much extra memory and clone loops are needed
+        jumped = loops[:candidates.index(place)]
+        clone = tuple(l for l in reversed(jumped) if l.dim in dep)
+
+        return place, offset, clone
+
     def extract(self, mode, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
         lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
