@@ -138,23 +138,11 @@ class ASTKernel(object):
                         # of the expression
                         vect.specialize(*vectorize)
 
-            # First we check if our kernel function is templated
-            templated = False
-            for q in kernel.pred:
-                if q == 'template <typename Derived>':
-                    templated = True
-
             # Ensure kernel is always marked static inline
-            # Remove any instances of static, inline and template <typename Derived>
-            # (so that we get the order right)
-            kernel.pred = [q for q in kernel.pred
-                           if q not in ['static', 'inline', 'template <typename Derived>']]
+            # Remove either or both of static and inline (so that we get the order right)
+            kernel.pred = [q for q in kernel.pred if q not in ['static', 'inline']]
             kernel.pred.insert(0, 'inline')
             kernel.pred.insert(0, 'static')
-
-            # If templated, mark appropriately
-            if templated:
-                kernel.pred.insert(0, 'template <typename Derived>')
 
             # Post processing of the AST ensures higher-quality code
             postprocess(kernel)

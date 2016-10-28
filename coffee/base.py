@@ -969,25 +969,26 @@ class FunDecl(Statement):
 
     Syntax: ::
 
-        [pred] ret name ([args]) {body};
+        [template] [pred] ret name ([args]) {body};
 
     E.g.: ::
 
         static inline void foo(int a, int b) {return;};"""
 
-    def __init__(self, ret, name, args, body, pred=[], headers=None):
+    def __init__(self, ret, name, args, body, pred=[], headers=None, template=[]):
         super(FunDecl, self).__init__([enforce_block(body)])
         self.pred = pred
         self.ret = ret
         self.name = name
         self.args = args
         self.headers = headers or []
+        self.template = template
 
     def operands(self):
-        return [self.ret, self.name, self.args, self.children[0], self.pred, self.headers], {}
+        return [self.ret, self.name, self.args, self.children[0], self.pred, self.headers, self.template], {}
 
-    def reconstruct(self, ret, name, args, body, pred, headers, **kwargs):
-        return type(self)(ret, name, args, body, pred, headers, **kwargs)
+    def reconstruct(self, ret, name, args, body, pred, headers, template, **kwargs):
+        return type(self)(ret, name, args, body, pred, headers, template, **kwargs)
 
     @property
     def body(self):
@@ -1000,8 +1001,8 @@ class FunDecl(Statement):
     def gencode(self):
         headers = "" if not self.headers else \
                   "\n".join(["#include <%s>" % h for h in self.headers])
-        sign_list = self.pred + [self.ret, self.name,
-                                 wrap(", ".join([arg.gencode(True) for arg in self.args]))]
+        sign_list = self.template + self.pred + [self.ret, self.name,
+                                                 wrap(", ".join([arg.gencode(True) for arg in self.args]))]
         return headers + "\n" + " ".join(sign_list) + \
             "\n{\n%s\n}" % indent(self.children[0].gencode())
 
