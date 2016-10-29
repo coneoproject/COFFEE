@@ -111,8 +111,13 @@ class Temporary(object):
                       [l.size for l in self.loops if l is not self.main_loop], 1)
 
     @property
-    def project(self):
-        return len(self.linear_reads)//self.linearity_degree
+    def nmuls(self):
+        return len(self.linear_reads)
+
+    @property
+    def flops_projection(self):
+        # #muls + #sums
+        return (self.nmuls) + (self.nmuls - 1)
 
     @property
     def is_ssa(self):
@@ -260,11 +265,11 @@ class CSEUnpicker(object):
             if t.linearity_degree > 1:
                 ew.licm(mode='only_linear')
 
-    def _analyze_expr(self, expr, lda):
+    def _analyze_expr(self, expr, loop, lda):
         finder = FindInstances(Symbol)
         reads = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
         reads = [s for s in reads if s.symbol in self.decls]
-        syms = [s for s in reads if any(l in self.linear_dims for l in lda[s])]
+        syms = [s for s in reads if any(d in loop.dim for d in lda[s])]
 
         linear_reads_costs = OrderedDict()
 
@@ -294,7 +299,7 @@ class CSEUnpicker(object):
                 for t in not_ssa:
                     t.readby.append(t.symbol)
                 continue
-            reads, linear_reads_costs = self._analyze_expr(node.rvalue, lda)
+            reads, linear_reads_costs = self._analyze_expr(node.rvalue, loop, lda)
             for s in linear_reads_costs.keys():
                 if s.urepr in global_trace:
                     temporary = global_trace[s.urepr]
@@ -362,11 +367,10 @@ class CSEUnpicker(object):
                     if read.urepr in new_trace:
                         linear_reads.extend(new_trace[read.urepr].linear_reads or
                                             [read.urepr])
-                        t_outloop_cost += new_trace[read.urepr].project*cost
+                        t_outloop_cost += new_trace[read.urepr].nmuls*cost
                     else:
                         linear_reads.extend([read.urepr])
                 factors = {s.urepr if isinstance(s, Symbol) else s for s in linear_reads}
-                factors = {s for s in factors if t.main_loop.dim in s[1]}
 
                 # Factorization increases the number of sums in the outer loops
                 t_outloop_cost += len(linear_reads) - len(factors)
@@ -382,18 +386,22 @@ class CSEUnpicker(object):
                 # Update the trace because we want to track the cost after "pushing"
                 # the temporaries where /t/ depends on /t/ itself
                 new_trace[t.urepr].linear_reads_costs = {s: 1 for s in factors}
-                from IPython import embed; embed()
+                if level == 2:
+                    print (t.node, t_outloop_cost, t_outloop_cost*t.niters_after_licm, total_outloop_cost, t_inloop_cost)
+            #if level == 2:
+            #    from IPython import embed; embed()
+            # TODO: check costs of hoisted, factors, post_cse at level=2...
 
-            # Some temporaries at levels < /level/ may also appear in:
+            # Some temporaries at levels <= /level/ may also appear in:
             # 1) subsequent loops
             # 2) levels beyond /level/
-            for t in list(flatten([levels[j] for j in range(level)])):
+            for t in list(flatten([levels[j] for j in range(level + 1)])):
                 if any(rb.urepr not in new_trace for rb in t.readby) or \
                         any(new_trace[rb.urepr].level > level for rb in t.readby):
-                    # Note: condition 1) is basically saying "if I'm read from
+                    # Note: condition 1) is basically saying "if I'm read by
                     # a temporary that is not in this loop's trace, then I must
                     # be read in some other loops".
-                    level_inloop_cost += t.flops*t.niters
+                    level_inloop_cost += new_trace[t.urepr].flops_projection*t.niters
 
             post_cse_cost = self._cost_cse(fact_levels, (level + 1, bounds[1]))
 
@@ -447,12 +455,13 @@ class CSEUnpicker(object):
                     global_best = local_best
 
             log("-- Best: [%d, %d] (cost=%d) --" % global_best, COST_MODEL)
-            global_best = (-1, 6)
+            global_best = (-1, 2)
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):
                 self._push_temporaries(levels[i-1], trace, global_trace, ra)
                 self._transform_temporaries(levels[i])
+            from IPython import embed; embed()
 
         # Clean up
         for transformed_loop, nest in reversed(nests.items()):
