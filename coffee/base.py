@@ -969,20 +969,26 @@ class FunDecl(Statement):
 
     Syntax: ::
 
-        [template] [pred] ret name ([args]) {body};
+        [template]
+        [pred] ret name ([args]) {body};
 
-    E.g.: ::
+    E.g.(Not templated): ::
 
-        static inline void foo(int a, int b) {return;};"""
+        static inline void foo(int a, int b) {return;};
 
-    def __init__(self, ret, name, args, body, pred=[], headers=None, template=[]):
+    E.g.(Template C++ Function): ::
+
+        template <typename bar>
+        static inline void foo(BaseClass<bar>& a, BaseClass<bar>& b) {return};"""
+
+    def __init__(self, ret, name, args, body, pred=None, headers=None, template=None):
         super(FunDecl, self).__init__([enforce_block(body)])
-        self.pred = pred
+        self.pred = pred or []
         self.ret = ret
         self.name = name
         self.args = args
         self.headers = headers or []
-        self.template = template
+        self.template = template or ""
 
     def operands(self):
         return [self.ret, self.name, self.args, self.children[0], self.pred, self.headers, self.template], {}
@@ -1001,8 +1007,8 @@ class FunDecl(Statement):
     def gencode(self):
         headers = "" if not self.headers else \
                   "\n".join(["#include <%s>" % h for h in self.headers])
-        sign_list = self.template + self.pred + [self.ret, self.name,
-                                                 wrap(", ".join([arg.gencode(True) for arg in self.args]))]
+        sign_list = ["" if not self.template else (self.template + "\n")] + self.pred + \
+                    [self.ret, self.name, wrap(", ".join([arg.gencode(True) for arg in self.args]))]
         return headers + "\n" + " ".join(sign_list) + \
             "\n{\n%s\n}" % indent(self.children[0].gencode())
 
