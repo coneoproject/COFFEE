@@ -752,6 +752,15 @@ bind = lambda a, b: [(a, v) for v in b]
 od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
 
 
+def as_urepr(l):
+    convert = lambda i: i.urepr if isinstance(i, Symbol) else i
+    try:
+        converted = [convert(i) for i in l]
+    except TypeError:
+        converted = convert(l)
+    return tuple(converted)
+
+
 def is_const_dim(d):
     return isinstance(d, int) or (isinstance(d, str) and d.isdigit())
 
