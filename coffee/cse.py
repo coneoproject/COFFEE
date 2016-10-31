@@ -118,14 +118,19 @@ class Temporary(object):
     def is_static_init(self):
         return isinstance(self.expr, ArrayInit)
 
-    def niters(self, mode='main'):
-        assert mode in ['main', 'outer', 'outer_nonlinear']
-        if mode == 'main':
+    def niters(self, mode='all', handle=None):
+        assert mode in ['all', 'outer', 'nonlinear', 'in', 'out']
+        handle = handle or []
+        if mode == 'all':
             sizes = [l.size for l in self.loops]
         elif mode == 'outer':
             sizes = [l.size for l in self.loops if l is not self.main_loop]
-        else:
+        elif mode == 'nonlinear':
             sizes = [l.size for l in self.loops if not l.is_linear]
+        elif mode == 'in':
+            sizes = [l.size for l in self.loops if l.dim in handle] 
+        else:
+            sizes = [l.size for l in self.loops if l.dim not in handle] 
         return reduce(operator.mul, sizes, 1)
 
     def depends(self, others):
@@ -332,10 +337,10 @@ class CSEUnpicker(object):
             levels = {i: levels[i] for i in range(lb, up)}
         cost = 0
         for level, temporaries in levels.items():
-            cost += sum(t.flops*t.niters('main') for t in temporaries)
+            cost += sum(t.flops*t.niters('all') for t in temporaries)
         return cost
 
-    def _cost_fact(self, trace, levels, bounds):
+    def _cost_fact(self, trace, levels, lda, bounds):
         # Check parameters
         assert len(bounds) == 2 and bounds[1] >= bounds[0]
         assert bounds[0] in levels.keys() and bounds[1] in levels.keys()
@@ -363,43 +368,51 @@ class CSEUnpicker(object):
                 t_outloop_cost, linear_reads = 0, []
                 for read, cost in t.linear_reads_costs.items():
                     if read.urepr in new_trace:
-                        linear_reads.extend(new_trace[read.urepr].linear_reads or
-                                            [read.urepr])
-                        # One prod in the closest linear loop; the rest falls outside
+                        handle = new_trace[read.urepr].linear_reads or [read]
+                        handle = [as_urepr(i) for i in handle]
                         if cost:
-                            nmuls = new_trace[read.urepr].nmuls
-                            t_outloop_cost += nmuls*t.niters('outer')
-                            for i in range(1, cost):
-                                t_outloop_cost += nmuls*t.niters('outer_nonlinear')
+                            for r in handle:
+                                # One prod in the closest linear loop
+                                t_outloop_cost += t.niters('out', r[1] or lda[read])
+                                # The rest falls outside of the linear loops
+                                t_outloop_cost += (cost - 1)*t.niters('nonlinear')
                     else:
-                        linear_reads.extend([read.urepr])
-                factors = {s.urepr if isinstance(s, Symbol) else s for s in linear_reads}
+                        handle = [read.urepr]
+                    linear_reads.extend(handle)
+                    from IPython import embed; embed()
+                    # TODO : MUST FIX THAT TEMPORARIES IN LEVELS < BOUNDS[0] ARE
+                    # ACTUALLY NOT PUSHED, SO THEY SHOULD NOT BE CONSIDERED
+                    # FACTORS.
                 # Take into account the increased number of sums (due to fact)
+                factors = set(linear_reads)
                 t_outloop_cost += (len(linear_reads) - len(factors))*t.niters('outer')
                 total_outloop_cost += t_outloop_cost
 
                 # Compute the cost induced by /t/ in the main loop after fact+licm
                 # We end up creating n prods and n -1 sums
                 t_inloop_cost = 2*len(factors) - 1
-                level_inloop_cost += t_inloop_cost*t.niters('main')
+                level_inloop_cost += t_inloop_cost*t.niters('all')
 
-                # Update the trace because we want to track the cost after "pushing"
-                # the temporaries where /t/ depends on /t/ itself
+                # Keep the trace up-to-date
                 new_trace[t.urepr].linear_reads_costs = {s: 1 for s in factors}
-                #if level == 8:
+                #if level == 7:
                 #    print (t.node, t_outloop_cost, t_outloop_cost*t.niters('outer'), total_outloop_cost, t_inloop_cost)
+                #if t.name == 't1053':
+                #    from IPython import embed; embed()
+            #if bounds[0] == 5:
+            #    from IPython import embed; embed()
 
-            # Some temporaries at levels <= /level/ may also appear in:
-            # 1) subsequent loops
-            # 2) levels beyond /level/
-            for t in list(flatten([levels[j] for j in range(level + 1)])):
+            # Some temporaries within levels < /level/ might also appear in
+            # subsequent loops or levels beyond /level/, so they still contribute
+            # to the operation count
+            for t in list(flatten([levels[j] for j in range(level)])):
                 if any(rb.urepr not in new_trace for rb in t.readby) or \
                         any(new_trace[rb.urepr].level > level for rb in t.readby):
                     # Note: condition 1) is basically saying "if I'm read by
                     # a temporary that is not in this loop's trace, then I must
                     # be read in some other loops".
                     level_inloop_cost += \
-                        new_trace[t.urepr].flops_projection*t.niters('main')
+                        new_trace[t.urepr].flops_projection*t.niters('all')
 
             post_cse_cost = self._cost_cse(fact_levels, (level + 1, bounds[1]))
 
@@ -447,12 +460,14 @@ class CSEUnpicker(object):
             min_level, max_level = min(levels.keys()), max(levels.keys())
             current_cost = self._cost_cse(levels, (min_level, max_level))
             global_best = (min_level, min_level, current_cost)
-            for i in sorted(levels.keys()):
-                local_best = self._cost_fact(trace, levels, (i, max_level))
+            #for i in sorted(levels.keys()):
+            for i in sorted([5]):
+                local_best = self._cost_fact(trace, levels, lda, (i, max_level))
                 if local_best[2] < global_best[2]:
                     global_best = local_best
 
             log("-- Best: [%d, %d] (cost=%d) --" % global_best, COST_MODEL)
+            global_best = (5, 7)
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):
