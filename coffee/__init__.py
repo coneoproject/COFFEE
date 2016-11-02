@@ -169,8 +169,6 @@ O0 = OptimizationLevel('O0')
 O1 = OptimizationLevel('O1', rewrite=1)
 O2 = OptimizationLevel('O2', rewrite=2, dead_ops_elimination=True)
 O3 = OptimizationLevel('O3', align_pad=True, **O2)
-Ofast = OptimizationLevel('Ofast', vectorize=(VectStrategy.SPEC_UAJ_PADD, 2),
-                          precompute='noloops', **O3)
 
 initialized = False
 
