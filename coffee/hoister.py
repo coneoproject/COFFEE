@@ -233,10 +233,8 @@ class AggressiveExtractor(Extractor):
 
 class Hoister(object):
 
-    # How many times the hoister was invoked
-    _handled = 0
     # Temporary variables template
-    _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
+    _template = "ct%d"
 
     def __init__(self, stmt, expr_info, header, decls, hoisted):
         """Initialize the Hoister."""
@@ -245,11 +243,6 @@ class Hoister(object):
         self.header = header
         self.decls = decls
         self.hoisted = hoisted
-
-        # Increment counters for unique variable names
-        self.nextracted = 0
-        self.expr_id = Hoister._handled
-        Hoister._handled += 1
 
     def _filter(self, dep, subexprs, make_unique=True, sharing=None):
         """Filter hoistable subexpressions."""
@@ -355,7 +348,7 @@ class Hoister(object):
 
                 # 3) Create the required new AST nodes
                 symbols, decls, stmts = [], [], []
-                for i, e in enumerate(subexprs):
+                for e in subexprs:
                     already_hoisted = False
                     if global_cse and self.hoisted.get_symbol(e):
                         name = self.hoisted.get_symbol(e)
@@ -364,12 +357,7 @@ class Hoister(object):
                                 place.children.index(decl) < place.children.index(offset):
                             already_hoisted = True
                     if not already_hoisted:
-                        name = self._hoisted_sym % {
-                            'loop_dep': '_'.join(dep) if dep else 'c',
-                            'expr_id': self.expr_id,
-                            'round': self.nextracted,
-                            'i': i
-                        }
+                        name = self._template % (len(self.hoisted) + len(stmts))
                         stmts.append(Assign(Symbol(name, loop_dim), dcopy(e)))
                         decl = Decl(self.expr_info.type, Symbol(name, loop_size),
                                     scope=LOCAL)
@@ -402,7 +390,6 @@ class Hoister(object):
                 for i, j in zip(stmts, decls):
                     self.hoisted[j.sym.symbol] = (i, j, clone, place)
 
-            self.nextracted += 1
             if not iterative:
                 break
 

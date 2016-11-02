@@ -505,8 +505,3 @@ class ExpressionRewriter(object):
             self.licm()
 
         return self
-
-    @staticmethod
-    def reset():
-        Hoister._handled = 0
-        Expander._handled = 0

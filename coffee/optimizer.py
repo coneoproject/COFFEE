@@ -86,8 +86,6 @@ class LoopOptimizer(object):
                 that fully depend on reduction loops.
             * mode == 4: rewrite an expression based on its sharing graph
         """
-        ExpressionRewriter.reset()
-
         # Set a rewrite mode for each expression
         for stmt, expr_info in self.exprs.items():
             expr_info.mode = mode
