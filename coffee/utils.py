@@ -769,14 +769,10 @@ def uniquify(exprs):
     return OrderedDict([(e.urepr, e) for e in exprs]).values()
 
 
-def preprocess(node, fors=None):
-    """Preprocess node to make sure it's in a state suitable for optimization."""
+def remove_empty_loops(node):
+    """Remove all empty loops within node."""
 
-    if fors is None:
-        fors = visit(node, info_items=['fors'])['fors']
-
-    # Remove any empty loops
-    for nest in fors:
+    for nest in visit(node, info_items=['fors'])['fors']:
         to_remove = (None, None)
         for loop, parent in reversed(nest):
             if not loop.body or all(i == to_remove[0] for i in loop.body):

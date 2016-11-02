@@ -67,27 +67,20 @@ class SSALoopMerger(LoopScheduler):
         self.merged_loops = []
 
     def _merge_loops(self, root, loop_a, loop_b):
-        """Merge the body of ``loop_a`` in ``loop_b`` and eliminate ``loop_a``
-        from the tree rooted in ``root``. Return a reference to the block
-        containing the merged loop as well as the iteration variables used
-        in the respective iteration spaces."""
-        # Find the first statement in the perfect loop nest loop_b
-        dims_a, dims_b = [], []
-        while isinstance(loop_b.children[0], (Block, For)):
-            if isinstance(loop_b, For):
-                dims_b.append(loop_b.dim)
-            loop_b = loop_b.children[0]
-        # Find the first statement in the perfect loop nest loop_a
-        root_loop_a = loop_a
-        while isinstance(loop_a.children[0], (Block, For)):
-            if isinstance(loop_a, For):
-                dims_a.append(loop_a.dim)
-            loop_a = loop_a.children[0]
-        # Merge body of loop_a in loop_b
-        loop_b.children[0:0] = loop_a.children
-        # Remove loop_a from root
-        root.children.remove(root_loop_a)
-        return (loop_b, tuple(dims_a), tuple(dims_b))
+        """Merge the body of ``loop_a`` into ``loop_b``."""
+        root.children.remove(loop_a)
+
+        dims_a, dims_b = [loop_a.dim], [loop_b.dim]
+        while isinstance(loop_b.body[0], For):
+            dims_b.append(loop_b.dim)
+            loop_b = loop_b.body[0]
+        while isinstance(loop_a.body[0], For):
+            dims_a.append(loop_a.dim)
+            loop_a = loop_a.body[0]
+
+        loop_b.body = loop_a.body + loop_b.body
+
+        ast_update_rank(loop_b, dict(zip(dims_a, dims_b)))
 
     def _simplify(self, merged_loops):
         """Scan the list of merged loops and eliminate sub-expressions that became
@@ -118,8 +111,12 @@ class SSALoopMerger(LoopScheduler):
 
     def merge(self, root):
         """Merge perfect loop nests in ``root``."""
-        found_nests = OrderedDict()
+
+        # Make sure there are no empty loops within root, otherwise kill them
+        remove_empty_loops(root)
+
         # Collect iteration spaces visiting the tree rooted in /root/
+        found_nests = OrderedDict()
         for n in root.children:
             if isinstance(n, For):
                 retval = FindLoopNests.default_retval()
@@ -180,8 +177,7 @@ class SSALoopMerger(LoopScheduler):
 
             # If there is at least one mergeable loops, do the merging
             for l in reversed(mergeable):
-                merged, l_dims, m_dims = self._merge_loops(parent, l, merging_in)
-                ast_update_rank(merged, dict(zip(l_dims, m_dims)))
+                self._merge_loops(parent, l, merging_in)
             # Update the lists of merged loops
             all_merged.append((mergeable, merging_in))
             merged_loops.append(merging_in)
