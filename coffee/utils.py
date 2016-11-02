@@ -119,24 +119,15 @@ def ast_update_rank(node, mapper):
     ``rank``.
 
     :arg node: Root AST node
-    :arg mapper: Describe how to change the rank of a symbol.
-    :type mapper: a dictionary. Keys can either be Symbols -- in which case
-        values are interpreted as dimensions to be added to the rank -- or
-        actual ranks (strings, integers) -- which means rank dimensions are
-        replaced; for example, if mapper={'i': 'j'} and node='A[i] = B[i]',
-        node will be transformed into 'A[j] = B[j]'
+    :arg mapper: Describe how to change the rank of a symbol. For example,
+        if mapper={'i': 'j'} and node='A[i] = B[i]', then node will be
+        transformed into 'A[j] = B[j]'
     """
 
-    symbols = FindInstances(Symbol).visit(node, ret=FindInstances.default_retval())[Symbol]
-    for s in symbols:
-        if mapper.get(s.symbol):
-            # Add a dimension
-            s.rank = mapper[s.symbol] + s.rank
-        else:
-            # Try to replace dimensions
-            s.rank = tuple([r if r not in mapper else mapper[r] for r in s.rank])
-
-    return node
+    retval = FindInstances.default_retval()
+    FindInstances(Symbol).visit(node, ret=retval)
+    for s in retval[Symbol]:
+        s.rank = tuple([r if r not in mapper else mapper[r] for r in s.rank])
 
 
 def ast_update_id(symbol, name, id):
