@@ -295,8 +295,9 @@ class CSEUnpicker(object):
         return reads, linear_reads_costs
 
     def _analyze_loop(self, loop, nest, lda, global_trace):
-        trace = OrderedDict()
+        linear_dims = [l.dim for l, _ in nest if l.is_linear]
 
+        trace = OrderedDict()
         for node in loop.body:
             if not isinstance(node, Writer):
                 not_ssa = [trace[w] for w in in_written(node, key='urepr') if w in trace]
@@ -304,7 +305,8 @@ class CSEUnpicker(object):
                     t.readby.append(t.symbol)
                 continue
             reads, linear_reads_costs = self._analyze_expr(node.rvalue, loop, lda)
-            for s in linear_reads_costs.keys():
+            affected = [s for s in reads if any(i in linear_dims for i in lda[s])]
+            for s in affected:
                 if s.urepr in global_trace:
                     temporary = global_trace[s.urepr]
                     temporary.readby.append(node.lvalue)
