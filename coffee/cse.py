@@ -217,13 +217,14 @@ class CSEUnpicker(object):
                                                            global_trace[rb.urepr])
             # The temporary is going to be pushed, so we can remove it as long as
             # it is not needed somewhere else
-            if t.node in t.main_loop.body and all(rb.urepr in trace for rb in t.readby):
+            if t.node in t.main_loop.body and\
+                    all(rb.urepr in global_trace for rb in t.readby):
                 global_trace[t.urepr].pushed = True
                 t.main_loop.body.remove(t.node)
                 self.decls.pop(t.name, None)
 
-        # Transform the AST (note: node replacement must happend in the order
-        # in which temporaries have been encountered)
+        # Transform the AST (note: node replacement must happen in the order
+        # in which the temporaries have been encountered)
         modified_temporaries = sorted(modified_temporaries.values(),
                                       key=lambda t: global_trace.keys().index(t.urepr))
         for t in modified_temporaries:
