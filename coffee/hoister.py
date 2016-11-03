@@ -238,14 +238,13 @@ class Hoister(object):
     # Temporary variables template
     _hoisted_sym = "%(loop_dep)s_%(expr_id)d_%(round)d_%(i)d"
 
-    def __init__(self, stmt, expr_info, header, decls, hoisted, expr_graph):
+    def __init__(self, stmt, expr_info, header, decls, hoisted):
         """Initialize the Hoister."""
         self.stmt = stmt
         self.expr_info = expr_info
         self.header = header
         self.decls = decls
         self.hoisted = hoisted
-        self.expr_graph = expr_graph
 
         # Increment counters for unique variable names
         self.nextracted = 0
@@ -404,9 +403,6 @@ class Hoister(object):
 
                 # 5) Update data dependencies
                 for s, e in zip(symbols, subexprs):
-                    self.expr_graph.add_dependency(s, e)
-                    if n_replaced[str(s)] > 1:
-                        self.expr_graph.add_dependency(s, s)
                     lda[s] = dep
 
                 # 6) Modify the AST adding the hoisted expressions

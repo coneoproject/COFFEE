@@ -67,8 +67,6 @@ class LoopOptimizer(object):
 
         # Track nonzero regions accessed in each symbol
         self.nz_syms = {}
-        # Track data dependencies
-        self.expr_graph = ExpressionGraph(header)
         # Track hoisted expressions
         self.hoisted = StmtTracker()
 
@@ -109,7 +107,7 @@ class LoopOptimizer(object):
         # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
-                                    self.hoisted, self.expr_graph)
+                                    self.hoisted)
 
             if expr_info.mode == 1:
                 if expr_info.dimension in [0, 1]:
@@ -142,7 +140,7 @@ class LoopOptimizer(object):
                     ew.expand()
 
         # Try merging the loops created by expression rewriting
-        merged_loops = SSALoopMerger(self.expr_graph).merge(self.header)
+        merged_loops = SSALoopMerger().merge(self.header)
         # Update the trackers
         for merged, merged_in in merged_loops:
             for l in merged:
@@ -156,7 +154,6 @@ class LoopOptimizer(object):
 
         # Reduce memory pressure by avoiding useless temporaries
         self._min_temporaries()
-        self.expr_graph = ExpressionGraph(self.header)
 
         # Handle the effects, at the C-level, of the AST transformation
         self._recoil()
@@ -166,15 +163,14 @@ class LoopOptimizer(object):
         avoid evaluation of arithmetic operations involving zero-valued blocks
         in statically initialized arrays."""
 
-        zls = ZeroRemover(self.exprs, self.decls, self.hoisted, self.expr_graph)
+        zls = ZeroRemover(self.exprs, self.decls, self.hoisted)
         self.nz_syms = zls.reschedule(self.header)
 
     def _unpick_cse(self):
         """Search for factorization opportunities across temporaries created by
         common sub-expression elimination. If a gain in operation count is detected,
         unpick CSE and apply factorization + code motion."""
-        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted,
-                                   self.decls, self.expr_graph)
+        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted, self.decls)
         cse_unpicker.unpick()
 
     def _min_temporaries(self):
@@ -260,6 +256,8 @@ class LoopOptimizer(object):
         # be greated than this value. If we predict that injection will lead
         # to too much temporary space, we have to partially drop it
         threshold = system.architecture['cache_size'] * 1.2
+
+        expr_graph = ExpressionGraph(header)
 
         # 1) Find out and unroll injectable loops. For unrolling we create new
         # expressions; that is, for now, we do not modify the AST in place.
@@ -359,7 +357,7 @@ class LoopOptimizer(object):
                     increase_factor = 0
                     for i in projection:
                         partial = 1
-                        for j in self.expr_graph.shares(i):
+                        for j in expr_graph.shares(i):
                             # _n=number of unique elements, _k=group size
                             _n = injectable[j[0]][1]
                             _k = len(j)

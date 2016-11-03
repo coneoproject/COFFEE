@@ -76,7 +76,6 @@ class LoopVectorizer(object):
         self.loop = loop_opt.loop
         self.decls = loop_opt.decls
         self.exprs = loop_opt.exprs
-        self.expr_graph = loop_opt.expr_graph
         self.nz_syms = loop_opt.nz_syms
 
     def autovectorize(self, p_dim=-1):
