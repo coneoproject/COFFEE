@@ -440,7 +440,7 @@ class ExpressionRewriter(object):
             self.header.children.remove(hoisted_loop)
         return self
 
-    def SGrewrite(self):
+    def sharing_graph_rewrite(self):
         """Rewrite the expression based on its sharing graph. Details in the
         paper:
 
@@ -502,6 +502,9 @@ class ExpressionRewriter(object):
             other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
             for n in nodes + other_nodes:
                 self.factorize(mode='adhoc', adhoc={n: []})
-            self.licm()
+            self.licm('only_outlinear').licm()
+        else:
+            self.factorize(mode='adhoc', adhoc={n: [] for n in nodes})
+            self.licm('only_outlinear').licm()
 
         return self

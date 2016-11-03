@@ -116,7 +116,7 @@ class LoopOptimizer(object):
             elif expr_info.mode == 2:
                 if expr_info.dimension > 0:
                     ew.replacediv()
-                    ew.SGrewrite()
+                    ew.sharing_graph_rewrite()
 
             elif expr_info.mode == 3:
                 ew.expand(mode='all')
@@ -134,7 +134,7 @@ class LoopOptimizer(object):
                 ew.licm(mode='only_outlinear')
                 if expr_info.dimension > 0:
                     ew.licm(mode='only_linear', iterative=False, max_sharing=True)
-                    ew.SGrewrite()
+                    ew.sharing_graph_rewrite()
                     ew.expand()
 
         # Try merging the loops created by expression rewriting
