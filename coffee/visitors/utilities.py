@@ -13,7 +13,7 @@ import coffee.utils
 
 
 __all__ = ["ReplaceSymbols", "CheckUniqueness", "Uniquify", "Evaluate",
-           "EstimateFlops", "ProjectExpansion", "SharingGraph"]
+           "EstimateFlops", "ProjectExpansion"]
 
 
 class ReplaceSymbols(Visitor):
@@ -373,106 +373,3 @@ class EstimateFlops(Visitor):
 
     def visit_Determinant3x3(self, o, *args, **kwargs):
         return 14
-
-
-class SharingGraph(Visitor):
-
-    @classmethod
-    def default_retval(cls):
-        return (nx.Graph(), OrderedDict())
-
-    """
-    A sharing graph is a particular graph in which vertices represent symbols
-    iterating along the expression's linear loops, while an edge between /v1/
-    and /v2/ indicates that both /v1/ and /v2/ appear in the same sub-expression,
-    or would appear in the same sub-expression if expansion were performed.
-
-    Simultaneously, build a mapper from symbols to nodes in the expression.
-    A symbol /s/ (a vertex in the sharing graph) is mapped to a list of nodes
-    /[n]/, with /n/ in /[n]/ being the root of a Sum in which /s/ appears in
-    both children (i.e., the Sum induces sharing).
-
-    :arg expr_info: A :class:`~.MetaExpr` object describing the expression for
-        which the sharing graph is built.
-    """
-
-    def __init__(self, expr_info, lda):
-        self.expr_info = expr_info
-        self.lda = lda
-        super(SharingGraph, self).__init__()
-
-    def _update_mapper(self, mapper, loc_syms, pointer=None):
-        if pointer:
-            old_pointer = None
-            for s in set.intersection(*loc_syms):
-                v = mapper.setdefault(s, [None])
-                old_pointer = v[-1]
-                v[-1] = pointer
-            for s in set.union(*loc_syms):
-                if s in mapper and mapper[s][-1] == old_pointer:
-                    mapper[s][-1] = pointer
-        else:
-            for s in set.union(*loc_syms):
-                if s in mapper:
-                    mapper[s].append(None)
-
-    def visit_object(self, o, ret=None, *args, **kwargs):
-        return self.default_retval()
-
-    def visit_Node(self, o, ret=None, parent=None, *args, **kwargs):
-        ops, _ = o.operands()
-        for op in ops:
-            ret = self.visit(op, ret=ret, parent=o, *args, **kwargs)
-        return ret
-
-    def visit_Prod(self, o, ret=None, syms=None, parent=None, *args, **kwargs):
-        if ret is None:
-            ret = self.default_retval()
-        if syms is None:
-            syms = set()
-        G, mapper = ret
-        ops, _ = o.operands()
-        loc_syms = [set() for i in ops]
-        for i, op in enumerate(ops):
-            ret = self.visit(op, ret=ret, syms=loc_syms[i], parent=o)
-        if all(i for i in loc_syms):
-            self._update_mapper(mapper, loc_syms)
-            loc_syms = itertools.product(*loc_syms)
-            loc_syms = [tuple(coffee.utils.flatten(i)) for i in loc_syms]
-            syms |= set(loc_syms)
-            G.add_edges_from(loc_syms)
-        else:
-            for i in loc_syms:
-                syms |= i
-        return ret
-
-    def visit_Sum(self, o, ret=None, syms=None, parent=None, *args, **kwargs):
-        if ret is None:
-            ret = self.default_retval()
-        if syms is None:
-            syms = set()
-        pointer = (o, parent)
-        _, mapper = ret
-        ops, _ = o.operands()
-        loc_syms = [set() for i in ops]
-        for i, op in enumerate(ops):
-            ret = self.visit(op, ret=ret, syms=loc_syms[i], parent=o)
-            syms |= loc_syms[i]
-        self._update_mapper(mapper, loc_syms, pointer)
-        mapper['topsum'] = pointer
-        return ret
-
-    visit_Sub = visit_Sum
-
-    def visit_Symbol(self, o, ret=None, syms=None, *args, **kwargs):
-        if ret is None:
-            ret = self.default_retval()
-        G, _ = ret
-        deps = [d for d in self.lda[o.symbol]]
-        if syms is not None and any(i in self.expr_info.linear_dims for i in deps):
-            syms.add((o.urepr,))
-            try:
-                G.node[o.urepr]['occs'] += 1
-            except:
-                G.add_node(o.urepr, occs=1)
-        return ret
