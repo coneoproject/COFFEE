@@ -50,12 +50,11 @@ class Expander(object):
     GROUP = 0  # Expression /will/ not trigger expansion
     EXPAND = 1  # Expression /could/ be expanded
 
-    def __init__(self, stmt, expr_info=None, decls=None, hoisted=None, expr_graph=None):
+    def __init__(self, stmt, expr_info=None, decls=None, hoisted=None):
         self.stmt = stmt
         self.expr_info = expr_info
         self.decls = decls
         self.hoisted = hoisted
-        self.expr_graph = expr_graph
 
         self.local_decls = {}
 

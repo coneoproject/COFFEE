@@ -53,7 +53,7 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt, expr_info, decls, header=None, hoisted=None, expr_graph=None):
+    def __init__(self, stmt, expr_info, decls, header=None, hoisted=None):
         """Initialize the ExpressionRewriter.
 
         :param stmt: the node whose rvalue is the expression for rewriting
@@ -61,19 +61,17 @@ class ExpressionRewriter(object):
         :param decls: all declarations for the symbols in ``stmt``.
         :param header: the kernel's top node
         :param hoisted: dictionary that tracks all hoisted expressions
-        :param expr_graph: a graph for data dependence analysis
         """
         self.stmt = stmt
         self.expr_info = expr_info
         self.decls = decls
         self.header = header or Root()
         self.hoisted = hoisted if hoisted is not None else StmtTracker()
-        self.expr_graph = expr_graph or ExpressionGraph(self.header)
 
         self.expr_hoister = Hoister(self.stmt, self.expr_info, self.header,
-                                    self.decls, self.hoisted, self.expr_graph)
+                                    self.decls, self.hoisted)
         self.expr_expander = Expander(self.stmt, self.expr_info, self.decls,
-                                      self.hoisted, self.expr_graph)
+                                      self.hoisted)
         self.expr_factorizer = Factorizer(self.stmt)
 
     def licm(self, mode='normal', **kwargs):

@@ -57,15 +57,6 @@ class SSALoopMerger(LoopScheduler):
     Statements must be in "soft" SSA form: they can be declared and initialized
     at declaration time, then they can be assigned a value in only one place."""
 
-    def __init__(self, expr_graph):
-        """Initialize the SSALoopMerger.
-
-        :param expr_graph: the ExpressionGraph tracking all data dependencies
-            involving identifiers that appear in ``header``.
-        """
-        self.expr_graph = expr_graph
-        self.merged_loops = []
-
     def _merge_loops(self, root, loop_a, loop_b):
         """Merge the body of ``loop_a`` into ``loop_b``."""
         root.children.remove(loop_a)
@@ -116,6 +107,8 @@ class SSALoopMerger(LoopScheduler):
         # Make sure there are no empty loops within root, otherwise kill them
         remove_empty_loops(root)
 
+        expr_graph = ExpressionGraph(root)
+
         # Collect iteration spaces visiting the tree rooted in /root/
         found_nests = OrderedDict()
         for n in root.children:
@@ -162,7 +155,7 @@ class SSALoopMerger(LoopScheduler):
                     in_writes = SymbolModes().visit(n, ret=SymbolModes.default_retval())
                     in_writes = [s for s, m in in_writes.items()]
                     for iw, lw in product(in_writes, l_writes):
-                        if self.expr_graph.is_written(iw, lw):
+                        if expr_graph.is_written(iw, lw):
                             is_mergeable = False
                             break
 
@@ -484,18 +477,16 @@ class ZeroRemover(LoopScheduler):
 
     THRESHOLD = 1  # Only skip if there more than THRESHOLD consecutive zeros
 
-    def __init__(self, exprs, decls, hoisted, expr_graph):
+    def __init__(self, exprs, decls, hoisted):
         """Initialize the ZeroRemover.
 
         :param exprs: the expressions for which zero removal is performed.
         :param decls: lists of declarations visible to ``exprs``.
         :param hoisted: dictionary that tracks hoisted sub-expressions
-        :param expr_graph: expression graph that tracks symbol dependencies
         """
         self.exprs = exprs
         self.decls = decls
         self.hoisted = hoisted
-        self.expr_graph = expr_graph
 
     def _track_nz_expr(self, node, nz_syms, nest):
         """For the expression rooted in ``node``, return iteration space and
@@ -795,8 +786,7 @@ class ZeroRemover(LoopScheduler):
 
         for stmt, expr_info in new_exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls,
-                                    expr_info.outermost_parent,
-                                    self.hoisted, self.expr_graph)
+                                    expr_info.outermost_parent, self.hoisted)
             ew.factorize('heuristic')
 
         if new_exprs:

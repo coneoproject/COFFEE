@@ -185,12 +185,11 @@ class CSEUnpicker(object):
     symbols (further information concerning loop linearity is available in the module
     ``expression.py``)."""
 
-    def __init__(self, exprs, header, hoisted, decls, expr_graph):
+    def __init__(self, exprs, header, hoisted, decls):
         self.exprs = exprs
         self.header = header
         self.hoisted = hoisted
         self.decls = decls
-        self.expr_graph = expr_graph
 
     @property
     def type(self):
@@ -276,7 +275,7 @@ class CSEUnpicker(object):
         for t in temporaries:
             expr_info = MetaExpr(self.type, t.main_loop.block, t.main_nest)
             ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
-                                    self.hoisted, self.expr_graph)
+                                    self.hoisted)
             ew.replacediv()
             ew.expand(mode='all', lda=lda)
             ew.reassociate(lambda i: all(r != t.main_loop.dim for r in lda[i.symbol]))
