@@ -118,16 +118,18 @@ class Temporary(object):
     def niters(self, mode='all', handle=None):
         assert mode in ['all', 'outer', 'nonlinear', 'in', 'out']
         handle = handle or []
+        limit = self.loops.index(self.main_loop)
+        loops = self.loops[:limit + 1]
         if mode == 'all':
-            sizes = [l.size for l in self.loops]
+            sizes = [l.size for l in loops]
         elif mode == 'outer':
-            sizes = [l.size for l in self.loops if l is not self.main_loop]
+            sizes = [l.size for l in loops if l is not self.main_loop]
         elif mode == 'nonlinear':
-            sizes = [l.size for l in self.loops if not l.is_linear]
+            sizes = [l.size for l in loops if not l.is_linear]
         elif mode == 'in':
-            sizes = [l.size for l in self.loops if l.dim in handle] 
+            sizes = [l.size for l in loops if l.dim in handle]
         else:
-            sizes = [l.size for l in self.loops if l.dim not in handle] 
+            sizes = [l.size for l in loops if l.dim not in handle]
         return reduce(operator.mul, sizes, 1)
 
     def depends(self, others):
@@ -258,8 +260,6 @@ class CSEUnpicker(object):
             ew.expand(mode='all', lda=lda)
             ew.reassociate(lambda i: all(r != t.main_loop.dim for r in lda[i.symbol]))
             ew.factorize(mode='adhoc', adhoc={i.urepr: [] for i in t.linear_reads}, lda=lda)
-#            if t.name == 't871':
-#                from IPython import embed; embed()
             rewriters[t] = ew
 
         lda = loops_analysis(self.header, value='dim')
