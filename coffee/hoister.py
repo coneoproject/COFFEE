@@ -44,7 +44,7 @@ class Extractor(object):
 
     @staticmethod
     def factory(mode, stmt, expr_info):
-        if mode == 'normal':
+        if mode in ['normal', 'with_promotion']:
             should_extract = lambda d: d != set(expr_info.dims)
             return MainExtractor(stmt, expr_info, should_extract)
         elif mode == 'only_const':
@@ -285,34 +285,32 @@ class Hoister(object):
     def _locate(self, dep, subexprs, mode):
         # TODO apply `in_written` to all loops in mapper ONCE, in `licm`,
         #      and then update it as exprs are hoisted
-        outer = self.expr_info.outermost_loop
-        inner = self.expr_info.innermost_loop
 
         # Start assuming no "real" hoisting can take place
         # E.g.: for i {a[i]*(t1 + t2);} --> for i {t3 = t1 + t2; a[i]*t3;}
-        place, offset = inner.block, self.stmt
+        place, offset = self.expr_info.innermost_loop.block, self.stmt
 
-        if mode != 'aggressive':
+        if mode in ['aggressive', 'with_promotion']:
+            # Hoist outside a loop even though this doesn't result in any
+            # operation count reduction
+            should_jump = lambda l: True
+        else:
             # "Standard" code motion case, i.e. moving /subexprs/ as far as
             # possible in the loop nest such that dependencies are honored
-            loops = list(reversed(self.expr_info.loops))
-            candidates = [l.block for l in loops[1:]] + [self.header]
+            should_jump = lambda l: l.dim not in dep
 
-            for loop, candidate in zip(loops, candidates):
-                if not self._is_hoistable(subexprs, loop):
-                    break
-                if loop.dim not in dep:
-                    place, offset = candidate, loop
+        loops = list(reversed(self.expr_info.loops))
+        candidates = [l.block for l in loops[1:]] + [self.header]
 
-            # Determine how much extra memory and whether clone loops are needed
-            jumped = loops[:candidates.index(place)]
-            clone = tuple(l for l in reversed(jumped) if l.dim in dep)
-        else:
-            # Hoist outside of the loop nest, even though this doesn't
-            # result in any operation count reduction
-            if all(self._is_hoistable(subexpr, outer)):
-                place, offset = self.header, outer
-                clone = tuple(self.expr_info.loops)
+        for loop, candidate in zip(loops, candidates):
+            if not self._is_hoistable(subexprs, loop):
+                break
+            if should_jump(loop):
+                place, offset = candidate, loop
+
+        # Determine how much extra memory and whether clone loops are needed
+        jumped = loops[:candidates.index(place) + 1]
+        clone = tuple(l for l in reversed(jumped) if l.dim in dep)
 
         return place, offset, clone
 
@@ -397,3 +395,84 @@ class Hoister(object):
 
         # Finally, make sure symbols are unique in the AST
         self.stmt.rvalue = dcopy(self.stmt.rvalue)
+
+    def trim(self, candidate, **kwargs):
+        """
+        Remove unnecessary reduction loops from the expression loop nest.
+        Sometimes, reduction loops can be factored out in outer loops, thus
+        reducing the operation count, without breaking data dependencies.
+        """
+        # Rule out unsafe cases
+        if not is_perfect_loop(self.expr_info.innermost_loop):
+            return
+
+        # Find out all reducible symbols
+        lda = kwargs.get('lda', loops_analysis(self.header))
+        reducible, other = [], []
+        for i in summands(self.stmt.rvalue):
+            symbols = FindInstances(Symbol).visit(i)[Symbol]
+            unavoidable = set.intersection(*[set(lda[s]) for s in symbols])
+            if candidate in unavoidable:
+                return
+            reducible.extend([s.symbol for s in symbols if candidate in lda[s]])
+            other.extend([s.symbol for s in symbols if candidate not in lda[s]])
+
+        # Make sure we do not break data dependencies
+        make_reduce = []
+        writes = FindInstances(Writer).visit(candidate)
+        for w in flatten(writes.values()):
+            if isinstance(w.rvalue, EmptyStatement):
+                continue
+            if any(s == w.lvalue.symbol for s in other):
+                return
+            if any(s == w.lvalue.symbol for s in reducible):
+                loop = lda[w.lvalue][-1]
+                make_reduce.append((w, loop))
+
+        assignments = [(w, p) for w, p in make_reduce if isinstance(w, Assign)]
+        loops, parents = zip(*self.expr_info.loops_info)
+        index = loops.index(candidate)
+
+        # Perform a number of checks to ensure lifting reductions is safe
+        if not all(s in [w.lvalue.symbol for w, _ in make_reduce] for s in reducible):
+            return
+        if any(p != candidate and not is_perfect_loop(p) for w, p in make_reduce):
+            return
+        if any(candidate.dim in w.lvalue.rank for w, _ in assignments):
+            return
+        if any(set(loops[index + 1:]) & set(lda[w.lvalue]) for w, _ in make_reduce):
+            return
+
+        # Inject the reductions into the AST
+        for w, p in make_reduce:
+            name = self._template % len(self.hoisted)
+            reduction = Incr(Symbol(name, w.lvalue.rank, w.lvalue.offset),
+                             ast_reconstruct(w.rvalue))
+            insert_at_elem(p.body, w, reduction)
+            handle = self.decls[w.lvalue.symbol]
+            declaration = Decl(handle.typ, Symbol(name, handle.lvalue.rank),
+                               ArrayInit(np.array([0.0])), handle.qual, handle.attr)
+            insert_at_elem(parents[index].children, candidate, declaration)
+            ast_replace(self.stmt, {w.lvalue: reduction.lvalue}, copy=True)
+            self.hoisted[name] = (reduction, declaration, p, p.body)
+
+        # Pull out the candidate reduction loop
+        pulling = loops[index + 1:]
+        pulling = zip(*[((l.start, l.end), l.dim) for l in pulling])
+        pulling = ItSpace().to_for(*pulling, stmts=[self.stmt])
+        parents[index].children.append(pulling[0])
+        if len(self.expr_info.parent.children) == 1:
+            loops[index].body.remove(loops[index + 1])
+        else:
+            self.expr_info.parent.children.remove(self.stmt)
+
+        # Clean up removing any now unnecessary symbols
+        reads = in_read(candidate, key='symbol')
+        declarations = FindInstances(Decl, with_parent=True).visit(self.header)[Decl]
+        declarations = dict(declarations)
+        for w, p in make_reduce:
+            if w.lvalue.symbol not in reads:
+                p.body.remove(w)
+                if not isinstance(w, Decl):
+                    key = self.decls.pop(w.lvalue.symbol)
+                    declarations[key].children.remove(key)

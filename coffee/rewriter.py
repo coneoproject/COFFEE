@@ -82,13 +82,18 @@ class ExpressionRewriter(object):
             http://dl.acm.org/citation.cfm?id=2687415
 
         :param mode: drive code motion by specifying what subexpressions should
-            be hoisted
+            be hoisted and where.
             * normal: (default) all subexpressions that depend on one loop at most
+            * with_promotion: as normal, but try to compute hoistable subexpressions
+                in clone (innermost) loops, possibly at the expense of extra memory.
             * aggressive: all subexpressions, depending on any number of loops.
                 This may require introducing N-dimensional temporaries.
             * only_const: only all constant subexpressions
             * only_linear: only all subexpressions depending on linear loops
             * only_outlinear: only all subexpressions independent of linear loops
+            * reductions: all sub-expressions that are redundantly computed within
+                a reduction loop; if possible, pull the reduction loop out of
+                the nest.
         :param kwargs:
             * look_ahead: (default: False) should be set to True if only a projection
                 of the hoistable subexpressions is needed (i.e., hoisting not performed)
@@ -103,14 +108,75 @@ class ExpressionRewriter(object):
             * global_cse: (default: False) search for common sub-expressions across
                 all previously hoisted terms. Note that no data dependency analysis is
                 performed, so this is at caller's risk.
+
+        Examples
+        ========
+
+        1) With mode='normal': ::
+
+            for i
+              for j
+                for k
+                  a[j][k] += (b[i][j] + c[i][j])*(d[i][k] + e[i][k])
+
+        Redundancies are spotted along both the i and j dimensions, resulting in: ::
+
+            for i
+              for k
+                ct1[k] = d[i][k] + e[i][k]
+              for j
+                ct2 = b[i][j] + c[i][j]
+                for k
+                  a[j][k] += ct2*ct1[k]
+
+        2) With mode='reductions'.
+        Consider the following loop nest: ::
+
+            for i
+              for j
+                a[j] += b[j]*c[i]
+
+        By unrolling the loops, one clearly sees that: ::
+
+            a[0] += b[0]*c[0] + b[0]*c[1] + b[0]*c[2] + ...
+            a[1] += b[1]*c[0] + b[1]*c[1] + b[1]*c[2] + ...
+
+        Which is identical to: ::
+
+            ct = c[0] + c[1] + c[2] + ...
+            a[0] += b[0]*ct
+            a[1] += b[1]*ct
+
+        Thus, the original loop nest is simplified as: ::
+
+            for i
+              ct += c[i]
+            for j
+              a[j] += b[j]*ct
         """
 
         if kwargs.get('look_ahead'):
             return self.expr_hoister.extract(mode, **kwargs)
-        if mode == 'aggressive':
+        elif mode == 'aggressive':
             # Reassociation may promote more hoisting in /aggressive/ mode
             self.reassociate()
-        self.expr_hoister.licm(mode, **kwargs)
+            self.expr_hoister.licm(mode, **kwargs)
+        elif mode == 'reductions':
+            # Expansion and reassociation may create hoistable reduction loops
+            candidates = self.expr_info.reduction_loops
+            if not candidates:
+                return self
+            candidate = candidates[-1]
+            if candidate.size == 1:
+                # Otherwise the operation count will just end up increasing
+                return
+            self.expand(mode='all')
+            lda = loops_analysis(self.header)
+            self.reassociate(lambda i: not lda[i] or candidate in lda[i])
+            self.expr_hoister.licm(mode='with_promotion')
+            self.expr_hoister.trim(candidate)
+        else:
+            self.expr_hoister.licm(mode, **kwargs)
         return self
 
     def expand(self, mode='standard', **kwargs):
