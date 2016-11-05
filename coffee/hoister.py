@@ -35,7 +35,6 @@ from __future__ import absolute_import, print_function, division
 
 from .base import *
 from .utils import *
-from .logger import warn
 
 
 class Extractor(object):
@@ -330,11 +329,6 @@ class Hoister(object):
         lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
         global_cse = kwargs.get('global_cse', False)
 
-        expr_dims_loops = self.expr_info.loops_from_dims
-        expr_outermost_loop = self.expr_info.outermost_loop
-        expr_outermost_linear_loop = self.expr_info.outermost_linear_loop
-        is_bilinear = self.expr_info.is_bilinear
-
         extractor = Extractor.factory(mode, self.stmt, self.expr_info)
         extracted = True
 
@@ -376,8 +370,7 @@ class Hoister(object):
                     symbols.append(Symbol(name, loop_dim))
 
                 # 4) Replace invariant sub-expressions with temporaries
-                to_replace = dict(zip(subexprs, symbols))
-                n_replaced = ast_replace(self.stmt.rvalue, to_replace)
+                ast_replace(self.stmt.rvalue, dict(zip(subexprs, symbols)))
 
                 # 5) Update data dependencies
                 for s, e in zip(symbols, subexprs):
