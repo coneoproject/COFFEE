@@ -397,3 +397,9 @@ class Hoister(object):
 
         # Finally, make sure symbols are unique in the AST
         self.stmt.rvalue = dcopy(self.stmt.rvalue)
+
+    def trim(self):
+        """Remove unnecessary loops from the expression loop nest. Candidates
+        of this transformation are reduction loops, whose summations can sometimes
+        be factored out without breaking any data dependencies."""
+        from IPython import embed; embed()

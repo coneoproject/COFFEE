@@ -89,6 +89,9 @@ class ExpressionRewriter(object):
             * only_const: only all constant subexpressions
             * only_linear: only all subexpressions depending on linear loops
             * only_outlinear: only all subexpressions independent of linear loops
+            * reductions: all sub-expressions that are redundantly computed within
+                a reduction loop; if possible, pull the reduction loop out of
+                the nest.
         :param kwargs:
             * look_ahead: (default: False) should be set to True if only a projection
                 of the hoistable subexpressions is needed (i.e., hoisting not performed)
@@ -103,14 +106,73 @@ class ExpressionRewriter(object):
             * global_cse: (default: False) search for common sub-expressions across
                 all previously hoisted terms. Note that no data dependency analysis is
                 performed, so this is at caller's risk.
+
+        Examples
+        ========
+
+        1) With mode='normal': ::
+
+            for i
+              for j
+                for k
+                  a[j][k] += (b[i][j] + c[i][j])*(d[i][k] + e[i][k])
+
+        Redundancies are spotted along both the i and j dimensions, resulting in: ::
+
+            for i
+              for k
+                ct1[k] = d[i][k] + e[i][k]
+              for j
+                ct2 = b[i][j] + c[i][j]
+                for k
+                  a[j][k] += ct2*ct1[k]
+
+        2) With mode='reductions'.
+        Consider the following loop nest: ::
+
+            for i
+              for j
+                a[j] += b[j]*c[i]
+
+        By unrolling the loops, one clearly sees that: ::
+
+            a[0] += b[0]*c[0] + b[0]*c[1] + b[0]*c[2] + ...
+            a[1] += b[1]*c[0] + b[1]*c[1] + b[1]*c[2] + ...
+
+        Which is identical to: ::
+
+            ct = c[0] + c[1] + c[2] + ...
+            a[0] += b[0]*ct
+            a[1] += b[1]*ct
+
+        Thus, the original loop nest is simplified as: ::
+
+            for i
+              ct += c[i]
+            for j
+              a[j] += b[j]*ct
         """
 
         if kwargs.get('look_ahead'):
             return self.expr_hoister.extract(mode, **kwargs)
-        if mode == 'aggressive':
+        elif mode == 'aggressive':
             # Reassociation may promote more hoisting in /aggressive/ mode
             self.reassociate()
-        self.expr_hoister.licm(mode, **kwargs)
+            self.expr_hoister.licm(mode, **kwargs)
+        elif mode == 'reductions':
+            # Expansion and reassociation may create hoistable reduction loops
+            self.expand(mode='all')
+            lda = loops_analysis(self.header, value='dim')
+            self.reassociate(lambda i: any(d in self.expr_info.reduction_dims
+                                           for d in lda[i]))
+            # FIXME: only one specific dimension must be used in reassociate
+            # TODO: add commutativity spec to licm doc
+            from IPython import embed; embed()
+            self.expr_hoister.licm(mode='normal')
+            from IPython import embed; embed()
+            self.expr_hoister.trim()
+        else:
+            self.expr_hoister.licm(mode, **kwargs)
         return self
 
     def expand(self, mode='standard', **kwargs):

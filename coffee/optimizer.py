@@ -117,6 +117,7 @@ class LoopOptimizer(object):
                 if expr_info.dimension > 0:
                     ew.replacediv()
                     ew.sharing_graph_rewrite()
+                    ew.licm(mode='reductions')
 
             elif expr_info.mode == 3:
                 ew.expand(mode='all')
