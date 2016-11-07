@@ -82,8 +82,10 @@ class ExpressionRewriter(object):
             http://dl.acm.org/citation.cfm?id=2687415
 
         :param mode: drive code motion by specifying what subexpressions should
-            be hoisted
+            be hoisted and where.
             * normal: (default) all subexpressions that depend on one loop at most
+            * with_promotion: as normal, but try to compute hoistable subexpressions
+                in clone (innermost) loops, possibly at the expense of extra memory.
             * aggressive: all subexpressions, depending on any number of loops.
                 This may require introducing N-dimensional temporaries.
             * only_const: only all constant subexpressions
@@ -163,14 +165,19 @@ class ExpressionRewriter(object):
             # Expansion and reassociation may create hoistable reduction loops
             self.expand(mode='all')
             lda = loops_analysis(self.header, value='dim')
-            self.reassociate(lambda i: any(d in self.expr_info.reduction_dims
-                                           for d in lda[i]))
-            # FIXME: only one specific dimension must be used in reassociate
-            # TODO: add commutativity spec to licm doc
-            from IPython import embed; embed()
-            self.expr_hoister.licm(mode='normal')
-            from IPython import embed; embed()
-            self.expr_hoister.trim()
+            for i in summands(self.stmt.rvalue):
+                symbols = FindInstances(Symbol).visit(i)[Symbol]
+                unavoidable = set.intersection(*[lda[s] for s in symbols])
+                candidates = set(self.expr_info.reduction_dims) - unavoidable
+                if not candidates:
+                    continue
+                candidate = candidates.pop()
+                from IPython import embed; embed()
+                self.reassociate(lambda i: candidate in lda[i])
+                from IPython import embed; embed()
+                self.expr_hoister.licm(mode='with_promotion')
+                from IPython import embed; embed()
+                self.expr_hoister.trim()
         else:
             self.expr_hoister.licm(mode, **kwargs)
         return self

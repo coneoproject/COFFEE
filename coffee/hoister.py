@@ -44,7 +44,7 @@ class Extractor(object):
 
     @staticmethod
     def factory(mode, stmt, expr_info):
-        if mode == 'normal':
+        if mode in ['normal', 'with_promotion']:
             should_extract = lambda d: d != set(expr_info.dims)
             return MainExtractor(stmt, expr_info, should_extract)
         elif mode == 'only_const':
@@ -285,34 +285,32 @@ class Hoister(object):
     def _locate(self, dep, subexprs, mode):
         # TODO apply `in_written` to all loops in mapper ONCE, in `licm`,
         #      and then update it as exprs are hoisted
-        outer = self.expr_info.outermost_loop
-        inner = self.expr_info.innermost_loop
 
         # Start assuming no "real" hoisting can take place
         # E.g.: for i {a[i]*(t1 + t2);} --> for i {t3 = t1 + t2; a[i]*t3;}
-        place, offset = inner.block, self.stmt
+        place, offset = self.expr_info.innermost_loop.block, self.stmt
 
-        if mode != 'aggressive':
+        if mode in ['aggressive', 'with_promotion']:
+            # Hoist outside a loop even though this doesn't result in any
+            # operation count reduction
+            should_jump = lambda l: True
+        else:
             # "Standard" code motion case, i.e. moving /subexprs/ as far as
             # possible in the loop nest such that dependencies are honored
-            loops = list(reversed(self.expr_info.loops))
-            candidates = [l.block for l in loops[1:]] + [self.header]
+            should_jump = lambda l: l.dim not in dep
 
-            for loop, candidate in zip(loops, candidates):
-                if not self._is_hoistable(subexprs, loop):
-                    break
-                if loop.dim not in dep:
-                    place, offset = candidate, loop
+        loops = list(reversed(self.expr_info.loops))
+        candidates = [l.block for l in loops[1:]] + [self.header]
 
-            # Determine how much extra memory and whether clone loops are needed
-            jumped = loops[:candidates.index(place)]
-            clone = tuple(l for l in reversed(jumped) if l.dim in dep)
-        else:
-            # Hoist outside of the loop nest, even though this doesn't
-            # result in any operation count reduction
-            if all(self._is_hoistable(subexpr, outer)):
-                place, offset = self.header, outer
-                clone = tuple(self.expr_info.loops)
+        for loop, candidate in zip(loops, candidates):
+            if not self._is_hoistable(subexprs, loop):
+                break
+            if should_jump(loop):
+                place, offset = candidate, loop
+
+        # Determine how much extra memory and whether clone loops are needed
+        jumped = loops[:candidates.index(place) + 1]
+        clone = tuple(l for l in reversed(jumped) if l.dim in dep)
 
         return place, offset, clone
 
@@ -402,4 +400,4 @@ class Hoister(object):
         """Remove unnecessary loops from the expression loop nest. Candidates
         of this transformation are reduction loops, whose summations can sometimes
         be factored out without breaking any data dependencies."""
-        from IPython import embed; embed()
+        pass
