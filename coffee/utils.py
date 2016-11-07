@@ -441,6 +441,33 @@ def find_expression(node, type=None, dims=None, in_syms=None, out_syms=None):
     return exprs
 
 
+def summands(node):
+    """
+    Return the top-level summands in /node/.
+
+    Examples
+    ========
+
+    a + b --> [a, b]
+    a*b*c --> [a*b*c]
+    a*b*c + c*d --> [a*b*c, c*d]
+    (a+b)*c + d --> [(a+b)*c, d]
+    foo(a) --> []
+    """
+
+    handle = zip(*explore_operator(node))
+    if not handle:
+        return []
+    operands, parents = handle
+    if all(isinstance(p, Sum) for p in parents):
+        return operands
+    elif all(isinstance(p, Prod) for p in parents):
+        # Single top-level summand
+        return [node]
+    else:
+        return []
+
+
 #######################################################################
 # Functions to manipulate iteration spaces in various representations #
 #######################################################################
