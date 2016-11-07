@@ -34,6 +34,8 @@
 """Utility functions for the inspection, transformation, and creation of ASTs."""
 
 from __future__ import absolute_import, print_function, division
+from six import iteritems
+from six.moves import zip
 
 from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict, namedtuple
@@ -547,7 +549,7 @@ class ItSpace(object):
 
         loops = []
         body = Block(stmts or [], open_scope=True)
-        for (start, stop), dim in reversed(zip(itspaces, dims)):
+        for (start, stop), dim in reversed(list(zip(itspaces, dims))):
             new_for = For(Decl("int", dim, start), Less(dim, stop), Incr(dim, 1), body)
             loops.insert(0, new_for)
             body = Block([new_for], open_scope=True)
@@ -584,7 +586,7 @@ class StmtTracker(OrderedDict):
         INFO = ['stmt', 'decl', 'loop', 'place']
 
         def __init__(self, **kwargs):
-            for k, v in kwargs.iteritems():
+            for k, v in iteritems(kwargs):
                 assert(k in self.__class__.INFO)
                 setattr(self, k, v)
 
@@ -613,7 +615,7 @@ class StmtTracker(OrderedDict):
         """
         if sym not in self:
             return None
-        for k, v in kwargs.iteritems():
+        for k, v in iteritems(kwargs):
             assert(k in self.StmtInfo.INFO)
             setattr(self[sym], k, v)
 
@@ -701,7 +703,7 @@ class ExpressionGraph(object):
             if s.symbol not in self.deps:
                 continue
             elif not target_sym:
-                if zip(*self.deps.in_edges(s.symbol)):
+                if list(zip(*self.deps.in_edges(s.symbol))):
                     return True
             elif nx.has_path(self.deps, target_sym.symbol, s.symbol):
                 return True
@@ -717,7 +719,7 @@ class ExpressionGraph(object):
             if s.symbol not in self.deps:
                 continue
             elif not target_sym:
-                if zip(*self.deps.out_edges(s.symbol)):
+                if list(zip(*self.deps.out_edges(s.symbol))):
                     return True
             elif nx.has_path(self.deps, s.symbol, target_sym.symbol):
                 return True

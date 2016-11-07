@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six.moves import range, zip
 
 from collections import OrderedDict, defaultdict
 from itertools import product
@@ -548,7 +549,7 @@ class ZeroRemover(LoopScheduler):
                     r_size = max(min(offset + loop.size, end) - start, 0)
                     r_region.append((r, Region(r_size, r_offset)))
                 itspace.append(r_region)
-            itspace = zip(*itspace) or def_itspace
+            itspace = list(zip(*itspace)) or def_itspace
             return itspace
 
         elif isinstance(node, FunCall):
@@ -584,8 +585,8 @@ class ZeroRemover(LoopScheduler):
                     itspace[i] = ItSpace(mode=1).merge(itspace[i] + region)
                 else:
                     raise UnexpectedNode("Zero-avoidance: %s", str(node))
-            itspace = [zip(itspace, i) for i in product(*itspace.values())]
-            itspace = list(set([tuple(i) for i in itspace]))
+            itspace = list(set(tuple(zip(itspace, i))
+                               for i in product(*itspace.values())))
             return itspace
 
     def _track_nz_blocks(self, node, nz_syms, nz_info, nest=None, parent=None, candidates=None):
@@ -705,7 +706,7 @@ class ZeroRemover(LoopScheduler):
             if not d.nonzero:
                 continue
             for nz_b in product(*d.nonzero):
-                entries = [range(i.ofs, i.ofs + i.size) for i in nz_b]
+                entries = [list(range(i.ofs, i.ofs + i.size)) for i in nz_b]
                 if not np.all(d.init.values[np.ix_(*entries)] == 0.0):
                     nz_syms[s].append(nz_b)
 
@@ -754,7 +755,7 @@ class ZeroRemover(LoopScheduler):
                     new_loops[-1].body.append(stmt)
                     # ... and update tracked data
                     if stmt in new_exprs:
-                        new_nest = zip(new_loops, loops_parents)
+                        new_nest = list(zip(new_loops, loops_parents))
                         new_exprs[stmt] = copy_metaexpr(new_exprs[stmt],
                                                         parent=new_loops[-1].body,
                                                         loops_info=new_nest)
