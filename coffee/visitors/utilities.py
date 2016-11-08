@@ -437,10 +437,18 @@ class SharingGraph(Visitor):
             ret = self.visit(op, ret=ret, syms=loc_syms[i], parent=o)
         if all(i for i in loc_syms):
             self._update_mapper(mapper, loc_syms)
+            print ('1.', loc_syms)
+            a = itertools.product(*loc_syms)
             loc_syms = itertools.product(*loc_syms)
+            print ('2.', list(a))
             loc_syms = [tuple(coffee.utils.flatten(i)) for i in loc_syms]
+            print ('3.', loc_syms)
+            print ('===========')
             syms |= set(loc_syms)
-            G.add_edges_from(loc_syms)
+            try:
+                G.add_edges_from(loc_syms)
+            except:
+                from IPython import embed; embed()
         else:
             for i in loc_syms:
                 syms |= i
