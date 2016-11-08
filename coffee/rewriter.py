@@ -163,21 +163,15 @@ class ExpressionRewriter(object):
             self.expr_hoister.licm(mode, **kwargs)
         elif mode == 'reductions':
             # Expansion and reassociation may create hoistable reduction loops
+            candidates = self.expr_info.reduction_loops
+            if not candidates:
+                return self
+            candidate = candidates[-1]
             self.expand(mode='all')
-            lda = loops_analysis(self.header, value='dim')
-            for i in summands(self.stmt.rvalue):
-                symbols = FindInstances(Symbol).visit(i)[Symbol]
-                unavoidable = set.intersection(*[lda[s] for s in symbols])
-                candidates = set(self.expr_info.reduction_dims) - unavoidable
-                if not candidates:
-                    continue
-                candidate = candidates.pop()
-                from IPython import embed; embed()
-                self.reassociate(lambda i: candidate in lda[i])
-                from IPython import embed; embed()
-                self.expr_hoister.licm(mode='with_promotion')
-                from IPython import embed; embed()
-                self.expr_hoister.trim()
+            lda = loops_analysis(self.header)
+            self.reassociate(lambda i: not lda[i] or candidate in lda[i])
+            self.expr_hoister.licm(mode='with_promotion')
+            self.expr_hoister.trim(candidate)
         else:
             self.expr_hoister.licm(mode, **kwargs)
         return self

@@ -396,8 +396,38 @@ class Hoister(object):
         # Finally, make sure symbols are unique in the AST
         self.stmt.rvalue = dcopy(self.stmt.rvalue)
 
-    def trim(self):
-        """Remove unnecessary loops from the expression loop nest. Candidates
-        of this transformation are reduction loops, whose summations can sometimes
-        be factored out without breaking any data dependencies."""
-        pass
+    def trim(self, candidate, **kwargs):
+        """
+        Remove unnecessary reduction loops from the expression loop nest.
+        Sometimes, reduction loops can be factored out in outer loops, thus
+        reducing the operation count, without breaking data dependencies.
+        """
+
+        # Find out all reducible symbols
+        lda = kwargs.get('lda', loops_analysis(self.header))
+        reducible, other = [], []
+        for i in summands(self.stmt.rvalue):
+            symbols = FindInstances(Symbol).visit(i)[Symbol]
+            unavoidable = set.intersection(*[lda[s] for s in symbols])
+            if candidate in unavoidable:
+                return
+            reducible.extend([s for s in symbols if candidate in lda[s]])
+            other.extend([s for s in symbols if candidate not in lda[s]])
+
+        # Do not break data dependencies
+        if any(s in in_written(candidate) for s in other):
+            return
+        from IPython import embed; embed()
+
+        # Transform assignments into increments
+        for s in reducible:
+            loop = self.hoisted[s.symbol].loop
+            stmt = self.hoisted[s.symbol].stmt
+            insert_at_elem(loop.body, stmt, Incr(*(stmt.operands()[0])))
+            loop.body.remove(stmt)
+
+        # Pull out the candidate reduction loop
+        loops, parents = zip(*self.expr_info.loops_info)
+        index = loops.index(candidate)
+        loops[index].body.remove(loops[index + 1])
+        parents[index].children.append(loops[index + 1])
