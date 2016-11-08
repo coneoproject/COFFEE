@@ -373,8 +373,7 @@ class Hoister(object):
                 ast_replace(self.stmt.rvalue, dict(zip(subexprs, symbols)))
 
                 # 5) Update data dependencies
-                for s, e in zip(symbols, subexprs):
-                    lda[s] = dep
+                lda.update({s: set(dep) for s in symbols})
 
                 # 6) Modify the AST adding the hoisted expressions
                 if clone:
