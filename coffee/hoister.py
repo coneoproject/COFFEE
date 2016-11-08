@@ -408,23 +408,31 @@ class Hoister(object):
         reducible, other = [], []
         for i in summands(self.stmt.rvalue):
             symbols = FindInstances(Symbol).visit(i)[Symbol]
-            unavoidable = set.intersection(*[lda[s] for s in symbols])
+            unavoidable = set.intersection(*[set(lda[s]) for s in symbols])
             if candidate in unavoidable:
                 return
-            reducible.extend([s for s in symbols if candidate in lda[s]])
-            other.extend([s for s in symbols if candidate not in lda[s]])
+            reducible.extend([s.symbol for s in symbols if candidate in lda[s]])
+            other.extend([s.symbol for s in symbols if candidate not in lda[s]])
 
-        # Do not break data dependencies
-        if any(s in in_written(candidate) for s in other):
-            return
-        from IPython import embed; embed()
+        # Make sure we do not break data dependencies
+        make_reduce = []
+        writes = FindInstances(Writer).visit(candidate)
+        for w in flatten(writes.values()):
+            if isinstance(w.rvalue, EmptyStatement):
+                continue
+            if any(s == w.lvalue.symbol for s in other):
+                return
+            if any(s == w.lvalue.symbol for s in reducible):
+                loop = lda[w.lvalue][-1]
+                if not is_perfect_loop(loop):
+                    return
+                make_reduce.append((w, loop))
 
         # Transform assignments into increments
-        for s in reducible:
-            loop = self.hoisted[s.symbol].loop
-            stmt = self.hoisted[s.symbol].stmt
-            insert_at_elem(loop.body, stmt, Incr(*(stmt.operands()[0])))
-            loop.body.remove(stmt)
+        for w, p in make_reduce:
+            insert_at_elem(p.body, w, Incr(*(w.operands()[0])))
+            self.decls[w.lvalue.symbol].init = ArrayInit(np.array([0.0]))
+            p.body.remove(w)
 
         # Pull out the candidate reduction loop
         loops, parents = zip(*self.expr_info.loops_info)
