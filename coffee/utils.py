@@ -274,6 +274,7 @@ def loops_analysis(node, key='default', value='default'):
     :arg value: any value in ['default', 'dim']. If 'dim' is specified, then
         loop iteration dimensions are used in place of the actual object.
     """
+    symbols_dep = visit(node, info_items=['symbols_dep'])['symbols_dep']
 
     if key == 'default':
         gen_key = lambda s: s
@@ -285,16 +286,16 @@ def loops_analysis(node, key='default', value='default'):
         raise RuntimeError("Illegal key=%s for loop dependence analysis" % key)
 
     if value == 'default':
-        gen_value = lambda d: set(d)
+        lda = defaultdict(list)
+        update = lambda i, dep: i.extend(list(dep))
     elif value == 'dim':
-        gen_value = lambda d: {l.dim for l in d}
+        lda = defaultdict(set)
+        update = lambda i, dep: i.update({j.dim for j in dep})
     else:
         raise RuntimeError("Illegal value=%s for loop dependence analysis" % value)
 
-    symbols_dep = visit(node, info_items=['symbols_dep'])['symbols_dep']
-    lda = defaultdict(set)
     for s, dep in symbols_dep.items():
-        lda[gen_key(s)] |= gen_value(dep)
+        update(lda[gen_key(s)], dep)
 
     return lda
 
