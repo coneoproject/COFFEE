@@ -34,6 +34,7 @@
 from __future__ import absolute_import, print_function, division
 
 from collections import Counter
+from itertools import combinations
 import pulp as ilp
 
 from .base import *
@@ -444,67 +445,79 @@ class ExpressionRewriter(object):
         """Rewrite the expression based on its sharing graph. Details in the
         paper:
 
-            On Optimality of Finite Element Integration, Luporini et. al.
+            An algorithm for the optimization of finite element integration loops
+            (Luporini et. al.)
         """
-        lda = loops_analysis(self.expr_info.linear_loops[0], key='symbol', value='dim')
-        sg_visitor = SharingGraph(self.expr_info, lda)
+        linear_dims = self.expr_info.linear_dims
+        other_dims = set(self.expr_info.out_linear_dims)
 
-        # Maximize the visibility of linear symbols
-        sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
-        if 'topsum' in mapper:
-            self.expand(mode='linear', subexprs=[mapper['topsum']])
-            sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
+        # Maximize visibility of linear symbols
+        self.expand(mode='all')
+        lda = loops_analysis(self.header, value='dim')
+        self.reassociate(lambda i: (not lda[i]) + lda[i].issubset(other_dims))
 
-        nodes, edges = sgraph.nodes(), sgraph.edges()
+        # Construct the sharing graph
+        nodes, edges = [], []
+        operands = summands(self.stmt.rvalue)
+        for i in summands(self.stmt.rvalue):
+            symbols = zip(*explore_operator(i))[0]
+            lsymbols = [s for s in symbols if any(d in lda[s] for d in linear_dims)]
+            lsymbols = [s.urepr for s in lsymbols]
+            nodes.extend([j for j in lsymbols if j not in nodes])
+            edges.extend(combinations(lsymbols, r=2))
+        sgraph = nx.Graph(edges)
 
-        if self.expr_info.is_linear:
+        # Transform everything outside the sharing graph (pure linear, no ambiguity)
+        isolated = [n for n in nodes if n not in sgraph.nodes()]
+        for n in isolated:
             self.factorize(mode='adhoc', adhoc={n: [] for n in nodes})
             self.licm('only_outlinear')
-        elif self.expr_info.is_bilinear:
-            # Resort to an ILP formulation to find out the best factorization candidates
-            if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
-                self.factorize(mode='heuristic')
-                self.licm(mode='only_outlinear')
-                return
-            # Note: need to use short variable names otherwise Pulp might complain
-            nodes_vars = {i: n for i, n in enumerate(nodes)}
-            vars_nodes = {n: i for i, n in nodes_vars.items()}
-            edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
 
-            # ... declare variables
-            x = ilp.LpVariable.dicts('x', nodes_vars.keys(), 0, 1, ilp.LpBinary)
-            y = ilp.LpVariable.dicts('y', [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
-                                     0, 1, ilp.LpBinary)
-            limits = defaultdict(int)
-            for i, j in edges:
-                limits[i] += 1
-                limits[j] += 1
+        # Transform the expression based on the sharing graph
+        nodes, edges = sgraph.nodes(), sgraph.edges()
+        # Resort to an ILP formulation to find out the best factorization candidates
+        if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
+            self.factorize(mode='heuristic')
+            self.licm(mode='only_outlinear')
+            return
+        # Note: need to use short variable names otherwise Pulp might complain
+        nodes_vars = {i: n for i, n in enumerate(nodes)}
+        vars_nodes = {n: i for i, n in nodes_vars.items()}
+        edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
 
-            # ... define the problem
-            prob = ilp.LpProblem("Factorizer", ilp.LpMinimize)
+        # ... declare variables
+        x = ilp.LpVariable.dicts('x', nodes_vars.keys(), 0, 1, ilp.LpBinary)
+        y = ilp.LpVariable.dicts('y',
+                                 [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
+                                 0, 1, ilp.LpBinary)
+        limits = defaultdict(int)
+        for i, j in edges:
+            limits[i] += 1
+            limits[j] += 1
 
-            # ... define the constraints
-            for i in nodes_vars:
-                prob += ilp.lpSum(y[(i, j)] for j in nodes_vars if (i, j) in y) <= limits[i]*x[i]
+        # ... define the problem
+        prob = ilp.LpProblem("Factorizer", ilp.LpMinimize)
 
-            for i, j in edges:
-                prob += y[(i, j)] + y[(j, i)] == 1
+        # ... define the constraints
+        for i in nodes_vars:
+            prob += ilp.lpSum(y[(i, j)] for j in nodes_vars if (i, j) in y) <= limits[i]*x[i]
 
-            # ... define the objective function (min number of factorizations)
-            prob += ilp.lpSum(x[i] for i in nodes_vars)
+        for i, j in edges:
+            prob += y[(i, j)] + y[(j, i)] == 1
 
-            # ... solve the problem
-            prob.solve(ilp.GLPK(msg=0))
+        # ... define the objective function (min number of factorizations)
+        prob += ilp.lpSum(x[i] for i in nodes_vars)
 
-            # Finally, factorize and hoist (note: the order in which factorizations are carried
-            # out is crucial)
-            nodes = [nodes_vars[n] for n, v in x.items() if v.value() == 1]
-            other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
-            for n in nodes + other_nodes:
-                self.factorize(mode='adhoc', adhoc={n: []})
-            self.licm('only_outlinear').licm()
-        else:
-            self.factorize(mode='adhoc', adhoc={n: [] for n in nodes})
-            self.licm('only_outlinear').licm()
+        # ... solve the problem
+        prob.solve(ilp.GLPK(msg=0))
+
+        # ... finally, apply the transformations
+        # Note: the order (first /nodes/, than /other_nodes/) in which
+        # the factorizations are carried out is crucial
+        nodes = [nodes_vars[n] for n, v in x.items() if v.value() == 1]
+        other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
+        for n in nodes + other_nodes:
+            self.factorize(mode='adhoc', adhoc={n: []})
+        self.licm('only_outlinear').licm()
 
         return self
