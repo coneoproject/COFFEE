@@ -84,10 +84,10 @@ class ExpressionRewriter(object):
         :param mode: drive code motion by specifying what subexpressions should
             be hoisted and where.
             * normal: (default) all subexpressions that depend on one loop at most
-            * with_promotion: as normal, but try to compute hoistable subexpressions
-                in clone (innermost) loops, possibly at the expense of extra memory.
             * aggressive: all subexpressions, depending on any number of loops.
                 This may require introducing N-dimensional temporaries.
+            * incremental: apply, in sequence, only_const, only_outlinear, and
+                one sweep for each linear dimension
             * only_const: only all constant subexpressions
             * only_linear: only all subexpressions depending on linear loops
             * only_outlinear: only all subexpressions independent of linear loops
@@ -108,6 +108,8 @@ class ExpressionRewriter(object):
             * global_cse: (default: False) search for common sub-expressions across
                 all previously hoisted terms. Note that no data dependency analysis is
                 performed, so this is at caller's risk.
+            * with_promotion: compute hoistable subexpressions within clone loops
+                even though this doesn't necessarily result in fewer operations.
 
         Examples
         ========
@@ -155,13 +157,21 @@ class ExpressionRewriter(object):
               a[j] += b[j]*ct
         """
 
+        dimension = self.expr_info.dimension
+        dims = set(self.expr_info.dims)
+        linear_dims = set(self.expr_info.linear_dims)
+        out_linear_dims = set(self.expr_info.out_linear_dims)
+
         if kwargs.get('look_ahead'):
-            return self.expr_hoister.extract(mode, **kwargs)
-        elif mode == 'aggressive':
-            # Reassociation may promote more hoisting in /aggressive/ mode
-            self.reassociate()
-            self.expr_hoister.licm(mode, **kwargs)
+            hoist = self.expr_hoister.extract
+        else:
+            hoist = self.expr_hoister.licm
+
+        if mode == 'normal':
+            should_extract = lambda d: d != dims
+            hoist(should_extract, **kwargs)
         elif mode == 'reductions':
+            should_extract = lambda d: d != dims
             # Expansion and reassociation may create hoistable reduction loops
             candidates = self.expr_info.reduction_loops
             if not candidates:
@@ -171,12 +181,37 @@ class ExpressionRewriter(object):
                 # Otherwise the operation count will just end up increasing
                 return
             self.expand(mode='all')
-            lda = loops_analysis(self.header)
-            self.reassociate(lambda i: not lda[i] or candidate in lda[i])
-            self.expr_hoister.licm(mode='with_promotion')
+            lda = loops_analysis(self.header, value='dim')
+            non_candidates = {l.dim for l in candidates[:-1]}
+            self.reassociate(lambda i: not lda[i].intersection(non_candidates))
+            hoist(should_extract, with_promotion=True, lda=lda)
             self.expr_hoister.trim(candidate)
+        elif mode == 'incremental':
+            should_extract = lambda d: not (d and d.issubset(dims))
+            hoist(should_extract)
+            should_extract = lambda d: d.issubset(out_linear_dims)
+            hoist(should_extract)
+            for i in range(1, dimension):
+                # The 2 below ensures to hoist at least a binary operator, if possible
+                should_extract = lambda d: len(d.intersection(linear_dims)) <= i
+                hoist(should_extract, **kwargs)
+        elif mode == 'only_const':
+            should_extract = lambda d: not (d and d.issubset(dims))
+            hoist(should_extract, **kwargs)
+        elif mode == 'only_outlinear':
+            should_extract = lambda d: d.issubset(out_linear_dims)
+            hoist(should_extract, **kwargs)
+        elif mode == 'only_linear':
+            should_extract = lambda d: not d.issubset(out_linear_dims) and d != linear_dims
+            hoist(should_extract, **kwargs)
+        elif mode == 'aggressive':
+            should_extract = lambda d: True
+            self.reassociate()
+            hoist(should_extract, with_promotion=True, **kwargs)
         else:
-            self.expr_hoister.licm(mode, **kwargs)
+            warn('Skipping unknown licm strategy.')
+            return self
+
         return self
 
     def expand(self, mode='standard', **kwargs):
