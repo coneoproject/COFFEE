@@ -428,14 +428,18 @@ class Hoister(object):
                     return
                 make_reduce.append((w, loop))
 
-        # Transform assignments into increments
-        for w, p in make_reduce:
-            insert_at_elem(p.body, w, Incr(*(w.operands()[0])))
-            self.decls[w.lvalue.symbol].init = ArrayInit(np.array([0.0]))
-            p.body.remove(w)
-
-        # Pull out the candidate reduction loop
         loops, parents = zip(*self.expr_info.loops_info)
         index = loops.index(candidate)
+
+        # Transform assignments into increments and lift any involved symbol decl
+        for w, p in make_reduce:
+            insert_at_elem(p.body, w, Incr(*(w.operands()[0])))
+            p.body.remove(w)
+            decl = self.decls[w.lvalue.symbol]
+            decl.init = ArrayInit(np.array([0.0]))
+            candidate.body.remove(decl)
+            insert_at_elem(parents[index].children, candidate, decl)
+
+        # Pull out the candidate reduction loop
         loops[index].body.remove(loops[index + 1])
         parents[index].children.append(loops[index + 1])
