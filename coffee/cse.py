@@ -71,7 +71,7 @@ class Temporary(object):
 
     @property
     def linearity_degree(self):
-        return len([l for l in self.loops if l.is_linear])
+        return len(self.main_linear_loops)
 
     @property
     def symbol(self):
@@ -100,6 +100,23 @@ class Temporary(object):
     @property
     def loops(self):
         return zip(*self.nest)[0]
+
+    @property
+    def main_linear_loops(self):
+        return [l for l in self.main_loops if l.is_linear]
+
+    @property
+    def main_linear_nest(self):
+        return [(l, p) for l, p in self.main_nest if l in self.linear_loops]
+
+    @property
+    def main_loops(self):
+        index = self.loops.index(self.main_loop)
+        return [l for l in self.loops[:index + 1]]
+
+    @property
+    def main_nest(self):
+        return [(l, p) for l, p in self.nest if l in self.main_loops]
 
     @property
     def flops_projection(self):
@@ -253,7 +270,7 @@ class CSEUnpicker(object):
         # Expand + Factorize
         rewriters = OrderedDict()
         for t in temporaries:
-            expr_info = MetaExpr(self.type, t.main_loop.block, t.nest)
+            expr_info = MetaExpr(self.type, t.main_loop.block, t.main_nest)
             ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
                                     self.hoisted, self.expr_graph)
             ew.replacediv()
