@@ -42,34 +42,10 @@ class Extractor(object):
     EXT = 0  # expression marker: extract
     STOP = 1  # expression marker: do not extract
 
-    @staticmethod
-    def factory(mode, stmt, expr_info):
-        if mode in ['normal', 'with_promotion']:
-            should_extract = lambda d: d != set(expr_info.dims)
-            return MainExtractor(stmt, expr_info, should_extract)
-        elif mode == 'only_const':
-            # Do not extract unless constant in all loops
-            should_extract = lambda d: not (d and d.issubset(set(expr_info.dims)))
-            return MainExtractor(stmt, expr_info, should_extract)
-        elif mode == 'only_outlinear':
-            should_extract = lambda d: d.issubset(set(expr_info.out_linear_dims))
-            return MainExtractor(stmt, expr_info, should_extract)
-        elif mode == 'only_linear':
-            should_extract = lambda d: not (d.issubset(set(expr_info.out_linear_dims)))
-            return SoftExtractor(stmt, expr_info, should_extract)
-        elif mode == 'aggressive':
-            should_extract = lambda d: True
-            return AggressiveExtractor(stmt, expr_info, should_extract)
-        else:
-            raise RuntimeError("Requested an invalid Extractor (%s)" % mode)
-
     def __init__(self, stmt, expr_info, should_extract):
         self.stmt = stmt
         self.expr_info = expr_info
         self.should_extract = should_extract
-
-    def _handle_expr(*args):
-        raise NotImplementedError("Extractor is an abstract class")
 
     def _apply_cse(self):
         # Find common sub-expressions heuristically looking at binary terminal
@@ -111,15 +87,18 @@ class Extractor(object):
             return (dep, info)
 
         else:
-            left, right = node.children
-            dep_l, info_l = self._visit(left)
-            dep_r, info_r = self._visit(right)
-
-            dep_l = {d for d in dep_l if d in self.expr_info.dims}
-            dep_r = {d for d in dep_r if d in self.expr_info.dims}
-            dep_n = dep_l | dep_r
-
-            return self._handle_expr(left, right, dep_l, dep_r, dep_n, info_l, info_r)
+            retval = [(n,) + self._visit(n) for n in node.children]
+            dep = set.union(*[d for _, d, _ in retval])
+            dep = {d for d in dep if d in self.expr_info.dims}
+            if self.should_extract(dep) or self._look_ahead:
+                # Still a chance of finding a bigger expression
+                return (dep, self.EXT)
+            else:
+                for n, n_dep, n_info in retval:
+                    if n_info == self.EXT and not isinstance(n, Symbol):
+                        k = sorted(n_dep, key=lambda i: self.expr_info.dims.index(i))
+                        self.extracted.setdefault(tuple(k), []).append(n)
+                return (dep, self.STOP)
 
     def extract(self, look_ahead, lda, with_cse=False):
         """Extract invariant subexpressions from /self.expr/."""
@@ -135,103 +114,6 @@ class Extractor(object):
         del self._look_ahead
 
         return self.extracted
-
-
-class MainExtractor(Extractor):
-
-    def _handle_expr(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
-        if info_l == self.EXT and info_r == self.EXT:
-            if dep_l == dep_r:
-                # E.g. alpha*beta, A[i] + B[i]
-                return (dep_l, self.EXT)
-            elif not dep_l:
-                # E.g. alpha*A[i,j]
-                self._try(left, dep_l)
-                if not (set(self.expr_info.linear_dims) & dep_r and self._try(left, dep_l)):
-                    return (dep_r, self.EXT)
-            elif not dep_r:
-                # E.g. A[i,j]*alpha
-                self._try(right, dep_r)
-                if not (set(self.expr_info.linear_dims) & dep_l and self._try(left, dep_l)):
-                    return (dep_l, self.EXT)
-            elif dep_l.issubset(dep_r):
-                # E.g. A[i]*B[i,j]
-                if not self._try(left, dep_l):
-                    return (dep_n, self.EXT)
-            elif dep_r.issubset(dep_l):
-                # E.g. A[i,j]*B[i]
-                if not self._try(right, dep_r):
-                    return (dep_n, self.EXT)
-            elif dep_l | dep_r == set(self.expr_info.dims):
-                # E.g. A[i]*B[j] within two loops i and j
-                self._try(left, dep_l)
-                self._try(right, dep_r)
-                return (dep_n, self.STOP)
-            else:
-                # E.g. A[i]*B[j] within at least three loops
-                return (dep_n, self.EXT)
-        elif info_r == self.EXT:
-            self._try(right, dep_r)
-        elif info_l == self.EXT:
-            self._try(left, dep_l)
-        return (dep_n, self.STOP)
-
-
-class SoftExtractor(Extractor):
-
-    def _handle_expr(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
-        if info_l == self.EXT and info_r == self.EXT:
-            if dep_l == dep_r:
-                # E.g. alpha*beta, A[i] + B[i]
-                return (dep_l, self.EXT)
-            elif dep_l.issubset(dep_r):
-                # E.g. A[i]*B[i,j]
-                if not self._try(right, dep_r):
-                    return (dep_n, self.EXT)
-            elif dep_r.issubset(dep_l):
-                # E.g. A[i,j]*B[i]
-                if not self._try(left, dep_l):
-                    return (dep_n, self.EXT)
-            else:
-                # E.g. A[i]*B[j]
-                self._try(left, dep_l)
-                self._try(right, dep_r)
-        elif info_r == self.EXT:
-            self._try(right, dep_r)
-        elif info_l == self.EXT:
-            self._try(left, dep_l)
-        return (dep_n, self.STOP)
-
-
-class AggressiveExtractor(Extractor):
-
-    def _handle_expr(self, left, right, dep_l, dep_r, dep_n, info_l, info_r):
-        if info_l == self.EXT and info_r == self.EXT:
-            if dep_l == dep_r:
-                # E.g. alpha*beta, A[i] + B[i]
-                return (dep_l, self.EXT)
-            elif not dep_l:
-                # E.g. alpha*A[i,j], not hoistable anymore
-                self._try(right, dep_r)
-            elif not dep_r:
-                # E.g. A[i,j]*alpha, not hoistable anymore
-                self._try(left, dep_l)
-            elif dep_l.issubset(dep_r):
-                # E.g. A[i]*B[i,j]
-                if not self._try(left, dep_l):
-                    return (dep_n, self.EXT)
-            elif dep_r.issubset(dep_l):
-                # E.g. A[i,j]*B[i]
-                if not self._try(right, dep_r):
-                    return (dep_n, self.EXT)
-            else:
-                # E.g. A[i]*B[j], hoistable in TMP[i,j]
-                return (dep_n, self.EXT)
-        elif info_r == self.EXT:
-            self._try(right, dep_r)
-        elif info_l == self.EXT:
-            self._try(left, dep_l)
-        return (dep_n, self.STOP)
 
 
 class Hoister(object):
@@ -314,22 +196,22 @@ class Hoister(object):
 
         return place, offset, clone
 
-    def extract(self, mode, **kwargs):
+    def extract(self, mode, should_extract, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
-        lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
-        extractor = Extractor.factory(mode, self.stmt, self.expr_info)
+        lda = kwargs.get('lda', loops_analysis(self.header, value='dim'))
+        extractor = Extractor(self.stmt, self.expr_info, should_extract)
         return extractor.extract(True, lda)
 
-    def licm(self, mode, **kwargs):
+    def licm(self, mode, should_extract, **kwargs):
         """Perform generalized loop-invariant code motion."""
         max_sharing = kwargs.get('max_sharing', False)
         iterative = kwargs.get('iterative', True)
-        lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
+        lda = kwargs.get('lda', loops_analysis(self.header, value='dim'))
         global_cse = kwargs.get('global_cse', False)
 
-        extractor = Extractor.factory(mode, self.stmt, self.expr_info)
-        extracted = True
+        extractor = Extractor(self.stmt, self.expr_info, should_extract)
 
+        extracted = True
         while extracted:
             extracted = extractor.extract(False, lda, global_cse)
             for dep, subexprs in extracted.items():
