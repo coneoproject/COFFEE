@@ -164,7 +164,7 @@ class Hoister(object):
         reads = [s.symbol for s in reads[Symbol]]
         return set.isdisjoint(set(reads), set(written))
 
-    def _locate(self, dep, subexprs, mode):
+    def _locate(self, dep, subexprs, with_promotion=False):
         # TODO apply `in_written` to all loops in mapper ONCE, in `licm`,
         #      and then update it as exprs are hoisted
 
@@ -172,7 +172,7 @@ class Hoister(object):
         # E.g.: for i {a[i]*(t1 + t2);} --> for i {t3 = t1 + t2; a[i]*t3;}
         place, offset = self.expr_info.innermost_loop.block, self.stmt
 
-        if mode in ['aggressive', 'with_promotion']:
+        if with_promotion == 'with_promotion':
             # Hoist outside a loop even though this doesn't result in any
             # operation count reduction
             should_jump = lambda l: True
@@ -196,15 +196,16 @@ class Hoister(object):
 
         return place, offset, clone
 
-    def extract(self, mode, should_extract, **kwargs):
+    def extract(self, should_extract, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
         lda = kwargs.get('lda', loops_analysis(self.header, value='dim'))
         extractor = Extractor(self.stmt, self.expr_info, should_extract)
         return extractor.extract(True, lda)
 
-    def licm(self, mode, should_extract, **kwargs):
+    def licm(self, should_extract, **kwargs):
         """Perform generalized loop-invariant code motion."""
         max_sharing = kwargs.get('max_sharing', False)
+        with_promotion = kwargs.get('with_promotion', False)
         iterative = kwargs.get('iterative', True)
         lda = kwargs.get('lda', loops_analysis(self.header, value='dim'))
         global_cse = kwargs.get('global_cse', False)
@@ -225,7 +226,7 @@ class Hoister(object):
 
                 # 2) Determine the outermost loop where invariant expressions
                 # can be hoisted without breaking data dependencies.
-                place, offset, clone = self._locate(dep, subexprs, mode)
+                place, offset, clone = self._locate(dep, subexprs, with_promotion)
 
                 loop_size = tuple(l.size for l in clone)
                 loop_dim = tuple(l.dim for l in clone)

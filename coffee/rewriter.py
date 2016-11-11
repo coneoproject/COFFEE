@@ -88,10 +88,11 @@ class ExpressionRewriter(object):
                 in clone (innermost) loops, possibly at the expense of extra memory.
             * aggressive: all subexpressions, depending on any number of loops.
                 This may require introducing N-dimensional temporaries.
+            * incremental: apply, in sequence, only_const, only_outlinear, and
+                one sweep for each linear dimension
             * only_const: only all constant subexpressions
             * only_linear: only all subexpressions depending on linear loops
             * only_outlinear: only all subexpressions independent of linear loops
-            * outlinear: apply, in sequence, only_const and only_outlinear
             * reductions: all sub-expressions that are redundantly computed within
                 a reduction loop; if possible, pull the reduction loop out of
                 the nest.
@@ -156,6 +157,7 @@ class ExpressionRewriter(object):
               a[j] += b[j]*ct
         """
 
+        dimension = self.expr_info.dimension
         dims = set(self.expr_info.dims)
         linear_dims = set(self.expr_info.linear_dims)
         out_linear_dims = set(self.expr_info.out_linear_dims)
@@ -165,9 +167,12 @@ class ExpressionRewriter(object):
         else:
             hoist = self.expr_hoister.licm
 
-        if mode in ['normal', 'with_promotion']:
+        if mode == 'normal':
             should_extract = lambda d: d != dims
-            hoist(mode, should_extract, **kwargs)
+            hoist(should_extract, **kwargs)
+        elif mode == 'with_promotion':
+            should_extract = lambda d: d != dims
+            hoist(should_extract, with_promotion=True, **kwargs)
         elif mode == 'reductions':
             should_extract = lambda d: d != dims
             # Expansion and reassociation may create hoistable reduction loops
@@ -181,26 +186,30 @@ class ExpressionRewriter(object):
             self.expand(mode='all')
             lda = loops_analysis(self.header)
             self.reassociate(lambda i: not lda[i] or candidate in lda[i])
-            hoist('with_promotion', should_extract)
+            hoist(should_extract, with_promotion=True)
             self.expr_hoister.trim(candidate)
+        elif mode == 'incremental':
+            should_extract = lambda d: not (d and d.issubset(dims))
+            hoist(should_extract, **kwargs)
+            should_extract = lambda d: d.issubset(out_linear_dims)
+            hoist(should_extract, **kwargs)
+            for i in range(1, dimension):
+                # The 2 below ensures to hoist at least a binary operator, if possible
+                should_extract = lambda d: len(d.intersection(linear_dims)) <= i
+                hoist(should_extract, **kwargs)
         elif mode == 'only_const':
             should_extract = lambda d: not (d and d.issubset(dims))
-            hoist(mode, should_extract, **kwargs)
+            hoist(should_extract, **kwargs)
         elif mode == 'only_outlinear':
             should_extract = lambda d: d.issubset(out_linear_dims)
-            hoist(mode, should_extract, **kwargs)
+            hoist(should_extract, **kwargs)
         elif mode == 'only_linear':
-            should_extract = lambda d: d.issubset(linear_dims) and d != linear_dims
-            hoist(mode, should_extract, **kwargs)
-        elif mode == 'outlinear':
-            should_extract = lambda d: not (d and d.issubset(dims))
-            hoist('only_const', should_extract, **kwargs)
-            should_extract = lambda d: d.issubset(out_linear_dims)
-            hoist('only_outlinear', should_extract, **kwargs)
+            should_extract = lambda d: not d.issubset(out_linear_dims) and d != linear_dims
+            hoist(should_extract, **kwargs)
         elif mode == 'aggressive':
             should_extract = lambda d: True
             self.reassociate()
-            hoist(mode, should_extract, **kwargs)
+            hoist(should_extract, with_promotion=True, **kwargs)
         else:
             warn('Skipping unknown licm strategy.')
             return self
