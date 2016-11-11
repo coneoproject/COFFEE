@@ -402,6 +402,9 @@ class Hoister(object):
         Sometimes, reduction loops can be factored out in outer loops, thus
         reducing the operation count, without breaking data dependencies.
         """
+        # Rule out unsafe cases
+        if not is_perfect_loop(self.expr_info.innermost_loop):
+            return
 
         # Find out all reducible symbols
         lda = kwargs.get('lda', loops_analysis(self.header))
@@ -424,12 +427,24 @@ class Hoister(object):
                 return
             if any(s == w.lvalue.symbol for s in reducible):
                 loop = lda[w.lvalue][-1]
-                if not is_perfect_loop(loop):
+                if loop != candidate and not is_perfect_loop(loop):
                     return
                 make_reduce.append((w, loop))
 
+        # Make sure the lifted reduction touches all necessary symbols
+        if not all(s in [w.lvalue.symbol for w, _ in make_reduce] for s in reducible):
+            return
+
         loops, parents = zip(*self.expr_info.loops_info)
         index = loops.index(candidate)
+
+        # Preprocess declarations to make the following step uniform
+        declarations = [(w, p) for w, p in make_reduce if isinstance(w, Decl)]
+        for w, p in declarations:
+            assign = Assign(Symbol(w.sym.symbol), w.init)
+            insert_at_elem(candidate.body, w, assign, ofs=1)
+            w.init = EmptyStatement()
+            make_reduce[make_reduce.index((w, p))] = (assign, p)
 
         # Transform assignments into increments and lift any involved symbol decl
         for w, p in make_reduce:
@@ -440,6 +455,12 @@ class Hoister(object):
             candidate.body.remove(decl)
             insert_at_elem(parents[index].children, candidate, decl)
 
-        # Pull out the candidate reduction loop
-        loops[index].body.remove(loops[index + 1])
-        parents[index].children.append(loops[index + 1])
+        # Pull out the candidate reduction loop and clean up
+        pulling = loops[index + 1:]
+        pulling = zip(*[((l.start, l.end), l.dim) for l in pulling])
+        pulling = ItSpace().to_for(*pulling, stmts=[self.stmt])
+        parents[index].children.append(pulling[0])
+        if len(self.expr_info.parent.children) == 1:
+            loops[index].body.remove(loops[index + 1])
+        else:
+            self.expr_info.parent.children.remove(self.stmt)

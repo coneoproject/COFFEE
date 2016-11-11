@@ -167,6 +167,9 @@ class ExpressionRewriter(object):
             if not candidates:
                 return self
             candidate = candidates[-1]
+            if candidate.size == 1:
+                # Otherwise the operation count will just end up increasing
+                return
             self.expand(mode='all')
             lda = loops_analysis(self.header)
             self.reassociate(lambda i: not lda[i] or candidate in lda[i])
