@@ -34,7 +34,7 @@
 """Utility functions for the inspection, transformation, and creation of ASTs."""
 
 from __future__ import absolute_import, print_function, division
-from six import iteritems
+from six import iterkeys, iteritems
 from six.moves import zip
 
 from copy import deepcopy as dcopy
@@ -251,7 +251,7 @@ def visit(node, parent=None, info_items=None):
         deps = SymbolDependencies().visit(node, ret=SymbolDependencies.default_retval(),
                                           **SymbolDependencies.default_args)
         # Prune access mode:
-        for k in deps.keys():
+        for k in list(iterkeys(deps)):
             if type(k) is not Symbol:
                 del deps[k]
         info['symbols_dep'] = deps
