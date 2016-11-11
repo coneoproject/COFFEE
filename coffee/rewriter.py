@@ -471,14 +471,14 @@ class ExpressionRewriter(object):
         isolated = [n for n in nodes if n not in sgraph.nodes()]
         for n in isolated:
             self.factorize(mode='adhoc', adhoc={n: [] for n in nodes})
-            self.licm('outlinear')
+            self.licm('only_const').licm('only_outlinear')
 
         # Transform the expression based on the sharing graph
         nodes, edges = sgraph.nodes(), sgraph.edges()
         # Resort to an ILP formulation to find out the best factorization candidates
         if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
             self.factorize(mode='heuristic')
-            self.licm(mode='outlinear')
+            self.licm('only_const').licm('only_outlinear')
             return
         # Note: need to use short variable names otherwise Pulp might complain
         nodes_vars = {i: n for i, n in enumerate(nodes)}
@@ -518,6 +518,6 @@ class ExpressionRewriter(object):
         other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
         for n in nodes + other_nodes:
             self.factorize(mode='adhoc', adhoc={n: []})
-        self.licm('outlinear').licm()
+        self.licm('incremental').licm()
 
         return self
