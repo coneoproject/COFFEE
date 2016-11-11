@@ -466,6 +466,14 @@ class Symbol(Expr):
         return not self.rank or all(is_const_dim(r) for r in self.rank)
 
     @property
+    def is_number(self):
+        try:
+            float(self.symbol)
+            return True
+        except ValueError:
+            return False
+
+    @property
     def is_const_offset(self):
         from .utils import is_const_dim, flatten
         return not self.offset or all(is_const_dim(o) for o in flatten(self.offset))
