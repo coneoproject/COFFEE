@@ -49,7 +49,7 @@ class Temporary(object):
     or an AugmentedAssig) that computes a temporary variable; that is, a variable
     that is read in more than one place."""
 
-    def __init__(self, node, main_loop, nest, reads=None, linear_reads_costs=None):
+    def __init__(self, node, main_loop, nest, linear_reads_costs=None):
         self.level = -1
         self.pushed = False
         self.readby = []
@@ -57,7 +57,6 @@ class Temporary(object):
         self.node = node
         self.main_loop = main_loop
         self.nest = nest
-        self.reads = reads or []
         self.linear_reads_costs = linear_reads_costs or OrderedDict()
         self.flops = EstimateFlops().visit(node)
 
@@ -92,6 +91,10 @@ class Temporary(object):
     @property
     def urepr(self):
         return self.symbol.urepr
+
+    @property
+    def reads(self):
+        return FindInstances(Symbol).visit(self.expr)[Symbol] if self.expr else []
 
     @property
     def linear_reads(self):
@@ -159,7 +162,7 @@ class Temporary(object):
         return False
 
     def reconstruct(self):
-        temporary = Temporary(self.node, self.main_loop, self.nest, list(self.reads),
+        temporary = Temporary(self.node, self.main_loop, self.nest,
                               OrderedDict(self.linear_reads_costs))
         temporary.level = self.level
         temporary.readby = list(self.readby)
@@ -216,7 +219,8 @@ class CSEUnpicker(object):
                 return False
             pushed_in = [global_trace.get(rb.urepr) for rb in temporary.readby]
             pushed_in = set(rb.main_loop.children[0] for rb in pushed_in if rb)
-            for s in temporary.reads:
+            reads = [s for s in temporary.reads if not s.is_number]
+            for s in reads:
                 # ... all the read temporaries must be accessible in the loops in which
                 # they will be pushed
                 if s.urepr in global_trace and global_trace[s.urepr].pushed:
@@ -334,7 +338,7 @@ class CSEUnpicker(object):
                 else:
                     temporary = trace.setdefault(s.urepr, Temporary(s, loop, nest))
                     temporary.readby.append(node.lvalue)
-            new_temporary = Temporary(node, loop, nest, reads, linear_reads_costs)
+            new_temporary = Temporary(node, loop, nest, linear_reads_costs)
             new_temporary.level = max([trace[s.urepr].level for s
                                        in new_temporary.linear_reads] or [-2]) + 1
             trace[node.lvalue.urepr] = new_temporary
@@ -445,7 +449,6 @@ class CSEUnpicker(object):
         external_decls = [d for d in self.decls.values() if d.scope == EXTERNAL]
         fors = visit(self.header, info_items=['fors'])['fors']
         lda = loops_analysis(self.header, value='dim')
-        ra = reachability_analysis(self.header, external_decls)
 
         # Collect all loops to be analyzed
         nests = OrderedDict()
@@ -478,6 +481,7 @@ class CSEUnpicker(object):
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):
+                ra = reachability_analysis(self.header, external_decls)
                 self._push_temporaries(levels[i-1], trace, global_trace, ra)
                 self._transform_temporaries(levels[i])
 
