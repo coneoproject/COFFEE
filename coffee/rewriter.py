@@ -35,6 +35,7 @@ from __future__ import absolute_import, print_function, division
 
 from collections import Counter
 from itertools import combinations
+from operator import itemgetter
 import pulp as ilp
 
 from .base import *
@@ -194,7 +195,6 @@ class ExpressionRewriter(object):
             should_extract = lambda d: d.issubset(out_linear_dims)
             hoist(should_extract, **kwargs)
             for i in range(1, dimension):
-                # The 2 below ensures to hoist at least a binary operator, if possible
                 should_extract = lambda d: len(d.intersection(linear_dims)) <= i
                 hoist(should_extract, **kwargs)
         elif mode == 'only_const':
@@ -544,7 +544,7 @@ class ExpressionRewriter(object):
             self.header.children.remove(hoisted_loop)
         return self
 
-    def sharing_graph_rewrite(self):
+    def sharing_graph_rewrite(self, aaa):
         """Rewrite the expression based on its sharing graph. Details in the
         paper:
 
@@ -615,12 +615,16 @@ class ExpressionRewriter(object):
         prob.solve(ilp.GLPK(msg=0))
 
         # ... finally, apply the transformations
-        # Note: the order (first /nodes/, than /other_nodes/) in which
+        # Note.1: the order (first /nodes/, than /other_nodes/) in which
         # the factorizations are carried out is crucial
+        # Note.2: sorting /nodes/ and /other_nodes/ locally ensures guarantees
+        # deterministic output code
+        # Note.3: precedence is given to outer reduction loops; this maximises the
+        # impact of later transformations, while not affecting this pass
         nodes = [nodes_vars[n] for n, v in x.items() if v.value() == 1]
         other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
-        for n in nodes + other_nodes:
+        for n in sorted(nodes, key=itemgetter(1)) + sorted(other_nodes):
             self.factorize(mode='adhoc', adhoc={n: []})
-        self.licm('incremental').licm()
+        self.licm('incremental')
 
         return self
