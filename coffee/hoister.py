@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six.moves import zip
 
 from .base import *
 from .utils import *
@@ -82,7 +83,7 @@ class Extractor(object):
             cs = OrderedDict()
             retval = FindInstances.default_retval()
             values = [finder.visit(e, retval=retval)[Symbol] for e in subexprs]
-            binexprs = zip(*flatten(values))[1]
+            binexprs = list(zip(*flatten(values)))[1]
             binexprs = [b for b in binexprs if binexprs.count(b) > 1]
             for b in binexprs:
                 t = cs.setdefault(b.urepr, [])

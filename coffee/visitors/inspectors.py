@@ -236,7 +236,7 @@ class FindCoffeeExpressions(Visitor):
             return ret
         me = (o, parent)
         # Add nest structure to new items
-        keys = ret.keys()[nval:]
+        keys = list(ret.keys())[nval:]
         for k in keys:
             p, nest, rank = ret[k]
             if nest is None:
@@ -369,7 +369,7 @@ class SymbolDependencies(Visitor):
             ret = self.visit(op, ret=ret, loop_nest=loop_nest, *args, **kwargs)
         # Dependencies for variables that are written in one nest
         # and read in a subsequent one need to respect this.
-        new_keys = set(ret.keys()[nval:])
+        new_keys = set(list(ret.keys())[nval:])
         for k in new_keys:
             if type(k) is not Symbol:
                 continue
