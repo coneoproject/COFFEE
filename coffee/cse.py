@@ -135,6 +135,18 @@ class Temporary(object):
     def is_static_init(self):
         return isinstance(self.expr, ArrayInit)
 
+    @property
+    def is_increment(self):
+        return isinstance(self.node, Incr)
+
+    @property
+    def reductions(self):
+        return [l for l in self.main_loops if l.dim not in self.rank]
+
+    @property
+    def nreductions(self):
+        return len(self.reductions)
+
     def niters(self, mode='all', handle=None):
         assert mode in ['all', 'outer', 'nonlinear', 'in', 'out']
         handle = handle or []
@@ -398,9 +410,9 @@ class CSEUnpicker(object):
                     else:
                         handle = [read]
                     linear_reads.extend(handle)
-                factors = {as_urepr(i): i for i in linear_reads}
+                factors = {as_urepr(i): i for i in linear_reads}.values()
                 # Take into account the increased number of sums (due to fact)
-                hoist_region = set.union(*[lda[i] for i in factors.values()])
+                hoist_region = set.union(*[lda[i] for i in factors])
                 niters = t.niters('out', hoist_region)
                 t_outloop_cost += (len(linear_reads) - len(factors))*niters
                 total_outloop_cost += t_outloop_cost
@@ -410,8 +422,14 @@ class CSEUnpicker(object):
                 t_inloop_cost = 2*len(factors) - 1
                 level_inloop_cost += t_inloop_cost*t.niters('all')
 
+                # Take into account any hoistable reductions
+                if t.is_increment:
+                    for i in factors:
+                        handle = [l.dim for l in t.reductions if l.dim not in i.rank]
+                        level_inloop_cost -= t.niters('all') - t.niters('out', handle)
+
                 # Keep the trace up-to-date
-                linear_reads_costs = {i: 1 for i in factors.values()}
+                linear_reads_costs = {i: 1 for i in factors}
                 new_trace[t.urepr].linear_reads_costs = linear_reads_costs
 
             # Some temporaries within levels < /level/ might also appear in
