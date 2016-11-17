@@ -310,35 +310,34 @@ class Hoister(object):
                 return
             if any(s == w.lvalue.symbol for s in reducible):
                 loop = lda[w.lvalue][-1]
-                if loop != candidate and not is_perfect_loop(loop):
-                    return
                 make_reduce.append((w, loop))
 
-        # Make sure the lifted reduction touches all necessary symbols
-        if not all(s in [w.lvalue.symbol for w, _ in make_reduce] for s in reducible):
-            return
-
+        assignments = [(w, p) for w, p in make_reduce if isinstance(w, Assign)]
         loops, parents = zip(*self.expr_info.loops_info)
         index = loops.index(candidate)
 
-        # Preprocess declarations to make the following step uniform
-        declarations = [(w, p) for w, p in make_reduce if isinstance(w, Decl)]
-        for w, p in declarations:
-            assign = Assign(Symbol(w.sym.symbol), w.init)
-            insert_at_elem(candidate.body, w, assign, ofs=1)
-            w.init = EmptyStatement()
-            make_reduce[make_reduce.index((w, p))] = (assign, p)
+        # Perform a number of checks to ensure lifting reductions is safe
+        if not all(s in [w.lvalue.symbol for w, _ in make_reduce] for s in reducible):
+            return
+        if any(p != candidate and not is_perfect_loop(p) for w, p in make_reduce):
+            return
+        if any(candidate.dim in w.lvalue.rank for w, _ in assignments):
+            return
 
-        # Transform assignments into increments and lift any involved symbol decl
+        # Inject the reductions into the AST
         for w, p in make_reduce:
-            insert_at_elem(p.body, w, Incr(*(w.operands()[0])))
-            p.body.remove(w)
-            decl = self.decls[w.lvalue.symbol]
-            decl.init = ArrayInit(np.array([0.0]))
-            candidate.body.remove(decl)
-            insert_at_elem(parents[index].children, candidate, decl)
+            name = self._template % len(self.hoisted)
+            reduction = Incr(Symbol(name, w.lvalue.rank, w.lvalue.offset),
+                             ast_reconstruct(w.rvalue))
+            insert_at_elem(p.body, w, reduction)
+            handle = self.decls[w.lvalue.symbol]
+            declaration = Decl(handle.typ, Symbol(name, handle.lvalue.rank),
+                               ArrayInit(np.array([0.0])), handle.qual, handle.attr)
+            insert_at_elem(parents[index].children, candidate, declaration)
+            ast_replace(self.stmt, {w.lvalue: reduction.lvalue}, copy=True)
+            self.hoisted[name] = (reduction, declaration, p, p.body)
 
-        # Pull out the candidate reduction loop and clean up
+        # Pull out the candidate reduction loop
         pulling = loops[index + 1:]
         pulling = zip(*[((l.start, l.end), l.dim) for l in pulling])
         pulling = ItSpace().to_for(*pulling, stmts=[self.stmt])
@@ -347,3 +346,14 @@ class Hoister(object):
             loops[index].body.remove(loops[index + 1])
         else:
             self.expr_info.parent.children.remove(self.stmt)
+
+        # Clean up removing any now unnecessary symbols
+        reads = in_read(candidate, key='symbol')
+        declarations = FindInstances(Decl, with_parent=True).visit(self.header)[Decl]
+        declarations = dict(declarations)
+        for w, p in make_reduce:
+            if w.lvalue.symbol not in reads:
+                p.body.remove(w)
+                if not isinstance(w, Decl):
+                    key = self.decls[w.lvalue.symbol]
+                    declarations[key].children.remove(key)
