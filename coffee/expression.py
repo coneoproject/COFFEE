@@ -117,7 +117,7 @@ class MetaExpr(object):
 
     @property
     def reduction_loops(self):
-        stmts = FindInstances((Writer, Incr)).visit(self.outermost_loop)
+        stmts = FindInstances((Writer, Incr)).visit(self.parent)
         if stmts[Incr]:
             writers = flatten(stmts.values())
             return tuple(l for l in self.loops
