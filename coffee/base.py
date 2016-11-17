@@ -723,7 +723,8 @@ class Decl(Writer):
         self._scope = scope or UNKNOWN
 
     def operands(self):
-        return [self.typ, self.sym, self.init, self.qual, self.attr], {}
+        return [self.typ, self.sym, self.init, self.qual, self.attr,
+                self.pointers], {}
 
     def pad(self, new_rank):
         self.sym.rank = new_rank
