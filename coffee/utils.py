@@ -42,6 +42,7 @@ import networkx as nx
 
 from coffee.base import *
 from coffee.visitors.inspectors import *
+from coffee.visitors.utilities import Reconstructor
 
 
 #####################################
@@ -83,6 +84,11 @@ def ast_replace(node, to_replace, copy=False, mode='all'):
     n_replaced = defaultdict(int)
     _ast_replace(node, to_replace, n_replaced)
     return n_replaced
+
+
+def ast_reconstruct(node):
+    """Recursively reconstruct ``node``."""
+    return Reconstructor().visit(node)
 
 
 def ast_update_ofs(node, ofs, **kwargs):
