@@ -13,7 +13,7 @@ import coffee.utils
 
 
 __all__ = ["ReplaceSymbols", "CheckUniqueness", "Uniquify", "Evaluate",
-           "EstimateFlops", "ProjectExpansion"]
+           "EstimateFlops", "ProjectExpansion", "Reconstructor"]
 
 
 class ReplaceSymbols(Visitor):
@@ -373,3 +373,18 @@ class EstimateFlops(Visitor):
 
     def visit_Determinant3x3(self, o, *args, **kwargs):
         return 14
+
+
+class Reconstructor(Visitor):
+
+    """
+    Recursively reconstruct abstract syntax trees.
+    """
+
+    def visit_object(self, o):
+        return o
+
+    def visit_Node(self, o):
+        ops, _ = o.operands()
+        reconstructed_operands = [self.visit(op) for op in ops]
+        return o.reconstruct(*reconstructed_operands)
