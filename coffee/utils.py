@@ -362,13 +362,41 @@ def in_written(node, key='default'):
     elif key == 'symbol':
         gen_key = lambda s: s.symbol
     else:
-        raise RuntimeError("Illegal key=%s for loop dependence analysis" % key)
+        raise RuntimeError("Illegal key=%s for in_written" % key)
 
     found = []
-    writers = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
+    writers = FindInstances(Writer).visit(node)
     for type, stmts in writers.items():
         for stmt in stmts:
             found.append(gen_key(stmt.lvalue))
+
+    return found
+
+
+def in_read(node, key='default'):
+    """
+    Return a list of symbols read in ``node``.
+
+    :arg key: any value in ['default', 'urepr', 'symbol']. With 'urepr' and
+        'symbol' different instances of the same Symbol are represented by
+        a single entry in the returned dictionary.
+    """
+
+    if key == 'default':
+        gen_key = lambda s: s
+    elif key == 'urepr':
+        gen_key = lambda s: s.urepr
+    elif key == 'symbol':
+        gen_key = lambda s: s.symbol
+    else:
+        raise RuntimeError("Illegal key=%s for in_read" % key)
+
+    found = []
+    writers = FindInstances(Writer).visit(node)
+    for type, stmts in writers.items():
+        for stmt in stmts:
+            reads = FindInstances(Symbol).visit(stmt.rvalue)[Symbol]
+            found.extend([gen_key(s) for s in reads])
 
     return found
 
