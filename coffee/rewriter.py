@@ -85,8 +85,6 @@ class ExpressionRewriter(object):
         :param mode: drive code motion by specifying what subexpressions should
             be hoisted and where.
             * normal: (default) all subexpressions that depend on one loop at most
-            * with_promotion: as normal, but try to compute hoistable subexpressions
-                in clone (innermost) loops, possibly at the expense of extra memory.
             * aggressive: all subexpressions, depending on any number of loops.
                 This may require introducing N-dimensional temporaries.
             * incremental: apply, in sequence, only_const, only_outlinear, and
@@ -111,6 +109,8 @@ class ExpressionRewriter(object):
             * global_cse: (default: False) search for common sub-expressions across
                 all previously hoisted terms. Note that no data dependency analysis is
                 performed, so this is at caller's risk.
+            * with_promotion: compute hoistable subexpressions within clone loops
+                even though this doesn't necessarily result in fewer operations.
 
         Examples
         ========
@@ -171,9 +171,6 @@ class ExpressionRewriter(object):
         if mode == 'normal':
             should_extract = lambda d: d != dims
             hoist(should_extract, **kwargs)
-        elif mode == 'with_promotion':
-            should_extract = lambda d: d != dims
-            hoist(should_extract, with_promotion=True, **kwargs)
         elif mode == 'reductions':
             should_extract = lambda d: d != dims
             # Expansion and reassociation may create hoistable reduction loops
@@ -191,9 +188,9 @@ class ExpressionRewriter(object):
             self.expr_hoister.trim(candidate)
         elif mode == 'incremental':
             should_extract = lambda d: not (d and d.issubset(dims))
-            hoist(should_extract, **kwargs)
+            hoist(should_extract)
             should_extract = lambda d: d.issubset(out_linear_dims)
-            hoist(should_extract, **kwargs)
+            hoist(should_extract)
             for i in range(1, dimension):
                 should_extract = lambda d: len(d.intersection(linear_dims)) <= i
                 hoist(should_extract, **kwargs)

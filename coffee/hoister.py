@@ -172,7 +172,7 @@ class Hoister(object):
         # E.g.: for i {a[i]*(t1 + t2);} --> for i {t3 = t1 + t2; a[i]*t3;}
         place, offset = self.expr_info.innermost_loop.block, self.stmt
 
-        if with_promotion == 'with_promotion':
+        if with_promotion:
             # Hoist outside a loop even though this doesn't result in any
             # operation count reduction
             should_jump = lambda l: True
