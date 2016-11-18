@@ -323,6 +323,8 @@ class Hoister(object):
             return
         if any(candidate.dim in w.lvalue.rank for w, _ in assignments):
             return
+        if any(set(loops[index + 1:]) & set(lda[w.lvalue]) for w, _ in make_reduce):
+            return
 
         # Inject the reductions into the AST
         for w, p in make_reduce:
@@ -355,5 +357,5 @@ class Hoister(object):
             if w.lvalue.symbol not in reads:
                 p.body.remove(w)
                 if not isinstance(w, Decl):
-                    key = self.decls[w.lvalue.symbol]
+                    key = self.decls.pop(w.lvalue.symbol)
                     declarations[key].children.remove(key)
