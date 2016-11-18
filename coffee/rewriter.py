@@ -541,7 +541,7 @@ class ExpressionRewriter(object):
             self.header.children.remove(hoisted_loop)
         return self
 
-    def sharing_graph_rewrite(self, aaa):
+    def sharing_graph_rewrite(self):
         """Rewrite the expression based on its sharing graph. Details in the
         paper:
 
@@ -611,17 +611,19 @@ class ExpressionRewriter(object):
         # ... solve the problem
         prob.solve(ilp.GLPK(msg=0))
 
-        # ... finally, apply the transformations
-        # Note.1: the order (first /nodes/, than /other_nodes/) in which
-        # the factorizations are carried out is crucial
-        # Note.2: sorting /nodes/ and /other_nodes/ locally ensures guarantees
-        # deterministic output code
-        # Note.3: precedence is given to outer reduction loops; this maximises the
-        # impact of later transformations, while not affecting this pass
+        # ... finally, apply the transformations. Observe that:
+        # 1) the order (first /nodes/, than /other_nodes/) in which
+        #    the factorizations are carried out is crucial
+        # 2) sorting /nodes/ and /other_nodes/ locally ensures guarantees
+        #    deterministic output code
+        # 3) precedence is given to outer reduction loops; this maximises the
+        #    impact of later transformations, while not affecting this pass
+        # 4) with_promotion is set to true if there exist potential reductions
+        #    to simplify
         nodes = [nodes_vars[n] for n, v in x.items() if v.value() == 1]
         other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
         for n in sorted(nodes, key=itemgetter(1)) + sorted(other_nodes):
             self.factorize(mode='adhoc', adhoc={n: []})
-        self.licm('incremental')
+        self.licm('incremental', with_promotion=len(other_dims) > 1)
 
         return self
