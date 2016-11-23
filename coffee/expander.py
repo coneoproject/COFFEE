@@ -95,7 +95,7 @@ class Expander(object):
                 expansion = self._build(exp, grp)
                 to_replace.setdefault(exp, []).append(expansion)
             ast_replace(node, {k: ast_make_expr(Sum, v) for k, v in to_replace.items()},
-                        mode='symbol')
+                        copy=False, mode='symbol')
             # Update the parent node, since an expression has just been expanded
             expanded = node.right if l_type == self.GROUP else node.left
             parent.children[parent.children.index(node)] = expanded

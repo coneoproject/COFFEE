@@ -50,40 +50,43 @@ from coffee.visitors.utilities import Reconstructor
 #####################################
 
 
-def ast_replace(node, to_replace, copy=False, mode='all'):
-    """Given a dictionary ``to_replace`` s.t. ``{sym: new_sym}``, replace the
-    various ``syms`` rooted in ``node`` with ``new_sym``.
+def ast_replace(node, to_replace, copy=True, mode='all'):
+    """
+    Given the ``to_replace`` dictionary ``{k: v}``, replace each
+    ``k`` rooted in ``node`` with ``v``.
 
-    :param copy: if True, a deep copy of the replacing symbol is created.
+    :param copy: pass False to avoid reconstructing ``v`` each time ``k``
+                 is encountered.
     :param mode: either ``all``, in which case ``to_replace``'s keys are turned
                  into strings, and all of the occurrences are removed from the
                  AST; or ``symbol``, in which case only (all of) the references
                  to the symbols given in ``to_replace`` are replaced.
     """
+    assert mode in ['all', 'symbol']
 
     if mode == 'all':
-        to_replace = dict(zip([str(s) for s in to_replace.keys()], to_replace.values()))
-        __ast_replace = lambda n: to_replace.get(str(n))
-    elif mode == 'symbol':
-        __ast_replace = lambda n: to_replace.get(n)
+        to_replace = {str(k): v for k, v in to_replace.items()}
+        should_replace = lambda n: to_replace.get(str(n))
     else:
-        raise ValueError
+        should_replace = lambda n: to_replace.get(n)
 
-    def _ast_replace(node, to_replace, n_replaced):
-        replaced = {}
+    replacements = []
+
+    def _ast_replace(node, to_replace):
+        replaced_children = {}
         for i, n in enumerate(node.children):
-            replacing = __ast_replace(n)
-            if replacing:
-                replaced[i] = replacing if not copy else dcopy(replacing)
-                n_replaced[str(replacing)] += 1
+            v = should_replace(n)
+            if v:
+                replaced_children[i] = ast_reconstruct(v) if copy else v
+                replacements.append(replaced_children[i])
             else:
-                _ast_replace(n, to_replace, n_replaced)
-        for i, r in replaced.items():
+                _ast_replace(n, to_replace)
+        for i, r in replaced_children.items():
             node.children[i] = r
 
-    n_replaced = defaultdict(int)
-    _ast_replace(node, to_replace, n_replaced)
-    return n_replaced
+    _ast_replace(node, to_replace)
+
+    return replacements
 
 
 def ast_reconstruct(node):
