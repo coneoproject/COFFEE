@@ -144,8 +144,7 @@ class Hoister(object):
             finder = FindInstances(Symbol)
             partitions = defaultdict(list)
             for e in subexprs:
-                retval = FindInstances.default_retval()
-                symbols = tuple(set(str(s) for s in finder.visit(e, ret=retval)[Symbol]
+                symbols = tuple(set(str(s) for s in finder.visit(e)[Symbol]
                                     if str(s) in sharing))
                 partitions[symbols].append(e)
             for shared, partition in partitions.items():
@@ -195,7 +194,7 @@ class Hoister(object):
 
     def extract(self, should_extract, **kwargs):
         """Return a dictionary of hoistable subexpressions."""
-        lda = kwargs.get('lda', loops_analysis(self.header, value='dim'))
+        lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
         extractor = Extractor(self.stmt, self.expr_info, should_extract)
         return extractor.extract(True, lda)
 
@@ -204,7 +203,7 @@ class Hoister(object):
         max_sharing = kwargs.get('max_sharing', False)
         with_promotion = kwargs.get('with_promotion', False)
         iterative = kwargs.get('iterative', True)
-        lda = kwargs.get('lda', loops_analysis(self.header, value='dim'))
+        lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
         global_cse = kwargs.get('global_cse', False)
 
         extractor = Extractor(self.stmt, self.expr_info, should_extract)
@@ -241,19 +240,15 @@ class Hoister(object):
                     if not already_hoisted:
                         name = self._template % (len(self.hoisted) + len(stmts))
                         stmts.append(Assign(Symbol(name, loop_dim), dcopy(e)))
-                        decl = Decl(self.expr_info.type, Symbol(name, loop_size),
-                                    scope=LOCAL)
-                        decls.append(decl)
-                        self.decls[name] = decl
+                        decls.append(Decl(self.expr_info.type,
+                                          Symbol(name, loop_size),
+                                          scope=LOCAL))
                     symbols.append(Symbol(name, loop_dim))
 
                 # 4) Replace invariant sub-expressions with temporaries
-                ast_replace(self.stmt.rvalue, dict(zip(subexprs, symbols)))
+                replacements = ast_replace(self.stmt, dict(zip(subexprs, symbols)))
 
-                # 5) Update data dependencies
-                lda.update({s: set(dep) for s in symbols})
-
-                # 6) Modify the AST adding the hoisted expressions
+                # 5) Modify the AST adding the hoisted expressions
                 if clone:
                     outer_clone = ast_make_for(stmts, clone[-1])
                     for l in reversed(clone[:-1]):
@@ -263,18 +258,18 @@ class Hoister(object):
                 else:
                     code = decls + stmts
                     clone = None
-                # Insert the new nodes at the right level in the loop nest
                 offset = place.children.index(offset)
                 place.children[offset:offset] = code
-                # Track hoisted symbols
+
+                # 6) Track hoisted symbols and data dependencies
                 for i, j in zip(stmts, decls):
-                    self.hoisted[j.sym.symbol] = (i, j, clone, place)
+                    name = j.lvalue.symbol
+                    self.hoisted[name] = (i, j, clone, place)
+                    self.decls[name] = j
+                lda.update({s: set(dep) for s in replacements})
 
             if not iterative:
                 break
-
-        # Finally, make sure symbols are unique in the AST
-        self.stmt.rvalue = dcopy(self.stmt.rvalue)
 
     def trim(self, candidate, **kwargs):
         """
@@ -287,7 +282,7 @@ class Hoister(object):
             return
 
         # Find out all reducible symbols
-        lda = kwargs.get('lda', loops_analysis(self.header))
+        lda = kwargs.get('lda') or loops_analysis(self.header)
         reducible, other = [], []
         for i in summands(self.stmt.rvalue):
             symbols = FindInstances(Symbol).visit(i)[Symbol]

@@ -1,6 +1,6 @@
 from __future__ import absolute_import, print_function, division
 from coffee.visitor import Visitor
-from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol, EmptyStatement
+from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol, EmptyStatement, Writer
 from collections import defaultdict, OrderedDict, Counter
 import itertools
 
@@ -563,6 +563,17 @@ class FindInstances(Visitor):
         self.with_parent = with_parent
         super(FindInstances, self).__init__()
 
+    def useless_traversal(self, o):
+        """
+        Return True if the traversal of the sub-tree rooted in o
+        is useless given that we are searching for nodes of type /t/
+
+        E.g., Writers cannot be nested.
+        """
+        if isinstance(o, Writer) and self.types == Writer:
+            return True
+        return False
+
     def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
@@ -580,6 +591,8 @@ class FindInstances(Visitor):
             # Don't traverse children if stop-on-found
             if self.stop_when_found:
                 return ret
+        if self.useless_traversal(o):
+            return ret
         # Not found, or traversing children anyway
         ops, _ = o.operands()
         for op in ops:
