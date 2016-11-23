@@ -300,7 +300,7 @@ class CSEUnpicker(object):
         for t, ew in rewriters.items():
             ew.licm(mode='only_outlinear', lda=lda, global_cse=True)
             if t.linearity_degree > 1:
-                ew.licm(mode='only_linear')
+                ew.licm(mode='only_linear', lda=lda)
 
     def _analyze_expr(self, expr, loop, lda):
         finder = FindInstances(Symbol)

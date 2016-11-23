@@ -187,13 +187,14 @@ class ExpressionRewriter(object):
             hoist(should_extract, with_promotion=True)
             self.expr_hoister.trim(candidate)
         elif mode == 'incremental':
+            lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
             should_extract = lambda d: not (d and d.issubset(dims))
-            hoist(should_extract)
+            hoist(should_extract, lda=lda)
             should_extract = lambda d: d.issubset(out_linear_dims)
-            hoist(should_extract)
+            hoist(should_extract, lda=lda)
             for i in range(1, dimension):
                 should_extract = lambda d: len(d.intersection(linear_dims)) <= i
-                hoist(should_extract, **kwargs)
+                hoist(should_extract, lda=lda, **kwargs)
         elif mode == 'only_const':
             should_extract = lambda d: not (d and d.issubset(dims))
             hoist(should_extract, **kwargs)
