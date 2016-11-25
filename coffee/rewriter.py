@@ -551,12 +551,14 @@ class ExpressionRewriter(object):
             (Luporini et. al.)
         """
         linear_dims = self.expr_info.linear_dims
-        other_dims = set(self.expr_info.out_linear_dims)
+        other_dims = self.expr_info.out_linear_dims
 
         # Maximize visibility of linear symbols
         self.expand(mode='all')
+
+        # Make sure that potential reductions are not hidden away
         lda = loops_analysis(self.header, value='dim')
-        self.reassociate(lambda i: (not lda[i]) + lda[i].issubset(other_dims))
+        self.reassociate(lambda i: (not lda[i]) + lda[i].issubset(set(other_dims)))
 
         # Construct the sharing graph
         nodes, edges = [], []
@@ -577,41 +579,56 @@ class ExpressionRewriter(object):
 
         # Transform the expression based on the sharing graph
         nodes, edges = sgraph.nodes(), sgraph.edges()
-        # Resort to an ILP formulation to find out the best factorization candidates
         if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
             self.factorize(mode='heuristic')
             self.licm('only_const').licm('only_outlinear')
             return
-        # Note: need to use short variable names otherwise Pulp might complain
+        # Use short variable names otherwise Pulp might complain
         nodes_vars = {i: n for i, n in enumerate(nodes)}
         vars_nodes = {n: i for i, n in nodes_vars.items()}
         edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
 
-        # ... declare variables
-        x = ilp.LpVariable.dicts('x', nodes_vars.keys(), 0, 1, ilp.LpBinary)
-        y = ilp.LpVariable.dicts('y',
-                                 [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
-                                 0, 1, ilp.LpBinary)
-        limits = defaultdict(int)
-        for i, j in edges:
-            limits[i] += 1
-            limits[j] += 1
+        def setup():
+            # ... declare variables
+            x = ilp.LpVariable.dicts('x', nodes_vars.keys(), 0, 1, ilp.LpBinary)
+            y = ilp.LpVariable.dicts('y',
+                                     [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
+                                     0, 1, ilp.LpBinary)
+            limits = defaultdict(int)
+            for i, j in edges:
+                limits[i] += 1
+                limits[j] += 1
 
-        # ... define the problem
-        prob = ilp.LpProblem("Factorizer", ilp.LpMinimize)
+            # ... define the problem
+            prob = ilp.LpProblem("Factorizer", ilp.LpMinimize)
 
-        # ... define the constraints
-        for i in nodes_vars:
-            prob += ilp.lpSum(y[(i, j)] for j in nodes_vars if (i, j) in y) <= limits[i]*x[i]
+            # ... define the constraints
+            for i in nodes_vars:
+                prob += ilp.lpSum(y[(i, j)] for j in nodes_vars if (i, j) in y) <= limits[i]*x[i]
 
-        for i, j in edges:
-            prob += y[(i, j)] + y[(j, i)] == 1
+            for i, j in edges:
+                prob += y[(i, j)] + y[(j, i)] == 1
 
-        # ... define the objective function (min number of factorizations)
-        prob += ilp.lpSum(x[i] for i in nodes_vars)
+            # ... define the objective function (min number of factorizations)
+            prob += ilp.lpSum(x[i] for i in nodes_vars)
 
-        # ... solve the problem
+            return x, prob
+
+        # Solve the ILP problem to find out the minimal-cost factorization strategy
+        x, prob = setup()
         prob.solve(ilp.GLPK(msg=0))
+
+        # Also attempt to find another optimal factorization, but with
+        # additional constraints on the reduction dimensions. This may help in
+        # later rewrite steps
+        if len(other_dims) > 1:
+            z, prob = setup()
+            for i, n in nodes_vars.items():
+                if not set(n[1]).intersection(set(other_dims[:-1])):
+                    prob += z[i] == 0
+            prob.solve(ilp.GLPK(msg=0))
+            if ilp.LpStatus[prob.status] == 'Optimal':
+                x = z
 
         # ... finally, apply the transformations. Observe that:
         # 1) the order (first /nodes/, than /other_nodes/) in which
