@@ -164,9 +164,6 @@ class Hoister(object):
         return set.isdisjoint(set(reads), set(written))
 
     def _locate(self, dep, subexprs, with_promotion=False):
-        # TODO apply `in_written` to all loops in mapper ONCE, in `licm`,
-        #      and then update it as exprs are hoisted
-
         # Start assuming no "real" hoisting can take place
         # E.g.: for i {a[i]*(t1 + t2);} --> for i {t3 = t1 + t2; a[i]*t3;}
         place, offset = self.expr_info.innermost_loop.block, self.stmt
