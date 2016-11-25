@@ -182,9 +182,10 @@ class ExpressionRewriter(object):
                 # Otherwise the operation count will just end up increasing
                 return
             self.expand(mode='all')
-            lda = loops_analysis(self.header)
-            self.reassociate(lambda i: not lda[i] or candidate in lda[i])
-            hoist(should_extract, with_promotion=True)
+            lda = loops_analysis(self.header, value='dim')
+            non_candidates = {l.dim for l in candidates[:-1]}
+            self.reassociate(lambda i: not lda[i].intersection(non_candidates))
+            hoist(should_extract, with_promotion=True, lda=lda)
             self.expr_hoister.trim(candidate)
         elif mode == 'incremental':
             lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
