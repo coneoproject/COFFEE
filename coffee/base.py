@@ -1339,6 +1339,7 @@ class Scope(object):
     def __str__(self):
         return self._scope
 
+
 LOCAL = Scope("LOCAL")
 EXTERNAL = Scope("EXTERNAL")
 BUFFER = Scope("BUFFER")

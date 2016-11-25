@@ -562,7 +562,6 @@ class ExpressionRewriter(object):
 
         # Construct the sharing graph
         nodes, edges = [], []
-        operands = summands(self.stmt.rvalue)
         for i in summands(self.stmt.rvalue):
             symbols = zip(*explore_operator(i))[0] if not isinstance(i, Symbol) else [i]
             lsymbols = [s for s in symbols if any(d in lda[s] for d in linear_dims)]

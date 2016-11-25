@@ -36,7 +36,6 @@ from __future__ import absolute_import, print_function, division
 import sys
 
 from coffee.citations import update_citations
-from coffee.vectorizer import VectStrategy
 from coffee.logger import LOG_DEFAULT, set_log_level, warn
 from coffee.system import set_architecture, set_compiler, set_isa
 
