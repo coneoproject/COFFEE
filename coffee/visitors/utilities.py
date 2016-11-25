@@ -5,11 +5,9 @@ import operator
 from copy import deepcopy
 from collections import OrderedDict, defaultdict
 import numpy as np
-import networkx as nx
 
 from coffee.visitor import Visitor
 from coffee.base import Sum, Sub, Prod, Div, ArrayInit, SparseArrayInit
-import coffee.utils
 
 
 __all__ = ["ReplaceSymbols", "CheckUniqueness", "Uniquify", "Evaluate",
@@ -123,7 +121,8 @@ class Evaluate(Visitor):
         import coffee.vectorizer
         self.up = coffee.vectorizer.vect_roundup
         self.down = coffee.vectorizer.vect_rounddown
-        self.make_itspace = coffee.utils.ItSpace
+        from coffee.utils import ItSpace
+        self.make_itspace = ItSpace
         super(Evaluate, self).__init__()
 
     def visit_object(self, o, *args, **kwargs):
@@ -284,7 +283,9 @@ class ProjectExpansion(Visitor):
     """
 
     def __init__(self, symbols):
+        from coffee.utils import flatten
         self.symbols = symbols
+        self.flatten = flatten
         super(ProjectExpansion, self).__init__()
 
     def visit_object(self, o, *args, **kwargs):
@@ -305,13 +306,13 @@ class ProjectExpansion(Visitor):
             projection = self.default_retval()
             for n in o.children:
                 projection.extend(self.visit(n, parent=o, *args, **kwargs))
-            return [list(coffee.utils.flatten(projection))]
+            return [list(self.flatten(projection))]
         else:
             # Only the top level Prod, in a chain of Prods, should do the
             # tensor product
             projection = [self.visit(n, parent=o, *args, **kwargs) for n in o.children]
             product = itertools.product(*projection)
-            ret = [list(coffee.utils.flatten(i)) for i in product] or projection
+            ret = [list(self.flatten(i)) for i in product] or projection
         return ret
 
     def visit_Symbol(self, o, *args, **kwargs):
