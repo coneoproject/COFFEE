@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six.moves import zip
 
 from .utils import *
 from collections import OrderedDict
@@ -77,7 +78,7 @@ class MetaExpr(object):
 
     @property
     def loops(self):
-        return zip(*self._loops_info)[0]
+        return list(zip(*self._loops_info))[0]
 
     @property
     def loops_from_dims(self):
@@ -85,7 +86,7 @@ class MetaExpr(object):
 
     @property
     def loops_parents(self):
-        return zip(*self._loops_info)[1]
+        return list(zip(*self._loops_info))[1]
 
     @property
     def loops_info(self):

@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six.moves import zip
 
 import operator
 import resource
@@ -264,7 +265,7 @@ class LoopOptimizer(object):
         for stmt, expr_info in self.exprs.items():
             # Get all loop nests, then discard the one enclosing the expression
             nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
-            injectable_nests = [n for n in nests if zip(*n)[0] != expr_info.loops]
+            injectable_nests = [n for n in nests if list(zip(*n))[0] != expr_info.loops]
 
             for nest in injectable_nests:
                 to_unroll = [(l, p) for l, p in nest if l not in expr_info.loops]
@@ -451,7 +452,7 @@ class LoopOptimizer(object):
         if should_unroll:
             for stmt, expr_info in self.exprs.items():
                 nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
-                injectable_nests = [n for n in nests if zip(*n)[0] != expr_info.loops]
+                injectable_nests = [n for n in nests if list(zip(*n))[0] != expr_info.loops]
                 for nest in injectable_nests:
                     unrolled = [(l, p) for l, p in nest if l not in expr_info.loops]
                     for l, p in unrolled:

@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six.moves import zip
 
 from collections import Counter
 from itertools import combinations
@@ -421,7 +422,7 @@ class ExpressionRewriter(object):
                 for n, p in other_nodes:
                     _reassociate(n, p)
                 # Create the reassociated product and modify the original AST
-                children = zip(*other_nodes)[0] if other_nodes else ()
+                children = list(zip(*other_nodes))[0] if other_nodes else ()
                 children += tuple(sorted(symbols, key=reorder))
                 reassociated_node = ast_make_expr(Prod, children, balance=False)
                 parent.children[parent.children.index(node)] = reassociated_node

@@ -1,4 +1,5 @@
 from __future__ import absolute_import, print_function, division
+from six.moves import map, range
 
 import itertools
 import operator
@@ -192,7 +193,7 @@ class Evaluate(Visitor):
                 return m-n, dim[n]
             ranges = []
             for k, g in itertools.groupby(enumerate(sorted(dim.keys())), grouper):
-                group = map(operator.itemgetter(1), g)
+                group = list(map(operator.itemgetter(1), g))
                 ranges.append((group[-1]-group[0]+1, group[0]))
             nonzero[i] = ranges or nonzero[i]
         # Group indices in the innermost dimension iff within vector length size
@@ -250,7 +251,7 @@ class Evaluate(Visitor):
                 sliced += 1
             else:
                 # .../r/ is a reduction dimension
-                values = values.take(range(s), dim)
+                values = values.take(list(range(s)), dim)
         return values, precision
 
 

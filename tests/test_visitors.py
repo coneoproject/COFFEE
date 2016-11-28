@@ -98,11 +98,11 @@ def test_find_inner_loops(structure):
 
     loop = build_loop(structure)
 
-    expect = sorted(inner_loops)
+    expect = set(inner_loops)
 
     loops = v.visit(loop)
 
-    assert sorted(loops) == expect
+    assert set(loops) == expect
 
 
 def test_check_perfect_loop():

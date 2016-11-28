@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six.moves import zip
 
 import operator
 
@@ -102,7 +103,7 @@ class Temporary(object):
 
     @property
     def loops(self):
-        return zip(*self.nest)[0]
+        return list(zip(*self.nest))[0]
 
     @property
     def main_linear_loops(self):
@@ -320,7 +321,7 @@ class CSEUnpicker(object):
                 return
             elif isinstance(node, (Prod, Div)):
                 found += 1
-            operands = zip(*explore_operator(node))[0]
+            operands = list(zip(*explore_operator(node)))[0]
             for o in operands:
                 wrapper(o, found)
         wrapper(expr)

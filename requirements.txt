@@ -1,2 +1,4 @@
-networkx
 PuLP
+networkx
+numpy
+six

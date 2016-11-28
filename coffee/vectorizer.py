@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six.moves import range
 
 from math import ceil
 from copy import deepcopy as dcopy
@@ -331,7 +332,7 @@ class LoopVectorizer(object):
                     decl = self.decls[s.symbol]
                     index = s.rank.index(l.dim)
                     stride = s.strides[index]
-                    extra = range(stride + l.size, stride + vect_roundup(l.size))
+                    extra = list(range(stride + l.size, stride + vect_roundup(l.size)))
                     # Do any of the extra iterations alter the computation ?
                     if any(i > decl.size[index] for i in extra):
                         # ... outside of the legal region, abort
@@ -352,13 +353,13 @@ class LoopVectorizer(object):
                         for j, r in enumerate(s.rank[:index]):
                             if not is_const_dim(r):
                                 continue
-                            if r not in range(i[j].ofs, i[j].ofs + i[j].size):
+                            if not (i[j].ofs <= r < i[j].ofs + i[j].size):
                                 # ... actually on a different outer dimension, safe
                                 # to avoid this check
                                 can_skip = True
                         if not can_skip:
                             nz_index.append(i[index])
-                    if any(i in range(ofs, size + ofs) for size, ofs in nz_index):
+                    if any(ofs <= i < ofs + size for size, ofs in nz_index):
                         # ... writing to a non-zero region, abort
                         should_round = False
                         break
