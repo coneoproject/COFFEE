@@ -284,9 +284,7 @@ class ProjectExpansion(Visitor):
     """
 
     def __init__(self, symbols):
-        from coffee.utils import flatten
         self.symbols = symbols
-        self.flatten = flatten
         super(ProjectExpansion, self).__init__()
 
     def visit_object(self, o, *args, **kwargs):
@@ -303,17 +301,18 @@ class ProjectExpansion(Visitor):
         return ret
 
     def visit_Prod(self, o, parent=None, *args, **kwargs):
+        from coffee.utils import flatten
         if isinstance(parent, Prod):
             projection = self.default_retval()
             for n in o.children:
                 projection.extend(self.visit(n, parent=o, *args, **kwargs))
-            return [list(self.flatten(projection))]
+            return [list(flatten(projection))]
         else:
             # Only the top level Prod, in a chain of Prods, should do the
             # tensor product
             projection = [self.visit(n, parent=o, *args, **kwargs) for n in o.children]
             product = itertools.product(*projection)
-            ret = [list(self.flatten(i)) for i in product] or projection
+            ret = [list(flatten(i)) for i in product] or projection
         return ret
 
     def visit_Symbol(self, o, *args, **kwargs):
