@@ -494,7 +494,7 @@ def summands(node):
     foo(a) --> []
     """
 
-    handle = zip(*explore_operator(node))
+    handle = list(zip(*explore_operator(node)))
     if not handle:
         return []
     operands, parents = handle
