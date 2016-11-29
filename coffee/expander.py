@@ -73,7 +73,7 @@ class Expander(object):
             return ([node], self.EXPAND) if self.should_expand(node) \
                 else ([node], self.GROUP)
 
-        elif isinstance(node, (Div, FunCall)):
+        elif isinstance(node, (Div, Ternary, FunCall)):
             # Try to expand /within/ the children, but then return saying "I'm not
             # expandable any further"
             for n in node.children:

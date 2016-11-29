@@ -409,7 +409,7 @@ class ExpressionRewriter(object):
             if isinstance(node, (Symbol, Div)):
                 return
 
-            elif isinstance(node, (Sum, Sub, FunCall)):
+            elif isinstance(node, (Sum, Sub, FunCall, Ternary)):
                 for n in node.children:
                     _reassociate(n, node)
 

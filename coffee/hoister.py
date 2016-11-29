@@ -83,7 +83,7 @@ class Extractor(object):
 
         elif isinstance(node, (FunCall, Ternary)):
             arg_deps = [self._visit(n) for n in node.children]
-            dep = tuple(set(flatten([dep for dep, _ in arg_deps])))
+            dep = set(flatten([dep for dep, _ in arg_deps]))
             info = self.EXT if all(i == self.EXT for _, i in arg_deps) else self.STOP
             return (dep, info)
 
