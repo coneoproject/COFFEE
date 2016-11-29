@@ -334,9 +334,9 @@ class Hoister(object):
 
         # Pull out the candidate reduction loop
         pulling = loops[index + 1:]
-        pulling = zip(*[((l.start, l.end), l.dim) for l in pulling])
+        pulling = list(zip(*[((l.start, l.end), l.dim) for l in pulling]))
         pulling = ItSpace().to_for(*pulling, stmts=[self.stmt])
-        parents[index].children.append(pulling[0])
+        insert_at_elem(parents[index].children, candidate, pulling[0], ofs=1)
         if len(self.expr_info.parent.children) == 1:
             loops[index].body.remove(loops[index + 1])
         else:
