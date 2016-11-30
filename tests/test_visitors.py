@@ -375,9 +375,8 @@ def test_find_coffee_expressions_single():
 
     val = ret[assign]
 
-    assert len(val) == 3
+    assert len(val) == 2
 
-    assert val[2] == ()
     assert val[1] == [(tree.children[0], tree)]
     assert val[0] == tree.children[0].children[0]
 
@@ -405,13 +404,11 @@ def test_find_coffee_expressions_nested():
 
     assert val1[0] == tree.children[0].children[0]
     assert val1[1] == [(tree.children[0], tree)]
-    assert val1[2] == ()
 
     assert val2[0] == tree.children[0].body[0].children[0].children[0]
     assert val2[1] == [(tree.children[0], tree),
                        (tree.children[0].body[0].children[0],
                         tree.children[0].body[0])]
-    assert val2[2] == ("i", )
 
 
 def test_symbol_modes_simple():

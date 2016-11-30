@@ -50,12 +50,11 @@ class Expander(object):
     GROUP = 0  # Expression /will/ not trigger expansion
     EXPAND = 1  # Expression /could/ be expanded
 
-    def __init__(self, stmt, expr_info=None, decls=None, hoisted=None, expr_graph=None):
+    def __init__(self, stmt, expr_info=None, decls=None, hoisted=None):
         self.stmt = stmt
         self.expr_info = expr_info
         self.decls = decls
         self.hoisted = hoisted
-        self.expr_graph = expr_graph
 
         self.local_decls = {}
 
@@ -74,7 +73,7 @@ class Expander(object):
             return ([node], self.EXPAND) if self.should_expand(node) \
                 else ([node], self.GROUP)
 
-        elif isinstance(node, (Div, FunCall)):
+        elif isinstance(node, (Div, Ternary, FunCall)):
             # Try to expand /within/ the children, but then return saying "I'm not
             # expandable any further"
             for n in node.children:
@@ -96,7 +95,7 @@ class Expander(object):
                 expansion = self._build(exp, grp)
                 to_replace.setdefault(exp, []).append(expansion)
             ast_replace(node, {k: ast_make_expr(Sum, v) for k, v in to_replace.items()},
-                        mode='symbol')
+                        copy=False, mode='symbol')
             # Update the parent node, since an expression has just been expanded
             expanded = node.right if l_type == self.GROUP else node.left
             parent.children[parent.children.index(node)] = expanded

@@ -447,11 +447,11 @@ class Symbol(Expr):
         a[i][3*j + 2].
     """
 
-    def __init__(self, symbol, rank=(), offset=()):
+    def __init__(self, symbol, rank=None, offset=None):
         super(Symbol, self).__init__([])
         self.symbol = symbol
-        self.rank = rank
-        self.offset = offset or tuple([(1, 0) for r in rank])
+        self.rank = Rank(rank or ())
+        self.offset = offset or tuple([(1, 0) for r in self.rank])
 
     def operands(self):
         return [self.symbol, self.rank, self.offset], {}
@@ -464,6 +464,14 @@ class Symbol(Expr):
     def is_const(self):
         from .utils import is_const_dim
         return not self.rank or all(is_const_dim(r) for r in self.rank)
+
+    @property
+    def is_number(self):
+        try:
+            float(self.symbol)
+            return True
+        except ValueError:
+            return False
 
     @property
     def is_const_offset(self):
@@ -715,7 +723,8 @@ class Decl(Writer):
         self._scope = scope or UNKNOWN
 
     def operands(self):
-        return [self.typ, self.sym, self.init, self.qual, self.attr], {}
+        return [self.typ, self.sym, self.init, self.qual, self.attr,
+                self.pointers], {}
 
     def pad(self, new_rank):
         self.sym.rank = new_rank
@@ -892,6 +901,10 @@ class For(Statement):
     @property
     def header(self):
         return (self.start, self.size, self.increment)
+
+    @property
+    def block(self):
+        return self.children[0]
 
     @property
     def body(self):
@@ -1214,6 +1227,26 @@ class PreprocessNode(Node):
 
     def gencode(self, not_scope=False):
         return self.children[0].gencode()
+
+
+class Rank(tuple):
+
+    def __contains__(self, val):
+        from coffee.visitors import FindInstances
+        if isinstance(val, Node):
+            val, search = str(val), type(Node)
+        elif isinstance(val, str):
+            val, search = val, Symbol
+        else:
+            return False
+        for i in self:
+            if isinstance(i, Node):
+                items = FindInstances(search).visit(i)
+                if any(val == str(i) for i in items[search]):
+                    return True
+            elif isinstance(i, str) and val == i:
+                return True
+        return False
 
 
 # Utility functions ###

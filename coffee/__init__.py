@@ -36,7 +36,6 @@ from __future__ import absolute_import, print_function, division
 import sys
 
 from coffee.citations import update_citations
-from coffee.vectorizer import VectStrategy
 from coffee.logger import LOG_DEFAULT, set_log_level, warn
 from coffee.system import set_architecture, set_compiler, set_isa
 
@@ -169,8 +168,6 @@ O0 = OptimizationLevel('O0')
 O1 = OptimizationLevel('O1', rewrite=1)
 O2 = OptimizationLevel('O2', rewrite=2, dead_ops_elimination=True)
 O3 = OptimizationLevel('O3', align_pad=True, **O2)
-Ofast = OptimizationLevel('Ofast', vectorize=(VectStrategy.SPEC_UAJ_PADD, 2),
-                          precompute='noloops', **O3)
 
 initialized = False
 

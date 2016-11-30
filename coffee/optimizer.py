@@ -68,8 +68,6 @@ class LoopOptimizer(object):
 
         # Track nonzero regions accessed in each symbol
         self.nz_syms = {}
-        # Track data dependencies
-        self.expr_graph = ExpressionGraph(header)
         # Track hoisted expressions
         self.hoisted = StmtTracker()
 
@@ -89,8 +87,6 @@ class LoopOptimizer(object):
                 that fully depend on reduction loops.
             * mode == 4: rewrite an expression based on its sharing graph
         """
-        ExpressionRewriter.reset()
-
         # Set a rewrite mode for each expression
         for stmt, expr_info in self.exprs.items():
             expr_info.mode = mode
@@ -110,7 +106,7 @@ class LoopOptimizer(object):
         # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
             ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
-                                    self.hoisted, self.expr_graph)
+                                    self.hoisted)
 
             if expr_info.mode == 1:
                 if expr_info.dimension in [0, 1]:
@@ -121,7 +117,8 @@ class LoopOptimizer(object):
             elif expr_info.mode == 2:
                 if expr_info.dimension > 0:
                     ew.replacediv()
-                    ew.SGrewrite()
+                    ew.sharing_graph_rewrite()
+                    ew.licm(mode='reductions')
 
             elif expr_info.mode == 3:
                 ew.expand(mode='all')
@@ -139,11 +136,11 @@ class LoopOptimizer(object):
                 ew.licm(mode='only_outlinear')
                 if expr_info.dimension > 0:
                     ew.licm(mode='only_linear', iterative=False, max_sharing=True)
-                    ew.SGrewrite()
+                    ew.sharing_graph_rewrite()
                     ew.expand()
 
         # Try merging the loops created by expression rewriting
-        merged_loops = SSALoopMerger(self.expr_graph).merge(self.header)
+        merged_loops = SSALoopMerger().merge(self.header)
         # Update the trackers
         for merged, merged_in in merged_loops:
             for l in merged:
@@ -157,7 +154,6 @@ class LoopOptimizer(object):
 
         # Reduce memory pressure by avoiding useless temporaries
         self._min_temporaries()
-        self.expr_graph = ExpressionGraph(self.header)
 
         # Handle the effects, at the C-level, of the AST transformation
         self._recoil()
@@ -167,131 +163,14 @@ class LoopOptimizer(object):
         avoid evaluation of arithmetic operations involving zero-valued blocks
         in statically initialized arrays."""
 
-        zls = ZeroRemover(self.exprs, self.decls, self.hoisted, self.expr_graph)
+        zls = ZeroRemover(self.exprs, self.decls, self.hoisted)
         self.nz_syms = zls.reschedule(self.header)
-
-    def precompute(self, mode='perfect'):
-        """Precompute statements out of ``self.loop``. This is achieved through
-        scalar code hoisting.
-
-        :arg mode: drives the precomputation. Two values are possible: ['perfect',
-        'noloops']. The 'perfect' mode attempts to hoist everything, making the loop
-        nest perfect. The 'noloops' mode excludes inner loops from the precomputation.
-
-        Example: ::
-
-        for i
-          for r
-            A[r] += f(i, ...)
-          for j
-            for k
-              B[j][k] += g(A[r], ...)
-
-        with mode='perfect', becomes: ::
-
-        for i
-          for r
-            A[i][r] += f(...)
-        for i
-          for j
-            for k
-              B[j][k] += g(A[i][r], ...)
-        """
-
-        precomputed_block = []
-        precomputed_syms = {}
-
-        def _precompute(node, outer_block):
-
-            if isinstance(node, Symbol):
-                if node.symbol in precomputed_syms:
-                    node.rank = precomputed_syms[node.symbol] + node.rank
-
-            elif isinstance(node, FlatBlock):
-                outer_block.append(node)
-
-            elif isinstance(node, Expr):
-                for n in node.children:
-                    _precompute(n, outer_block)
-
-            elif isinstance(node, Writer):
-                sym, expr = node.children
-                precomputed_syms[sym.symbol] = (self.loop.dim,)
-                _precompute(sym, outer_block)
-                _precompute(expr, outer_block)
-                outer_block.append(node)
-
-            elif isinstance(node, Decl):
-                outer_block.append(node)
-                if isinstance(node.init, Symbol):
-                    node.init.symbol = "{%s}" % node.init.symbol
-                elif isinstance(node.init, Expr):
-                    _precompute(Assign(dcopy(node.sym), node.init), outer_block)
-                    node.init = EmptyStatement()
-                node.sym.rank = (self.loop.size,) + node.sym.rank
-
-            elif isinstance(node, For):
-                new_children = []
-                for n in node.body:
-                    _precompute(n, new_children)
-                node.body = new_children
-                outer_block.append(node)
-
-            else:
-                raise RuntimeError("Precompute error: unexpteced node: %s" % str(node))
-
-        # If the outermost loop is already perfect, there is nothing to precompute
-        if is_perfect_loop(self.loop):
-            return
-
-        # Get the nodes that should not be precomputed
-        no_precompute = set()
-        if mode == 'noloops':
-            for l in self.hoisted.values():
-                if l.loop:
-                    no_precompute.add(l.decl)
-                    no_precompute.add(l.loop)
-
-        # Visit the AST and perform the precomputation
-        to_remove = []
-        for n in self.loop.body:
-            if n in flatten(self.expr_linear_loops):
-                break
-            elif n not in no_precompute:
-                _precompute(n, precomputed_block)
-                to_remove.append(n)
-
-        # Clean up
-        for n in to_remove:
-            self.loop.body.remove(n)
-
-        # Wrap precomputed statements within a loop
-        searching, outer_block = [], []
-        for n in precomputed_block:
-            if searching and not isinstance(n, Writer):
-                outer_block.append(ast_make_for(searching, self.loop))
-                searching = []
-            if isinstance(n, For):
-                outer_block.append(ast_make_for([n], self.loop))
-            elif isinstance(n, Writer):
-                searching.append(n)
-            else:
-                outer_block.append(n)
-        if searching:
-            outer_block.append(ast_make_for(searching, self.loop))
-
-        # Update the AST ...
-        # ... adding the newly precomputed blocks
-        insert_at_elem(self.header.children, self.loop, outer_block)
-        # ... scalar-expanding the precomputed symbols
-        ast_update_rank(self.loop, precomputed_syms)
 
     def _unpick_cse(self):
         """Search for factorization opportunities across temporaries created by
         common sub-expression elimination. If a gain in operation count is detected,
         unpick CSE and apply factorization + code motion."""
-        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted,
-                                   self.decls, self.expr_graph)
+        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted, self.decls)
         cse_unpicker.unpick()
 
     def _min_temporaries(self):
@@ -377,6 +256,8 @@ class LoopOptimizer(object):
         # be greated than this value. If we predict that injection will lead
         # to too much temporary space, we have to partially drop it
         threshold = system.architecture['cache_size'] * 1.2
+
+        expr_graph = ExpressionGraph(header)
 
         # 1) Find out and unroll injectable loops. For unrolling we create new
         # expressions; that is, for now, we do not modify the AST in place.
@@ -476,7 +357,7 @@ class LoopOptimizer(object):
                     increase_factor = 0
                     for i in projection:
                         partial = 1
-                        for j in self.expr_graph.shares(i):
+                        for j in expr_graph.shares(i):
                             # _n=number of unique elements, _k=group size
                             _n = injectable[j[0]][1]
                             _k = len(j)

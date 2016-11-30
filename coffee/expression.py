@@ -42,24 +42,18 @@ class MetaExpr(object):
 
     """Metadata container for a compute-intensive expression."""
 
-    def __init__(self, type, parent, loops_info, linear_dims, mode=0):
+    def __init__(self, type, parent, loops_info, mode=0):
         """Initialize the MetaExpr.
 
         :param type: the C type of the expression.
         :param parent: the node in which the expression is embedded.
         :param loops_info: an iterator of 2-tuples; each tuple represents a loop
             enclosing the expression (first entry) and its parent (second entry).
-        :param linear_dims: the dimensions of the linear loops enclosing the
-            expression, as an n-tuple. The expression is affine in the symbols
-            varying along a linear loop. For a formal definition of a linear loop,
-            please refer to the paper ``An algorithm for the optimization of
-            finite element integration loop nests``.
         :param mode: the suggested rewrite mode.
         """
         self._type = type
         self._parent = parent
         self._loops_info = list(loops_info)
-        self._linear_dims = linear_dims
         self._mode = mode
 
     @property
@@ -72,11 +66,15 @@ class MetaExpr(object):
 
     @property
     def linear_dims(self):
-        return self._linear_dims
+        return tuple(l.dim for l in self.linear_loops)
 
     @property
     def out_linear_dims(self):
         return tuple(d for d in self.dims if d not in self.linear_dims)
+
+    @property
+    def reduction_dims(self):
+        return tuple(l.dim for l in self.reduction_loops)
 
     @property
     def loops(self):
@@ -96,15 +94,15 @@ class MetaExpr(object):
 
     @property
     def linear_loops(self):
-        return tuple([l for l in self.loops if l.dim in self.linear_dims])
+        return tuple([l for l in self.loops if l.is_linear])
 
     @property
     def linear_loops_parents(self):
-        return tuple([p for l, p in self._loops_info if l.dim in self.linear_dims])
+        return tuple([p for l, p in self._loops_info if l.is_linear])
 
     @property
     def linear_loops_info(self):
-        return tuple([(l, p) for l, p in self._loops_info if l.dim in self.linear_dims])
+        return tuple([(l, p) for l, p in self._loops_info if l.is_linear])
 
     @property
     def out_linear_loops(self):
@@ -117,6 +115,25 @@ class MetaExpr(object):
     @property
     def out_linear_loops_info(self):
         return tuple([i for i in self.loops_info if i not in self.linear_loops_info])
+
+    @property
+    def reduction_loops(self):
+        stmts = FindInstances((Writer, Incr)).visit(self.parent)
+        if stmts[Incr]:
+            writers = flatten(stmts.values())
+            return tuple(l for l in self.loops
+                         if all(l.dim not in i.lvalue.rank for i in writers))
+        else:
+            return ()
+
+    @property
+    def reduction_loops_parents(self):
+        retval = self.reduction_loops_info
+        return zip(*retval)[1] if retval else ()
+
+    @property
+    def reduction_loops_info(self):
+        return tuple((l, p) for l, p in self.loops_info if l in self.reduction_loops)
 
     @property
     def perfect_loops(self):
@@ -142,6 +159,22 @@ class MetaExpr(object):
     @property
     def outermost_linear_loop_parent(self):
         return self.linear_loops_parents[0] if len(self.linear_loops_parents) > 0 else None
+
+    @property
+    def innermost_loop(self):
+        return self.loops[-1] if len(self.loops) > 0 else None
+
+    @property
+    def innermost_parent(self):
+        return self.loops_parents[-1] if len(self.loops_parents) > 0 else None
+
+    @property
+    def innermost_linear_loop(self):
+        return self.linear_loops[-1] if len(self.linear_loops) > 0 else None
+
+    @property
+    def innermost_linear_loop_parent(self):
+        return self.linear_loops_parents[-1] if len(self.linear_loops_parents) > 0 else None
 
     @property
     def dimension(self):
@@ -176,10 +209,9 @@ def copy_metaexpr(expr_info, **kwargs):
     """Given a ``MetaExpr``, return a plain new ``MetaExpr`` starting from a
     copy of ``expr_info``, and replaces some attributes as specified in
     ``kwargs``. ``kwargs`` accepts the following keys: parent, loops_info,
-    linear_dims, mode."""
+    mode."""
 
     parent = kwargs.get('parent', expr_info.parent)
-    linear_dims = kwargs.get('linear_dims', expr_info.linear_dims)
     mode = kwargs.get('mode', expr_info.mode)
 
     new_loops_info, old_loops_info = [], expr_info.loops_info
@@ -193,4 +225,4 @@ def copy_metaexpr(expr_info, **kwargs):
         else:
             new_loops_info.append(loop_info)
 
-    return MetaExpr(expr_info.type, parent, new_loops_info, linear_dims, mode)
+    return MetaExpr(expr_info.type, parent, new_loops_info, mode)

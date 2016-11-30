@@ -44,6 +44,7 @@ import networkx as nx
 
 from coffee.base import *
 from coffee.visitors.inspectors import *
+from coffee.visitors.utilities import Reconstructor
 
 
 #####################################
@@ -51,40 +52,48 @@ from coffee.visitors.inspectors import *
 #####################################
 
 
-def ast_replace(node, to_replace, copy=False, mode='all'):
-    """Given a dictionary ``to_replace`` s.t. ``{sym: new_sym}``, replace the
-    various ``syms`` rooted in ``node`` with ``new_sym``.
+def ast_replace(node, to_replace, copy=True, mode='all'):
+    """
+    Given the ``to_replace`` dictionary ``{k: v}``, replace each
+    ``k`` rooted in ``node`` with ``v``.
 
-    :param copy: if True, a deep copy of the replacing symbol is created.
+    :param copy: pass False to avoid reconstructing ``v`` each time ``k``
+                 is encountered.
     :param mode: either ``all``, in which case ``to_replace``'s keys are turned
                  into strings, and all of the occurrences are removed from the
                  AST; or ``symbol``, in which case only (all of) the references
                  to the symbols given in ``to_replace`` are replaced.
     """
+    assert mode in ['all', 'symbol']
 
     if mode == 'all':
-        to_replace = dict(zip([str(s) for s in to_replace.keys()], to_replace.values()))
-        __ast_replace = lambda n: to_replace.get(str(n))
-    elif mode == 'symbol':
-        __ast_replace = lambda n: to_replace.get(n)
+        to_replace = {str(k): v for k, v in to_replace.items()}
+        should_replace = lambda n: to_replace.get(str(n))
     else:
-        raise ValueError
+        should_replace = lambda n: to_replace.get(n)
 
-    def _ast_replace(node, to_replace, n_replaced):
-        replaced = {}
+    replacements = []
+
+    def _ast_replace(node, to_replace):
+        replaced_children = {}
         for i, n in enumerate(node.children):
-            replacing = __ast_replace(n)
-            if replacing:
-                replaced[i] = replacing if not copy else dcopy(replacing)
-                n_replaced[str(replacing)] += 1
+            v = should_replace(n)
+            if v:
+                replaced_children[i] = ast_reconstruct(v) if copy else v
+                replacements.append(replaced_children[i])
             else:
-                _ast_replace(n, to_replace, n_replaced)
-        for i, r in replaced.items():
+                _ast_replace(n, to_replace)
+        for i, r in replaced_children.items():
             node.children[i] = r
 
-    n_replaced = defaultdict(int)
-    _ast_replace(node, to_replace, n_replaced)
-    return n_replaced
+    _ast_replace(node, to_replace)
+
+    return replacements
+
+
+def ast_reconstruct(node):
+    """Recursively reconstruct ``node``."""
+    return Reconstructor().visit(node)
 
 
 def ast_update_ofs(node, ofs, **kwargs):
@@ -121,24 +130,15 @@ def ast_update_rank(node, mapper):
     ``rank``.
 
     :arg node: Root AST node
-    :arg mapper: Describe how to change the rank of a symbol.
-    :type mapper: a dictionary. Keys can either be Symbols -- in which case
-        values are interpreted as dimensions to be added to the rank -- or
-        actual ranks (strings, integers) -- which means rank dimensions are
-        replaced; for example, if mapper={'i': 'j'} and node='A[i] = B[i]',
-        node will be transformed into 'A[j] = B[j]'
+    :arg mapper: Describe how to change the rank of a symbol. For example,
+        if mapper={'i': 'j'} and node='A[i] = B[i]', then node will be
+        transformed into 'A[j] = B[j]'
     """
 
-    symbols = FindInstances(Symbol).visit(node, ret=FindInstances.default_retval())[Symbol]
-    for s in symbols:
-        if mapper.get(s.symbol):
-            # Add a dimension
-            s.rank = mapper[s.symbol] + s.rank
-        else:
-            # Try to replace dimensions
-            s.rank = tuple([r if r not in mapper else mapper[r] for r in s.rank])
-
-    return node
+    retval = FindInstances.default_retval()
+    FindInstances(Symbol).visit(node, ret=retval)
+    for s in retval[Symbol]:
+        s.rank = tuple([r if r not in mapper else mapper[r] for r in s.rank])
 
 
 def ast_update_id(symbol, name, id):
@@ -285,6 +285,7 @@ def loops_analysis(node, key='default', value='default'):
     :arg value: any value in ['default', 'dim']. If 'dim' is specified, then
         loop iteration dimensions are used in place of the actual object.
     """
+    symbols_dep = visit(node, info_items=['symbols_dep'])['symbols_dep']
 
     if key == 'default':
         gen_key = lambda s: s
@@ -296,16 +297,16 @@ def loops_analysis(node, key='default', value='default'):
         raise RuntimeError("Illegal key=%s for loop dependence analysis" % key)
 
     if value == 'default':
-        gen_value = lambda d: set(d)
+        lda = defaultdict(list)
+        update = lambda i, dep: i.extend(list(dep))
     elif value == 'dim':
-        gen_value = lambda d: {l.dim for l in d}
+        lda = defaultdict(set)
+        update = lambda i, dep: i.update({j.dim for j in dep})
     else:
         raise RuntimeError("Illegal value=%s for loop dependence analysis" % value)
 
-    symbols_dep = visit(node, info_items=['symbols_dep'])['symbols_dep']
-    lda = defaultdict(set)
     for s, dep in symbols_dep.items():
-        lda[gen_key(s)] |= gen_value(dep)
+        update(lda[gen_key(s)], dep)
 
     return lda
 
@@ -366,13 +367,41 @@ def in_written(node, key='default'):
     elif key == 'symbol':
         gen_key = lambda s: s.symbol
     else:
-        raise RuntimeError("Illegal key=%s for loop dependence analysis" % key)
+        raise RuntimeError("Illegal key=%s for in_written" % key)
 
     found = []
-    writers = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
+    writers = FindInstances(Writer).visit(node)
     for type, stmts in writers.items():
         for stmt in stmts:
             found.append(gen_key(stmt.lvalue))
+
+    return found
+
+
+def in_read(node, key='default'):
+    """
+    Return a list of symbols read in ``node``.
+
+    :arg key: any value in ['default', 'urepr', 'symbol']. With 'urepr' and
+        'symbol' different instances of the same Symbol are represented by
+        a single entry in the returned dictionary.
+    """
+
+    if key == 'default':
+        gen_key = lambda s: s
+    elif key == 'urepr':
+        gen_key = lambda s: s.urepr
+    elif key == 'symbol':
+        gen_key = lambda s: s.symbol
+    else:
+        raise RuntimeError("Illegal key=%s for in_read" % key)
+
+    found = []
+    writers = FindInstances(Writer).visit(node)
+    for type, stmts in writers.items():
+        for stmt in stmts:
+            reads = FindInstances(Symbol).visit(stmt.rvalue)[Symbol]
+            found.extend([gen_key(s) for s in reads])
 
     return found
 
@@ -449,6 +478,33 @@ def find_expression(node, type=None, dims=None, in_syms=None, out_syms=None):
     if 'in_itspace' in exprs:
         exprs.pop('in_itspace')
     return exprs
+
+
+def summands(node):
+    """
+    Return the top-level summands in /node/.
+
+    Examples
+    ========
+
+    a + b --> [a, b]
+    a*b*c --> [a*b*c]
+    a*b*c + c*d --> [a*b*c, c*d]
+    (a+b)*c + d --> [(a+b)*c, d]
+    foo(a) --> []
+    """
+
+    handle = list(zip(*explore_operator(node)))
+    if not handle:
+        return []
+    operands, parents = handle
+    if all(isinstance(p, Sum) for p in parents):
+        return operands
+    elif all(isinstance(p, Prod) for p in parents):
+        # Single top-level summand
+        return [node]
+    else:
+        return []
 
 
 #######################################################################
@@ -762,6 +818,15 @@ bind = lambda a, b: [(a, v) for v in b]
 od_find_next = lambda a, b: a.values()[a.keys().index(b)+1]
 
 
+def as_urepr(l):
+    convert = lambda i: i.urepr if isinstance(i, Symbol) else i
+    try:
+        converted = [convert(i) for i in l]
+    except TypeError:
+        converted = convert(l)
+    return tuple(converted)
+
+
 def is_const_dim(d):
     return isinstance(d, int) or (isinstance(d, str) and d.isdigit())
 
@@ -778,6 +843,19 @@ def uniquify(exprs):
     have been discarded. This function considers two expressions identical if they
     have the same string representation."""
     return OrderedDict([(e.urepr, e) for e in exprs]).values()
+
+
+def remove_empty_loops(node):
+    """Remove all empty loops within node."""
+
+    for nest in visit(node, info_items=['fors'])['fors']:
+        to_remove = (None, None)
+        for loop, parent in reversed(nest):
+            if not loop.body or all(i == to_remove[0] for i in loop.body):
+                to_remove = (loop, parent)
+        if all(to_remove):
+            loop, parent = to_remove
+            parent.children.remove(loop)
 
 
 def postprocess(node):

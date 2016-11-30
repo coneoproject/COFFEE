@@ -35,6 +35,8 @@ from __future__ import absolute_import, print_function, division
 from six.moves import zip
 
 from collections import Counter
+from itertools import combinations
+from operator import itemgetter
 import pulp as ilp
 
 from .base import *
@@ -54,7 +56,7 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt, expr_info, decls, header=None, hoisted=None, expr_graph=None):
+    def __init__(self, stmt, expr_info, decls, header=None, hoisted=None):
         """Initialize the ExpressionRewriter.
 
         :param stmt: the node whose rvalue is the expression for rewriting
@@ -62,19 +64,17 @@ class ExpressionRewriter(object):
         :param decls: all declarations for the symbols in ``stmt``.
         :param header: the kernel's top node
         :param hoisted: dictionary that tracks all hoisted expressions
-        :param expr_graph: a graph for data dependence analysis
         """
         self.stmt = stmt
         self.expr_info = expr_info
         self.decls = decls
         self.header = header or Root()
         self.hoisted = hoisted if hoisted is not None else StmtTracker()
-        self.expr_graph = expr_graph or ExpressionGraph(self.header)
 
         self.expr_hoister = Hoister(self.stmt, self.expr_info, self.header,
-                                    self.decls, self.hoisted, self.expr_graph)
+                                    self.decls, self.hoisted)
         self.expr_expander = Expander(self.stmt, self.expr_info, self.decls,
-                                      self.hoisted, self.expr_graph)
+                                      self.hoisted)
         self.expr_factorizer = Factorizer(self.stmt)
 
     def licm(self, mode='normal', **kwargs):
@@ -84,13 +84,18 @@ class ExpressionRewriter(object):
             http://dl.acm.org/citation.cfm?id=2687415
 
         :param mode: drive code motion by specifying what subexpressions should
-            be hoisted
+            be hoisted and where.
             * normal: (default) all subexpressions that depend on one loop at most
             * aggressive: all subexpressions, depending on any number of loops.
                 This may require introducing N-dimensional temporaries.
+            * incremental: apply, in sequence, only_const, only_outlinear, and
+                one sweep for each linear dimension
             * only_const: only all constant subexpressions
             * only_linear: only all subexpressions depending on linear loops
             * only_outlinear: only all subexpressions independent of linear loops
+            * reductions: all sub-expressions that are redundantly computed within
+                a reduction loop; if possible, pull the reduction loop out of
+                the nest.
         :param kwargs:
             * look_ahead: (default: False) should be set to True if only a projection
                 of the hoistable subexpressions is needed (i.e., hoisting not performed)
@@ -105,14 +110,110 @@ class ExpressionRewriter(object):
             * global_cse: (default: False) search for common sub-expressions across
                 all previously hoisted terms. Note that no data dependency analysis is
                 performed, so this is at caller's risk.
+            * with_promotion: compute hoistable subexpressions within clone loops
+                even though this doesn't necessarily result in fewer operations.
+
+        Examples
+        ========
+
+        1) With mode='normal': ::
+
+            for i
+              for j
+                for k
+                  a[j][k] += (b[i][j] + c[i][j])*(d[i][k] + e[i][k])
+
+        Redundancies are spotted along both the i and j dimensions, resulting in: ::
+
+            for i
+              for k
+                ct1[k] = d[i][k] + e[i][k]
+              for j
+                ct2 = b[i][j] + c[i][j]
+                for k
+                  a[j][k] += ct2*ct1[k]
+
+        2) With mode='reductions'.
+        Consider the following loop nest: ::
+
+            for i
+              for j
+                a[j] += b[j]*c[i]
+
+        By unrolling the loops, one clearly sees that: ::
+
+            a[0] += b[0]*c[0] + b[0]*c[1] + b[0]*c[2] + ...
+            a[1] += b[1]*c[0] + b[1]*c[1] + b[1]*c[2] + ...
+
+        Which is identical to: ::
+
+            ct = c[0] + c[1] + c[2] + ...
+            a[0] += b[0]*ct
+            a[1] += b[1]*ct
+
+        Thus, the original loop nest is simplified as: ::
+
+            for i
+              ct += c[i]
+            for j
+              a[j] += b[j]*ct
         """
 
+        dimension = self.expr_info.dimension
+        dims = set(self.expr_info.dims)
+        linear_dims = set(self.expr_info.linear_dims)
+        out_linear_dims = set(self.expr_info.out_linear_dims)
+
         if kwargs.get('look_ahead'):
-            return self.expr_hoister.extract(mode, **kwargs)
-        if mode == 'aggressive':
-            # Reassociation may promote more hoisting in /aggressive/ mode
+            hoist = self.expr_hoister.extract
+        else:
+            hoist = self.expr_hoister.licm
+
+        if mode == 'normal':
+            should_extract = lambda d: d != dims
+            hoist(should_extract, **kwargs)
+        elif mode == 'reductions':
+            should_extract = lambda d: d != dims
+            # Expansion and reassociation may create hoistable reduction loops
+            candidates = self.expr_info.reduction_loops
+            if not candidates:
+                return self
+            candidate = candidates[-1]
+            if candidate.size == 1:
+                # Otherwise the operation count will just end up increasing
+                return
+            self.expand(mode='all')
+            lda = loops_analysis(self.header, value='dim')
+            non_candidates = {l.dim for l in candidates[:-1]}
+            self.reassociate(lambda i: not lda[i].intersection(non_candidates))
+            hoist(should_extract, with_promotion=True, lda=lda)
+            self.expr_hoister.trim(candidate)
+        elif mode == 'incremental':
+            lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
+            should_extract = lambda d: not (d and d.issubset(dims))
+            hoist(should_extract, lda=lda)
+            should_extract = lambda d: d.issubset(out_linear_dims)
+            hoist(should_extract, lda=lda)
+            for i in range(1, dimension):
+                should_extract = lambda d: len(d.intersection(linear_dims)) <= i
+                hoist(should_extract, lda=lda, **kwargs)
+        elif mode == 'only_const':
+            should_extract = lambda d: not (d and d.issubset(dims))
+            hoist(should_extract, **kwargs)
+        elif mode == 'only_outlinear':
+            should_extract = lambda d: d.issubset(out_linear_dims)
+            hoist(should_extract, **kwargs)
+        elif mode == 'only_linear':
+            should_extract = lambda d: not d.issubset(out_linear_dims) and d != linear_dims
+            hoist(should_extract, **kwargs)
+        elif mode == 'aggressive':
+            should_extract = lambda d: True
             self.reassociate()
-        self.expr_hoister.licm(mode, **kwargs)
+            hoist(should_extract, with_promotion=True, **kwargs)
+        else:
+            warn('Skipping unknown licm strategy.')
+            return self
+
         return self
 
     def expand(self, mode='standard', **kwargs):
@@ -308,7 +409,7 @@ class ExpressionRewriter(object):
             if isinstance(node, (Symbol, Div)):
                 return
 
-            elif isinstance(node, (Sum, Sub, FunCall)):
+            elif isinstance(node, (Sum, Sub, FunCall, Ternary)):
                 for n in node.children:
                     _reassociate(n, node)
 
@@ -443,40 +544,55 @@ class ExpressionRewriter(object):
             self.header.children.remove(hoisted_loop)
         return self
 
-    def SGrewrite(self):
+    def sharing_graph_rewrite(self):
         """Rewrite the expression based on its sharing graph. Details in the
         paper:
 
-            On Optimality of Finite Element Integration, Luporini et. al.
+            An algorithm for the optimization of finite element integration loops
+            (Luporini et. al.)
         """
-        lda = loops_analysis(self.expr_info.linear_loops[0], key='symbol', value='dim')
-        sg_visitor = SharingGraph(self.expr_info, lda)
+        linear_dims = self.expr_info.linear_dims
+        other_dims = self.expr_info.out_linear_dims
 
-        # Maximize the visibility of linear symbols
-        sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
-        if 'topsum' in mapper:
-            self.expand(mode='linear', subexprs=[mapper['topsum']])
-            sgraph, mapper = sg_visitor.visit(self.stmt.rvalue)
+        # Maximize visibility of linear symbols
+        self.expand(mode='all')
 
-        nodes, edges = sgraph.nodes(), sgraph.edges()
+        # Make sure that potential reductions are not hidden away
+        lda = loops_analysis(self.header, value='dim')
+        self.reassociate(lambda i: (not lda[i]) + lda[i].issubset(set(other_dims)))
 
-        if self.expr_info.is_linear:
+        # Construct the sharing graph
+        nodes, edges = [], []
+        for i in summands(self.stmt.rvalue):
+            symbols = [i] if isinstance(i, Symbol) else list(zip(*explore_operator(i)))[0]
+            lsymbols = [s for s in symbols if any(d in lda[s] for d in linear_dims)]
+            lsymbols = [s.urepr for s in lsymbols]
+            nodes.extend([j for j in lsymbols if j not in nodes])
+            edges.extend(combinations(lsymbols, r=2))
+        sgraph = nx.Graph(edges)
+
+        # Transform everything outside the sharing graph (pure linear, no ambiguity)
+        isolated = [n for n in nodes if n not in sgraph.nodes()]
+        for n in isolated:
             self.factorize(mode='adhoc', adhoc={n: [] for n in nodes})
-            self.licm('only_outlinear')
-        elif self.expr_info.is_bilinear:
-            # Resort to an ILP formulation to find out the best factorization candidates
-            if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
-                self.factorize(mode='heuristic')
-                self.licm(mode='only_outlinear')
-                return
-            # Note: need to use short variable names otherwise Pulp might complain
-            nodes_vars = {i: n for i, n in enumerate(nodes)}
-            vars_nodes = {n: i for i, n in nodes_vars.items()}
-            edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
+            self.licm('only_const').licm('only_outlinear')
 
+        # Transform the expression based on the sharing graph
+        nodes, edges = sgraph.nodes(), sgraph.edges()
+        if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
+            self.factorize(mode='heuristic')
+            self.licm('only_const').licm('only_outlinear')
+            return
+        # Use short variable names otherwise Pulp might complain
+        nodes_vars = {i: n for i, n in enumerate(nodes)}
+        vars_nodes = {n: i for i, n in nodes_vars.items()}
+        edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
+
+        def setup():
             # ... declare variables
             x = ilp.LpVariable.dicts('x', nodes_vars.keys(), 0, 1, ilp.LpBinary)
-            y = ilp.LpVariable.dicts('y', [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
+            y = ilp.LpVariable.dicts('y',
+                                     [(i, j) for i, j in edges] + [(j, i) for i, j in edges],
                                      0, 1, ilp.LpBinary)
             limits = defaultdict(int)
             for i, j in edges:
@@ -496,20 +612,37 @@ class ExpressionRewriter(object):
             # ... define the objective function (min number of factorizations)
             prob += ilp.lpSum(x[i] for i in nodes_vars)
 
-            # ... solve the problem
-            prob.solve(ilp.GLPK(msg=0))
+            return x, prob
 
-            # Finally, factorize and hoist (note: the order in which factorizations are carried
-            # out is crucial)
-            nodes = [nodes_vars[n] for n, v in x.items() if v.value() == 1]
-            other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
-            for n in nodes + other_nodes:
-                self.factorize(mode='adhoc', adhoc={n: []})
-            self.licm()
+        # Solve the ILP problem to find out the minimal-cost factorization strategy
+        x, prob = setup()
+        prob.solve(ilp.GLPK(msg=0))
+
+        # Also attempt to find another optimal factorization, but with
+        # additional constraints on the reduction dimensions. This may help in
+        # later rewrite steps
+        if len(other_dims) > 1:
+            z, prob = setup()
+            for i, n in nodes_vars.items():
+                if not set(n[1]).intersection(set(other_dims[:-1])):
+                    prob += z[i] == 0
+            prob.solve(ilp.GLPK(msg=0))
+            if ilp.LpStatus[prob.status] == 'Optimal':
+                x = z
+
+        # ... finally, apply the transformations. Observe that:
+        # 1) the order (first /nodes/, than /other_nodes/) in which
+        #    the factorizations are carried out is crucial
+        # 2) sorting /nodes/ and /other_nodes/ locally ensures guarantees
+        #    deterministic output code
+        # 3) precedence is given to outer reduction loops; this maximises the
+        #    impact of later transformations, while not affecting this pass
+        # 4) with_promotion is set to true if there exist potential reductions
+        #    to simplify
+        nodes = [nodes_vars[n] for n, v in x.items() if v.value() == 1]
+        other_nodes = [nodes_vars[n] for n, v in x.items() if nodes_vars[n] not in nodes]
+        for n in sorted(nodes, key=itemgetter(1)) + sorted(other_nodes):
+            self.factorize(mode='adhoc', adhoc={n: []})
+        self.licm('incremental', with_promotion=len(other_dims) > 1)
 
         return self
-
-    @staticmethod
-    def reset():
-        Hoister._handled = 0
-        Expander._handled = 0

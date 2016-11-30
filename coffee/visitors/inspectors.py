@@ -1,6 +1,6 @@
 from __future__ import absolute_import, print_function, division
 from coffee.visitor import Visitor
-from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol, EmptyStatement
+from coffee.base import READ, WRITE, LOCAL, EXTERNAL, Symbol, EmptyStatement, Writer
 from collections import defaultdict, OrderedDict, Counter
 import itertools
 
@@ -195,9 +195,6 @@ class FindCoffeeExpressions(Visitor):
 
     """
 
-    def extract_linear_dimensions(self, symbol):
-        return tuple(i for i in symbol.rank if isinstance(i, str) and not i.isdigit())
-
     def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
@@ -216,8 +213,8 @@ class FindCoffeeExpressions(Visitor):
             if len(opts) < 3:
                 continue
             if opts[1] == "coffee" and opts[2] == "expression":
-                # (parent, loop-nest, rank)
-                ret[o] = (parent, None, self.extract_linear_dimensions(o.lvalue))
+                # (parent, loop-nest)
+                ret[o] = (parent, None)
                 return ret
         return ret
 
@@ -238,7 +235,7 @@ class FindCoffeeExpressions(Visitor):
         # Add nest structure to new items
         keys = list(ret.keys())[nval:]
         for k in keys:
-            p, nest, rank = ret[k]
+            p, nest = ret[k]
             if nest is None:
                 # Statement is directly underneath this loop, so the
                 # loop nest structure is just the current loop
@@ -247,7 +244,7 @@ class FindCoffeeExpressions(Visitor):
                 # Inside a nested set of loops, so prepend current
                 # loop info to nest structure
                 nest = [me] + nest
-            ret[k] = p, nest, rank
+            ret[k] = p, nest
         return ret
 
 
@@ -566,6 +563,17 @@ class FindInstances(Visitor):
         self.with_parent = with_parent
         super(FindInstances, self).__init__()
 
+    def useless_traversal(self, o):
+        """
+        Return True if the traversal of the sub-tree rooted in o
+        is useless given that we are searching for nodes of type /t/
+
+        E.g., Writers cannot be nested.
+        """
+        if isinstance(o, Writer) and self.types == Writer:
+            return True
+        return False
+
     def visit_object(self, o, ret=None, *args, **kwargs):
         return ret
 
@@ -583,6 +591,8 @@ class FindInstances(Visitor):
             # Don't traverse children if stop-on-found
             if self.stop_when_found:
                 return ret
+        if self.useless_traversal(o):
+            return ret
         # Not found, or traversing children anyway
         ops, _ = o.operands()
         for op in ops:

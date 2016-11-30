@@ -85,7 +85,6 @@ class ASTKernel(object):
             vectorize = opts.get('vectorize', (None, None))
             align_pad = opts.get('align_pad')
             split = opts.get('split')
-            precompute = opts.get('precompute')
             dead_ops_elimination = opts.get('dead_ops_elimination')
 
             info = visit(kernel)
@@ -93,10 +92,10 @@ class ASTKernel(object):
             # Collect expressions and related metadata
             nests = defaultdict(OrderedDict)
             for stmt, expr_info in info['exprs'].items():
-                parent, nest, linear_dims = expr_info
+                parent, nest = expr_info
                 if not nest:
                     continue
-                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, linear_dims)
+                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest)
                 nests[nest[0]].update({stmt: metaexpr})
             loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
                          for (loop, header), exprs in nests.items()]
@@ -126,8 +125,6 @@ class ASTKernel(object):
                 # 2) Code specialization
                 if split:
                     loop_opt.split(split)
-                if precompute:
-                    loop_opt.precompute(precompute)
                 if coffee.initialized and flatten(loop_opt.expr_linear_loops):
                     vect = LoopVectorizer(loop_opt, kernel)
                     if align_pad:
@@ -190,10 +187,10 @@ class ASTKernel(object):
             # Structure up expressions and related metadata
             nests = defaultdict(OrderedDict)
             for stmt, expr_info in info['exprs'].items():
-                parent, nest, linear_dims = expr_info
+                parent, nest = expr_info
                 if not nest:
                     continue
-                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest, linear_dims)
+                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest)
                 nests[nest[0]].update({stmt: metaexpr})
 
             loop_opts = [GPULoopOptimizer(l, header, decls) for l, header in nests]
