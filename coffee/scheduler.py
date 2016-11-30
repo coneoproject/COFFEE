@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six import iteritems
 from six.moves import range, zip
 
 from collections import OrderedDict, defaultdict
@@ -835,7 +836,7 @@ class ZeroRemover(LoopScheduler):
             # Split the main expressions to maximize the impact of the rescheduling (this
             # helps if different summands have zero-valued blocks at different offsets)
             elf = ExpressionFissioner(cut=1, loops='none')
-            for stmt, expr_info in self.exprs.items():
+            for stmt, expr_info in list(iteritems(self.exprs)):
                 if expr_info.is_scalar:
                     continue
                 self.exprs.pop(stmt)
