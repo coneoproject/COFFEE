@@ -70,8 +70,7 @@ class ASTKernel(object):
 
         start_time = time.time()
 
-        finder = FindInstances(FunDecl, stop_when_found=True)
-        kernels = finder.visit(self.ast, ret=FindInstances.default_retval())[FunDecl]
+        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
 
         if opts is None:
             opts = coffee.OptimizationLevel.retrieve(coffee.options['optimizations'])
@@ -189,7 +188,7 @@ class ASTKernel(object):
                     continue
                 metaexpr = MetaExpr(check_type(stmt, info['decls']), parent, nest)
                 nests[nest[0]].update({stmt: metaexpr})
-            loop_opts = [CPULoopOptimizer(loop, header, exprs)
+            loop_opts = [GPULoopOptimizer(loop, header, exprs)
                          for (loop, header), exprs in nests.items()]
 
             for loop_opt in loop_opts:

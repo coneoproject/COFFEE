@@ -69,9 +69,9 @@ class ExpressionRewriter(object):
         self.header = header or Root()
         self.hoisted = hoisted if hoisted is not None else StmtTracker()
 
-        self.expr_hoister = Hoister(self.stmt, self.expr_info, self.header, self.hoisted)
-        self.expr_expander = Expander(self.stmt, self.expr_info, self.hoisted)
-        self.expr_factorizer = Factorizer(self.stmt)
+        self.codemotion = Hoister(self.stmt, self.expr_info, self.header, self.hoisted)
+        self.expander = Expander(self.stmt)
+        self.factorizer = Factorizer(self.stmt)
 
     def licm(self, mode='normal', **kwargs):
         """Perform generalized loop-invariant code motion, a transformation
@@ -161,9 +161,9 @@ class ExpressionRewriter(object):
         out_linear_dims = set(self.expr_info.out_linear_dims)
 
         if kwargs.get('look_ahead'):
-            hoist = self.expr_hoister.extract
+            hoist = self.codemotion.extract
         else:
-            hoist = self.expr_hoister.licm
+            hoist = self.codemotion.licm
 
         if mode == 'normal':
             should_extract = lambda d: d != dims
@@ -183,7 +183,7 @@ class ExpressionRewriter(object):
             non_candidates = {l.dim for l in candidates[:-1]}
             self.reassociate(lambda i: not lda[i].intersection(non_candidates))
             hoist(should_extract, with_promotion=True, lda=lda)
-            self.expr_hoister.trim(candidate)
+            self.codemotion.trim(candidate)
         elif mode == 'incremental':
             lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
             should_extract = lambda d: not (d and d.issubset(dims))
@@ -292,7 +292,7 @@ class ExpressionRewriter(object):
             warn('Skipping unknown expansion strategy.')
             return
 
-        self.expr_expander.expand(should_expand, **kwargs)
+        self.expander.expand(should_expand, **kwargs)
         return self
 
     def factorize(self, mode='standard', **kwargs):
@@ -384,7 +384,7 @@ class ExpressionRewriter(object):
             return
 
         # Perform the factorization
-        self.expr_factorizer.factorize(should_factorize, **kwargs)
+        self.factorizer.factorize(should_factorize, **kwargs)
         return self
 
     def reassociate(self, reorder=None):

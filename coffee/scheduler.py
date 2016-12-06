@@ -824,8 +824,10 @@ class ZeroRemover(LoopScheduler):
         # read-after-write dependencies)
         linear_expr_loops = [(l for l in ei.linear_loops) for ei in self.exprs.values()]
         linear_expr_loops = set(flatten(linear_expr_loops))
-        candidates = [l for l in inner_loops(root) if not l.is_linear or l in linear_expr_loops]
-        candidates = [l for l in candidates if not ExpressionGraph(l.body).has_dependency()]
+        candidates = [l for l in inner_loops(root)
+                      if not l.is_linear or l in linear_expr_loops]
+        candidates = [l for l in candidates
+                      if not ExpressionGraph(l.body).has_dependency()]
         if not candidates:
             return {}
 

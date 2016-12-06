@@ -141,18 +141,6 @@ def ast_update_rank(node, mapper):
         s.rank = tuple([r if r not in mapper else mapper[r] for r in s.rank])
 
 
-def ast_update_id(symbol, name, id):
-    """Search for string ``name`` in Symbol ``symbol`` and replaces all of the
-    occurrences of ``name`` with ``name_id``."""
-    if not isinstance(symbol, Symbol):
-        return
-    new_name = "%s_%s" % (name, str(id))
-    if name == symbol.symbol:
-        symbol.symbol = new_name
-    new_rank = [new_name if name == r else r for r in symbol.rank]
-    symbol.rank = tuple(new_rank)
-
-
 ###############################################
 # Functions to simplify creation of AST nodes #
 ###############################################
@@ -311,17 +299,12 @@ def loops_analysis(node, key='default', value='default'):
     return lda
 
 
-def reachability_analysis(node, decls=None):
-    """Perform reachability analysis in the AST rooted in ``node``. Return
-    a dictionary mapping symbols to scopes in which they are visible.
-
-    :param decls: an iterator of :class:`Decl`s which are known to be visible
-        within ``node``
+def reachability_analysis(node):
     """
-    symbols_vis, scopes = SymbolVisibility().visit(node)
-    for d in decls:
-        symbols_vis[d].extend(scopes)
-    return symbols_vis
+    Perform reachability analysis in the AST rooted in ``node``. Return
+    a dictionary mapping symbols to scopes in which they are visible.
+    """
+    return SymbolVisibility().visit(node)[0]
 
 
 def explore_operator(node):

@@ -177,28 +177,28 @@ class LoopOptimizer(object):
             * it is written once, AND
             * it is read once OR it is read n times, but it hosts only a Symbol
         """
-        occs = count(self.header, mode='symbol_id', read_only=True)
+
+        occurrences = count(self.header, mode='symbol_id', read_only=True)
 
         for l in self.hoisted.all_loops:
-            info = visit(l)
-            l_occs = count(l, read_only=True)
+            info = visit(l, info_items=['symbol_refs', 'symbols_mode'])
             to_replace, to_remove = {}, []
-            for (temporary, _, _), temporary_occs in l_occs.items():
+            for (temporary, _, _), c in count(l, read_only=True).items():
                 if temporary not in self.hoisted:
                     continue
                 if self.hoisted[temporary].loop is not l:
                     continue
-                if occs.get(temporary) != temporary_occs:
+                if occurrences.get(temporary) != c:
                     continue
                 decl = self.hoisted[temporary].decl
                 place = self.hoisted[temporary].place
                 expr = self.hoisted[temporary].stmt.rvalue
-                if temporary_occs > 1 and explore_operator(expr):
+                if c > 1 and explore_operator(expr):
                     continue
-                temporary_refs = info['symbol_refs'][temporary]
+                references = info['symbol_refs'][temporary]
                 syms_mode = info['symbols_mode']
                 # Note: only one write is possible at this point
-                write = [(s, p) for s, p in temporary_refs if syms_mode[s][0] == WRITE][0]
+                write = [(s, p) for s, p in references if syms_mode[s][0] == WRITE][0]
                 to_replace[write[0]] = expr
                 to_remove.append(write[1])
                 place.children.remove(decl)
