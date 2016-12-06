@@ -478,15 +478,13 @@ class ZeroRemover(LoopScheduler):
 
     THRESHOLD = 1  # Only skip if there more than THRESHOLD consecutive zeros
 
-    def __init__(self, exprs, decls, hoisted):
+    def __init__(self, exprs, hoisted):
         """Initialize the ZeroRemover.
 
         :param exprs: the expressions for which zero removal is performed.
-        :param decls: lists of declarations visible to ``exprs``.
         :param hoisted: dictionary that tracks hoisted sub-expressions
         """
         self.exprs = exprs
-        self.decls = decls
         self.hoisted = hoisted
 
     def _track_nz_expr(self, node, nz_syms, nest):
@@ -658,7 +656,7 @@ class ZeroRemover(LoopScheduler):
         else:
             raise ControlFlowError
 
-    def _reschedule_itspace(self, root, candidates):
+    def _reschedule_itspace(self, root, candidates, decls):
         """Consider two statements A and B, and their iteration space. If the
         two iteration spaces have
 
@@ -688,9 +686,9 @@ class ZeroRemover(LoopScheduler):
         """
         nz_info = OrderedDict()
 
-        # Elaborate the initial sparsity pattern of the symbols in /root/
+        # Compute the initial sparsity pattern of the symbols in /root/
         nz_syms = defaultdict(list)
-        for s, d in self.decls.items():
+        for s, d in decls.items():
             if not d.nonzero:
                 continue
             for nz_b in product(*d.nonzero):
@@ -786,8 +784,7 @@ class ZeroRemover(LoopScheduler):
                     new_exprs[stmt] = self.exprs[i]
 
         for stmt, expr_info in new_exprs.items():
-            ew = ExpressionRewriter(stmt, expr_info, self.decls,
-                                    expr_info.outermost_parent, self.hoisted)
+            ew = ExpressionRewriter(stmt, expr_info)
             ew.factorize('heuristic')
 
         if new_exprs:
@@ -816,9 +813,10 @@ class ZeroRemover(LoopScheduler):
         zero-valued data spaces. This is achieved through symbolic execution
         starting from ``root``. Control flow, in the form of If, Switch, etc.,
         is forbidden."""
+        decls = visit(root, info_items=['decls'])['decls']
 
         # Avoid rescheduling if zero-valued blocks are too small
-        zero_decls = [d for d in self.decls.values() if d.nonzero]
+        zero_decls = [d for d in decls.values() if d.nonzero]
         if self._should_skip(zero_decls):
             return {}
 
@@ -842,12 +840,12 @@ class ZeroRemover(LoopScheduler):
                 self.exprs.update(elf.fission(stmt, expr_info))
 
             # Apply the rescheduling
-            nz_syms, nz_info = self._reschedule_itspace(root, candidates)
+            nz_syms, nz_info = self._reschedule_itspace(root, candidates, decls)
 
             # Finally, "inline" the expressions that were originally split, if possible
             self._recombine(nz_info)
         else:
             # Apply the rescheduling
-            nz_syms, nz_info = self._reschedule_itspace(root, candidates)
+            nz_syms, nz_info = self._reschedule_itspace(root, candidates, decls)
 
         return nz_syms

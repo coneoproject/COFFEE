@@ -87,17 +87,16 @@ class ASTKernel(object):
             split = opts.get('split')
             dead_ops_elimination = opts.get('dead_ops_elimination')
 
-            info = visit(kernel)
-            decls = info['decls']
+            info = visit(kernel, info_items=['decls', 'exprs'])
             # Collect expressions and related metadata
             nests = defaultdict(OrderedDict)
             for stmt, expr_info in info['exprs'].items():
                 parent, nest = expr_info
                 if not nest:
                     continue
-                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest)
+                metaexpr = MetaExpr(check_type(stmt, info['decls']), parent, nest)
                 nests[nest[0]].update({stmt: metaexpr})
-            loop_opts = [CPULoopOptimizer(loop, header, decls, exprs)
+            loop_opts = [CPULoopOptimizer(loop, header, exprs)
                          for (loop, header), exprs in nests.items()]
 
             # Combining certain optimizations is forbidden.
@@ -178,22 +177,21 @@ class ASTKernel(object):
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
-        retval = FindInstances.default_retval()
-        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast,
-                                                                     ret=retval)[FunDecl]
+        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
+
         for kernel in kernels:
             info = visit(kernel, info_items=['decls', 'exprs'])
-            decls = info['decls']
-            # Structure up expressions and related metadata
+            # Collect expressions and related metadata
             nests = defaultdict(OrderedDict)
             for stmt, expr_info in info['exprs'].items():
                 parent, nest = expr_info
                 if not nest:
                     continue
-                metaexpr = MetaExpr(check_type(stmt, decls), parent, nest)
+                metaexpr = MetaExpr(check_type(stmt, info['decls']), parent, nest)
                 nests[nest[0]].update({stmt: metaexpr})
+            loop_opts = [CPULoopOptimizer(loop, header, exprs)
+                         for (loop, header), exprs in nests.items()]
 
-            loop_opts = [GPULoopOptimizer(l, header, decls) for l, header in nests]
             for loop_opt in loop_opts:
                 itspace_vrs, accessed_vrs = loop_opt.extract()
 

@@ -75,7 +75,6 @@ class LoopVectorizer(object):
         self.kernel = kernel or loop_opt.header
         self.header = loop_opt.header
         self.loop = loop_opt.loop
-        self.decls = loop_opt.decls
         self.exprs = loop_opt.exprs
         self.nz_syms = loop_opt.nz_syms
 
@@ -140,29 +139,27 @@ class LoopVectorizer(object):
         :arg p_dim: the array dimension that should be padded (defaults to the
             innermost, or -1)
         """
-        buffer = self._pad(p_dim)
-        if buffer:
-            self._align_data(buffer, p_dim)
-
-    def _pad(self, p_dim):
-        """Apply padding."""
-        info = visit(self.header, info_items=['fors', 'symbols_dep',
+        info = visit(self.header, info_items=['decls', 'fors', 'symbols_dep',
                                               'symbols_mode', 'symbol_refs'])
-        symbols_dep = info['symbols_dep']
-        symbols_mode = info['symbols_mode']
-        symbol_refs = info['symbol_refs']
-        retval = FindInstances.default_retval()
-        to_invert = FindInstances(Invert).visit(self.header, ret=retval)[Invert]
+
+        padded = self._pad(p_dim, info['decls'], info['fors'], info['symbols_dep'],
+                           info['symbols_mode'], info['symbol_refs'])
+        if padded:
+            self._align_data(p_dim, info['decls'])
+
+    def _pad(self, p_dim, decls, fors, symbols_dep, symbols_mode, symbol_refs):
+        """Apply padding."""
+        to_invert = FindInstances(Invert).visit(self.header)[Invert]
 
         # Loop increments different than 1 are unsupported
-        if any([l.increment != 1 for l, _ in flatten(info['fors'])]):
+        if any([l.increment != 1 for l, _ in flatten(fors)]):
             return None
 
         DSpace = namedtuple('DSpace', ['region', 'nest', 'symbols'])
         ISpace = namedtuple('ISpace', ['region', 'nest', 'bag'])
 
         buf_decl = None
-        for decl_name, decl in self.decls.items():
+        for decl_name, decl in decls.items():
             if not decl.size or decl.is_pointer_type:
                 continue
 
@@ -272,11 +269,11 @@ class LoopVectorizer(object):
                         self.header.children.append(copy_back[0])
 
             # D) Update the global data structures
-            self.decls[buf_name] = buf_decl
+            decls[buf_name] = buf_decl
 
         return buf_decl
 
-    def _align_data(self, buffer, p_dim):
+    def _align_data(self, p_dim, decls):
         """Apply data alignment. This boils down to:
 
             * Decorate declarations with qualifiers for data alignment
@@ -288,7 +285,7 @@ class LoopVectorizer(object):
         align = system.compiler['align'](system.isa['alignment'])
 
         # Array alignment
-        for decl in self.decls.values():
+        for decl in decls.values():
             if decl.sym.rank and decl.scope == LOCAL:
                 decl.attr.append(align)
 
@@ -298,7 +295,7 @@ class LoopVectorizer(object):
 
             for stmt in l.body:
                 sym, expr = stmt.lvalue, stmt.rvalue
-                decl = self.decls[sym.symbol]
+                decl = decls[sym.symbol]
 
                 # Condition A: the lvalue can be a scalar only if /stmt/ is not an
                 # augmented assignment, otherwise the extra iterations would alter
@@ -329,7 +326,7 @@ class LoopVectorizer(object):
                 # Condition E: extra iterations induced by bounds and offset rounding
                 # must not alter the computation
                 for s in symbols:
-                    decl = self.decls[s.symbol]
+                    decl = decls[s.symbol]
                     index = s.rank.index(l.dim)
                     stride = s.strides[index]
                     extra = list(range(stride + l.size, stride + vect_roundup(l.size)))
@@ -370,7 +367,7 @@ class LoopVectorizer(object):
                     l.pragma.add(system.compiler["align_forloop"])
                     l.pragma.add(system.compiler['force_simdization'])
 
-    def _transpose_layout(self):
+    def _transpose_layout(self, decls):
         dim = self.loop.dim
         retval = FindInstances.default_retval()
         symbols = FindInstances(Symbol).visit(self.loop, ret=retval)[Symbol]
@@ -382,7 +379,7 @@ class LoopVectorizer(object):
 
         mapper = OrderedDict()
         for s in symbols:
-            mapper.setdefault(self.decls[s.symbol], list()).append(s)
+            mapper.setdefault(decls[s.symbol], list()).append(s)
 
         for decl, syms in mapper.items():
             # Adjust the declaration

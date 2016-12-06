@@ -50,13 +50,10 @@ class Expander(object):
     GROUP = 0  # Expression /will/ not trigger expansion
     EXPAND = 1  # Expression /could/ be expanded
 
-    def __init__(self, stmt, expr_info=None, decls=None, hoisted=None):
+    def __init__(self, stmt, expr_info=None, hoisted=None):
         self.stmt = stmt
         self.expr_info = expr_info
-        self.decls = decls
         self.hoisted = hoisted
-
-        self.local_decls = {}
 
     def _build(self, exp, grp):
         """Create a node for the expansion and keep track of it."""
@@ -122,5 +119,3 @@ class Expander(object):
         for node, parent in expressions:
             self.expansions = []
             self._expand(node, parent)
-
-        self.decls.update(self.local_decls)

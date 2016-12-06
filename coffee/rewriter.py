@@ -56,25 +56,21 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt, expr_info, decls, header=None, hoisted=None):
+    def __init__(self, stmt, expr_info, header=None, hoisted=None):
         """Initialize the ExpressionRewriter.
 
         :param stmt: the node whose rvalue is the expression for rewriting
         :param expr_info: ``MetaExpr`` object describing the expression
-        :param decls: all declarations for the symbols in ``stmt``.
         :param header: the kernel's top node
         :param hoisted: dictionary that tracks all hoisted expressions
         """
         self.stmt = stmt
         self.expr_info = expr_info
-        self.decls = decls
         self.header = header or Root()
         self.hoisted = hoisted if hoisted is not None else StmtTracker()
 
-        self.expr_hoister = Hoister(self.stmt, self.expr_info, self.header,
-                                    self.decls, self.hoisted)
-        self.expr_expander = Expander(self.stmt, self.expr_info, self.decls,
-                                      self.hoisted)
+        self.expr_hoister = Hoister(self.stmt, self.expr_info, self.header, self.hoisted)
+        self.expr_expander = Expander(self.stmt, self.expr_info, self.hoisted)
         self.expr_factorizer = Factorizer(self.stmt)
 
     def licm(self, mode='normal', **kwargs):
@@ -513,7 +509,8 @@ class ExpressionRewriter(object):
             self.expr_info._loops_info.remove((l, p))
 
         # Precompute constant expressions
-        evaluator = Evaluate(self.decls, any(d.nonzero for s, d in self.decls.items()))
+        decls = visit(self.header, info_items=['decls'])['decls']
+        evaluator = Evaluate(decls, any(d.nonzero for s, d in decls.items()))
         for hoisted_loop in self.hoisted.all_loops:
             evals = evaluator.visit(hoisted_loop, **Evaluate.default_args)
             # First, find out identical tables

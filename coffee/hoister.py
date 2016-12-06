@@ -122,12 +122,11 @@ class Hoister(object):
     # Temporary variables template
     _template = "ct%d"
 
-    def __init__(self, stmt, expr_info, header, decls, hoisted):
+    def __init__(self, stmt, expr_info, header, hoisted):
         """Initialize the Hoister."""
         self.stmt = stmt
         self.expr_info = expr_info
         self.header = header
-        self.decls = decls
         self.hoisted = hoisted
 
     def _filter(self, dep, subexprs, make_unique=True, sharing=None):
@@ -266,7 +265,6 @@ class Hoister(object):
                 for i, j in zip(stmts, decls):
                     name = j.lvalue.symbol
                     self.hoisted[name] = (i, j, clone, place)
-                    self.decls[name] = j
                 lda.update({s: set(dep) for s in replacements})
 
             if not iterative:
@@ -320,12 +318,13 @@ class Hoister(object):
             return
 
         # Inject the reductions into the AST
+        decls = visit(self.header, info_items=['decls'])['decls']
         for w, p in make_reduce:
             name = self._template % len(self.hoisted)
             reduction = Incr(Symbol(name, w.lvalue.rank, w.lvalue.offset),
                              ast_reconstruct(w.rvalue))
             insert_at_elem(p.body, w, reduction)
-            handle = self.decls[w.lvalue.symbol]
+            handle = decls[w.lvalue.symbol]
             declaration = Decl(handle.typ, Symbol(name, handle.lvalue.rank),
                                ArrayInit(np.array([0.0])), handle.qual, handle.attr)
             insert_at_elem(parents[index].children, candidate, declaration)
@@ -350,5 +349,5 @@ class Hoister(object):
             if w.lvalue.symbol not in reads:
                 p.body.remove(w)
                 if not isinstance(w, Decl):
-                    key = self.decls.pop(w.lvalue.symbol)
+                    key = decls[w.lvalue.symbol]
                     declarations[key].children.remove(key)

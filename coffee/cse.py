@@ -198,11 +198,10 @@ class CSEUnpicker(object):
     symbols (further information concerning loop linearity is available in the module
     ``expression.py``)."""
 
-    def __init__(self, exprs, header, hoisted, decls):
+    def __init__(self, exprs, header, hoisted):
         self.exprs = exprs
         self.header = header
         self.hoisted = hoisted
-        self.decls = decls
 
     @property
     def type(self):
@@ -212,7 +211,7 @@ class CSEUnpicker(object):
     def linear_dims(self):
         return self.exprs.values()[0].linear_dims
 
-    def _push_temporaries(self, temporaries, trace, global_trace, ra):
+    def _push_temporaries(self, temporaries, trace, global_trace, ra, decls):
 
         def is_pushable(temporary, temporaries):
             # To be pushable ...
@@ -237,7 +236,9 @@ class CSEUnpicker(object):
                 # they will be pushed
                 if s.urepr in global_trace and global_trace[s.urepr].pushed:
                     continue
-                if any(l not in ra[self.decls[s.symbol]] for l in pushed_in):
+                if s.symbol not in decls:
+                    continue
+                if any(l not in ra[decls[s.symbol]] for l in pushed_in):
                     return False
             return True
 
@@ -256,7 +257,6 @@ class CSEUnpicker(object):
                     all(rb.urepr in global_trace for rb in t.readby):
                 global_trace[t.urepr].pushed = True
                 t.main_loop.body.remove(t.node)
-                self.decls.pop(t.name, None)
 
         # Transform the AST (note: node replacement must happen in the order
         # in which the temporaries have been encountered)
@@ -275,7 +275,7 @@ class CSEUnpicker(object):
                     for p, p_c in r_linear_reads_costs.items() or [(r, 0)]:
                         t.linear_reads_costs[p] = c + p_c
 
-    def _transform_temporaries(self, temporaries):
+    def _transform_temporaries(self, temporaries, decls):
         from .rewriter import ExpressionRewriter
 
         # Never attempt to transform the main expression
@@ -287,8 +287,7 @@ class CSEUnpicker(object):
         rewriters = OrderedDict()
         for t in temporaries:
             expr_info = MetaExpr(self.type, t.main_loop.block, t.main_nest)
-            ew = ExpressionRewriter(t.node, expr_info, self.decls, self.header,
-                                    self.hoisted)
+            ew = ExpressionRewriter(t.node, expr_info, self.header, self.hoisted)
             ew.replacediv()
             ew.expand(mode='all', lda=lda)
             ew.reassociate(lambda i: all(r != t.main_loop.dim for r in lda[i.symbol]))
@@ -303,10 +302,13 @@ class CSEUnpicker(object):
             if t.linearity_degree > 1:
                 ew.licm(mode='only_linear', lda=lda)
 
-    def _analyze_expr(self, expr, loop, lda):
+        # Keep track of new declarations (recomputation might otherwise be too expensive)
+        decls.update(OrderedDict([(k, v.decl) for k, v in self.hoisted.items()]))
+
+    def _analyze_expr(self, expr, loop, lda, decls):
         finder = FindInstances(Symbol)
         reads = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
-        reads = [s for s in reads if s.symbol in self.decls]
+        reads = [s for s in reads if s.symbol in decls]
         syms = [s for s in reads if any(d in loop.dim for d in lda[s])]
 
         linear_reads_costs = OrderedDict()
@@ -328,7 +330,7 @@ class CSEUnpicker(object):
 
         return reads, linear_reads_costs
 
-    def _analyze_loop(self, loop, nest, lda, global_trace):
+    def _analyze_loop(self, loop, nest, lda, global_trace, decls):
         linear_dims = [l.dim for l, _ in nest if l.is_linear]
 
         trace = OrderedDict()
@@ -338,7 +340,7 @@ class CSEUnpicker(object):
                 for t in not_ssa:
                     t.readby.append(t.symbol)
                 continue
-            reads, linear_reads_costs = self._analyze_expr(node.rvalue, loop, lda)
+            reads, linear_reads_costs = self._analyze_expr(node.rvalue, loop, lda, decls)
             affected = [s for s in reads if any(i in linear_dims for i in lda[s])]
             for s in affected:
                 if s.urepr in global_trace:
@@ -464,8 +466,8 @@ class CSEUnpicker(object):
 
     def unpick(self):
         # Collect all necessary info
-        external_decls = [d for d in self.decls.values() if d.scope == EXTERNAL]
-        fors = visit(self.header, info_items=['fors'])['fors']
+        info = visit(self.header, info_items=['decls', 'fors'])
+        decls, fors = info['decls'], info['fors']
         lda = loops_analysis(self.header, value='dim')
 
         # Collect all loops to be analyzed
@@ -479,7 +481,7 @@ class CSEUnpicker(object):
         global_trace = OrderedDict()
         mapper = OrderedDict()
         for loop, nest in nests.items():
-            trace = self._analyze_loop(loop, nest, lda, global_trace)
+            trace = self._analyze_loop(loop, nest, lda, global_trace, decls)
             if trace:
                 mapper[loop] = trace
                 global_trace.update(trace)
@@ -499,9 +501,9 @@ class CSEUnpicker(object):
 
             # Transform the loop
             for i in range(global_best[0] + 1, global_best[1] + 1):
-                ra = reachability_analysis(self.header, external_decls)
-                self._push_temporaries(levels[i-1], trace, global_trace, ra)
-                self._transform_temporaries(levels[i])
+                ra = reachability_analysis(self.header)
+                self._push_temporaries(levels[i-1], trace, global_trace, ra, decls)
+                self._transform_temporaries(levels[i], decls)
 
         # Clean up
         for transformed_loop, nest in reversed(nests.items()):

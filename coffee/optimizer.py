@@ -53,17 +53,15 @@ from functools import reduce
 
 class LoopOptimizer(object):
 
-    def __init__(self, loop, header, decls, exprs):
+    def __init__(self, loop, header, exprs):
         """Initialize the LoopOptimizer.
 
         :param loop: root AST node of a loop nest
         :param header: the kernel's top node
-        :param decls: list of Decl objects accessible in ``loop``
         :param exprs: list of expressions to be optimized
         """
         self.loop = loop
         self.header = header
-        self.decls = decls
         self.exprs = exprs
 
         # Track nonzero regions accessed in each symbol
@@ -105,8 +103,7 @@ class LoopOptimizer(object):
 
         # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
-            ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
-                                    self.hoisted)
+            ew = ExpressionRewriter(stmt, expr_info, self.header, self.hoisted)
 
             if expr_info.mode == 1:
                 if expr_info.dimension in [0, 1]:
@@ -163,14 +160,14 @@ class LoopOptimizer(object):
         avoid evaluation of arithmetic operations involving zero-valued blocks
         in statically initialized arrays."""
 
-        zls = ZeroRemover(self.exprs, self.decls, self.hoisted)
+        zls = ZeroRemover(self.exprs, self.hoisted)
         self.nz_syms = zls.reschedule(self.header)
 
     def _unpick_cse(self):
         """Search for factorization opportunities across temporaries created by
         common sub-expression elimination. If a gain in operation count is detected,
         unpick CSE and apply factorization + code motion."""
-        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted, self.decls)
+        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted)
         cse_unpicker.unpick()
 
     def _min_temporaries(self):
@@ -207,7 +204,6 @@ class LoopOptimizer(object):
                 place.children.remove(decl)
                 # Update trackers
                 self.hoisted.pop(temporary)
-                self.decls.pop(temporary)
 
             # Replace temporary symbols and clean up
             l_innermost_body = inner_loops(l)[-1].body
@@ -375,7 +371,7 @@ class LoopOptimizer(object):
                     fake_stmt = stmt.__class__(stmt.children[0], dcopy(target_expr))
                     fake_parent = expr_info.parent.children
                     fake_parent[fake_parent.index(stmt)] = fake_stmt
-                    ew = ExpressionRewriter(fake_stmt, expr_info, self.decls)
+                    ew = ExpressionRewriter(fake_stmt, expr_info)
                     ew.expand(mode='all').factorize(mode='all').factorize(mode='linear')
                     nterms = ew.licm(mode='aggressive', look_ahead=True)
                     nterms = len(uniquify(nterms[expr_info.dims])) or 1
@@ -450,6 +446,7 @@ class LoopOptimizer(object):
 
         # 3) Purge the AST from now useless symbols/expressions
         if should_unroll:
+            decls = visit(self.header, info_items=['decls'])['decls']
             for stmt, expr_info in self.exprs.items():
                 nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
                 injectable_nests = [n for n in nests if list(zip(*n))[0] != expr_info.loops]
@@ -458,10 +455,9 @@ class LoopOptimizer(object):
                     for l, p in unrolled:
                         p.children.remove(l)
                         for i_sym in injectable.keys():
-                            decl = self.decls.get(i_sym)
+                            decl = decls.get(i_sym)
                             if decl and decl in p.children:
                                 p.children.remove(decl)
-                                self.decls.pop(i_sym)
 
         # 4) Split the expressions if injection has been performed
         for stmt, expr_info in self.exprs.items():
@@ -478,13 +474,14 @@ class LoopOptimizer(object):
     def _recoil(self):
         """Increase the stack size if the kernel arrays exceed the stack limit
         threshold (at the C level)."""
+        decls = visit(self.header, info_items=['decls'])['decls']
 
         # Assume the size of a C type double is 8 bytes
         c_double_size = 8
         # Assume the stack size is 1.7 MB (2 MB is usually the limit)
         stack_size = 1.7*1024*1024
 
-        decls = [d for d in self.decls.values() if d.sym.rank]
+        decls = [d for d in decls.values() if d.size]
         size = sum([reduce(operator.mul, d.sym.rank) for d in decls])
 
         if size * c_double_size > stack_size:
