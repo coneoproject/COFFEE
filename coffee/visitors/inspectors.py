@@ -278,6 +278,11 @@ class SymbolReferences(Visitor):
         ret[o.symbol].append((o, parent))
         return ret
 
+    def visit_ArrayInit(self, o, ret=None, *args, **kwargs):
+        for entry in o.values:
+            ret = self.visit(entry, ret=ret, *args, **kwargs)
+        return ret
+
     def visit_object(self, o, ret=None, *args, **kwargs):
         # Identity
         return ret
