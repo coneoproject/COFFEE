@@ -95,7 +95,7 @@ class Temporary(object):
 
     @property
     def reads(self):
-        return FindInstances(Symbol).visit(self.expr)[Symbol] if self.expr else []
+        return Find(Symbol).visit(self.expr)[Symbol] if self.expr else []
 
     @property
     def linear_reads(self):
@@ -306,8 +306,7 @@ class CSEUnpicker(object):
         decls.update(OrderedDict([(k, v.decl) for k, v in self.hoisted.items()]))
 
     def _analyze_expr(self, expr, loop, lda, decls):
-        finder = FindInstances(Symbol)
-        reads = finder.visit(expr, ret=FindInstances.default_retval())[Symbol]
+        reads = Find(Symbol).visit(expr)[Symbol]
         reads = [s for s in reads if s.symbol in decls]
         syms = [s for s in reads if any(d in loop.dim for d in lda[s])]
 

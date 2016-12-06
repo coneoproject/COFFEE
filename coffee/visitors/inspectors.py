@@ -7,7 +7,7 @@ import itertools
 __all__ = ["FindInnerLoops", "CheckPerfectLoop", "CountOccurences",
            "FindLoopNests", "FindCoffeeExpressions", "SymbolReferences",
            "SymbolDependencies", "SymbolModes", "SymbolDeclarations",
-           "SymbolVisibility", "FindInstances", "FindExpression"]
+           "SymbolVisibility", "Find", "FindExpression"]
 
 
 class FindInnerLoops(Visitor):
@@ -542,7 +542,7 @@ class SymbolVisibility(Visitor):
         return ret
 
 
-class FindInstances(Visitor):
+class Find(Visitor):
 
     @classmethod
     def default_retval(cls):
@@ -561,7 +561,7 @@ class FindInstances(Visitor):
         self.types = types
         self.stop_when_found = stop_when_found
         self.with_parent = with_parent
-        super(FindInstances, self).__init__()
+        super(Find, self).__init__()
 
     def useless_traversal(self, o):
         """

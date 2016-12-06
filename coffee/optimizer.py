@@ -47,7 +47,7 @@ from .scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from .rewriter import ExpressionRewriter
 from .cse import CSEUnpicker
 from .logger import warn
-from coffee.visitors import FindInstances, ProjectExpansion
+from coffee.visitors import Find, ProjectExpansion
 from functools import reduce
 
 
@@ -267,7 +267,7 @@ class LoopOptimizer(object):
                 to_unroll = [(l, p) for l, p in nest if l not in expr_info.loops]
                 unroll_cost = reduce(operator.mul, (l.size for l, p in to_unroll))
 
-                nest_writers = FindInstances(Writer).visit(to_unroll[0][0])
+                nest_writers = Find(Writer).visit(to_unroll[0][0])
                 for op, i_stmts in nest_writers.items():
                     # Check safety of unrolling
                     if op in [Assign, IMul, IDiv]:
@@ -286,7 +286,7 @@ class LoopOptimizer(object):
                         for l, p in reversed(to_unroll):
                             i_expr = [dcopy(i_expr) for i in range(l.size)]
                             for i, e in enumerate(i_expr):
-                                e_syms = FindInstances(Symbol).visit(e)[Symbol]
+                                e_syms = Find(Symbol).visit(e)[Symbol]
                                 for s in e_syms:
                                     s.rank = tuple([r if r != l.dim else i for r in s.rank])
                             i_expr = ast_make_expr(Sum, i_expr)
@@ -308,7 +308,7 @@ class LoopOptimizer(object):
             # that will /not/ be pre-evaluated. To obtain this number, we
             # can exploit the linearity of the expression in the terms
             # depending on the linear loops.
-            syms = FindInstances(Symbol).visit(target_expr)[Symbol]
+            syms = Find(Symbol).visit(target_expr)[Symbol]
             inner = lambda s: any(r == expr_info.linear_dims[-1] for r in s.rank)
             nterms = len(set(s.symbol for s in syms if inner(s)))
             save = nterms * save_factor

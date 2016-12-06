@@ -41,7 +41,7 @@ from .optimizer import CPULoopOptimizer, GPULoopOptimizer
 from .vectorizer import LoopVectorizer, VectStrategy
 from .expression import MetaExpr
 from .logger import log, warn, PERF_OK, PERF_WARN
-from coffee.visitors import FindInstances, EstimateFlops
+from coffee.visitors import Find, EstimateFlops
 
 from collections import defaultdict, OrderedDict
 import time
@@ -70,7 +70,7 @@ class ASTKernel(object):
 
         start_time = time.time()
 
-        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
+        kernels = Find(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
 
         if opts is None:
             opts = coffee.OptimizationLevel.retrieve(coffee.options['optimizations'])
@@ -176,7 +176,7 @@ class ASTKernel(object):
 
         # The optimization passes are performed individually (i.e., "locally") for
         # each function (or "kernel") found in the provided AST
-        kernels = FindInstances(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
+        kernels = Find(FunDecl, stop_when_found=True).visit(self.ast)[FunDecl]
 
         for kernel in kernels:
             info = visit(kernel, info_items=['decls', 'exprs'])

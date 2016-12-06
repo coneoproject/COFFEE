@@ -53,11 +53,10 @@ class Extractor(object):
         # operations (i.e., a terminal has two Symbols as children). This may
         # induce more sweeps of extraction to find all common sub-expressions,
         # but at least it keeps the algorithm simple and probably more effective
-        finder = FindInstances(Symbol, with_parent=True)
+        finder = Find(Symbol, with_parent=True)
         for dep, subexprs in self.extracted.items():
             cs = OrderedDict()
-            retval = FindInstances.default_retval()
-            values = [finder.visit(e, retval=retval)[Symbol] for e in subexprs]
+            values = [finder.visit(e)[Symbol] for e in subexprs]
             binexprs = list(zip(*flatten(values)))[1]
             binexprs = [b for b in binexprs if binexprs.count(b) > 1]
             for b in binexprs:
@@ -141,10 +140,9 @@ class Hoister(object):
             if dep == self.expr_info.dims:
                 return []
             sharing = [str(s) for s in sharing]
-            finder = FindInstances(Symbol)
             partitions = defaultdict(list)
             for e in subexprs:
-                symbols = tuple(set(str(s) for s in finder.visit(e)[Symbol]
+                symbols = tuple(set(str(s) for s in Find(Symbol).visit(e)[Symbol]
                                     if str(s) in sharing))
                 partitions[symbols].append(e)
             for shared, partition in partitions.items():
@@ -157,9 +155,9 @@ class Hoister(object):
         """Return True if the sub-expressions provided in ``subexprs`` are
         hoistable outside of ``loop``, False otherwise."""
         written = in_written(loop, 'symbol')
-        finder, reads = FindInstances(Symbol), FindInstances.default_retval()
+        reads = Find.default_retval()
         for e in subexprs:
-            finder.visit(e, ret=reads)
+            Find(Symbol).visit(e, ret=reads)
         reads = [s.symbol for s in reads[Symbol]]
         return set.isdisjoint(set(reads), set(written))
 
@@ -284,7 +282,7 @@ class Hoister(object):
         lda = kwargs.get('lda') or loops_analysis(self.header)
         reducible, other = [], []
         for i in summands(self.stmt.rvalue):
-            symbols = FindInstances(Symbol).visit(i)[Symbol]
+            symbols = Find(Symbol).visit(i)[Symbol]
             unavoidable = set.intersection(*[set(lda[s]) for s in symbols])
             if candidate in unavoidable:
                 return
@@ -293,7 +291,7 @@ class Hoister(object):
 
         # Make sure we do not break data dependencies
         make_reduce = []
-        writes = FindInstances(Writer).visit(candidate)
+        writes = Find(Writer).visit(candidate)
         for w in flatten(writes.values()):
             if isinstance(w.rvalue, EmptyStatement):
                 continue
@@ -343,7 +341,7 @@ class Hoister(object):
 
         # Clean up removing any now unnecessary symbols
         reads = in_read(candidate, key='symbol')
-        declarations = FindInstances(Decl, with_parent=True).visit(self.header)[Decl]
+        declarations = Find(Decl, with_parent=True).visit(self.header)[Decl]
         declarations = dict(declarations)
         for w, p in make_reduce:
             if w.lvalue.symbol not in reads:

@@ -107,7 +107,7 @@ def ast_update_ofs(node, ofs, **kwargs):
     """
     increase = kwargs.get('increase', False)
 
-    symbols = FindInstances(Symbol).visit(node, ret=FindInstances.default_retval())[Symbol]
+    symbols = Find(Symbol).visit(node)[Symbol]
     for s in symbols:
         new_offset = []
         for r, o in zip(s.rank, s.offset):
@@ -135,9 +135,7 @@ def ast_update_rank(node, mapper):
         transformed into 'A[j] = B[j]'
     """
 
-    retval = FindInstances.default_retval()
-    FindInstances(Symbol).visit(node, ret=retval)
-    for s in retval[Symbol]:
+    for s in Find(Symbol).visit(node)[Symbol]:
         s.rank = tuple([r if r not in mapper else mapper[r] for r in s.rank])
 
 
@@ -353,7 +351,7 @@ def in_written(node, key='default'):
         raise RuntimeError("Illegal key=%s for in_written" % key)
 
     found = []
-    writers = FindInstances(Writer).visit(node)
+    writers = Find(Writer).visit(node)
     for type, stmts in writers.items():
         for stmt in stmts:
             found.append(gen_key(stmt.lvalue))
@@ -380,10 +378,10 @@ def in_read(node, key='default'):
         raise RuntimeError("Illegal key=%s for in_read" % key)
 
     found = []
-    writers = FindInstances(Writer).visit(node)
+    writers = Find(Writer).visit(node)
     for type, stmts in writers.items():
         for stmt in stmts:
-            reads = FindInstances(Symbol).visit(stmt.rvalue)[Symbol]
+            reads = Find(Symbol).visit(stmt.rvalue)[Symbol]
             found.extend([gen_key(s) for s in reads])
 
     return found
@@ -709,7 +707,7 @@ class ExpressionGraph(object):
         :param node: root of the AST visited to initialize the ExpressionGraph.
         """
         self.deps = nx.DiGraph()
-        writes = FindInstances(Writer).visit(node, ret=FindInstances.default_retval())
+        writes = Find(Writer).visit(node)
         for type, nodes in writes.items():
             for n in nodes:
                 if isinstance(n.rvalue, EmptyStatement):
@@ -718,8 +716,7 @@ class ExpressionGraph(object):
 
     def add_dependency(self, sym, expr):
         """Add dependency between ``sym`` and symbols appearing in ``expr``."""
-        retval = FindInstances.default_retval()
-        expr_symbols = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
+        expr_symbols = Find(Symbol).visit(expr)[Symbol]
         for es in expr_symbols:
             self.deps.add_edge(sym.symbol, es.symbol)
 
@@ -736,8 +733,7 @@ class ExpressionGraph(object):
         """Return True if any symbols in ``expr`` is read by ``target_sym``,
         False otherwise. If ``target_sym`` is None, Return True if any symbols
         in ``expr`` are read by at least one symbol, False otherwise."""
-        retval = FindInstances.default_retval()
-        input_syms = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
+        input_syms = Find(Symbol).visit(expr)[Symbol]
         for s in input_syms:
             if s.symbol not in self.deps:
                 continue
@@ -752,8 +748,7 @@ class ExpressionGraph(object):
         """Return True if any symbols in ``expr`` is written by ``target_sym``,
         False otherwise. If ``target_sym`` is None, Return True if any symbols
         in ``expr`` are written by at least one symbol, False otherwise."""
-        retval = FindInstances.default_retval()
-        input_syms = FindInstances(Symbol).visit(expr, ret=retval)[Symbol]
+        input_syms = Find(Symbol).visit(expr)[Symbol]
         for s in input_syms:
             if s.symbol not in self.deps:
                 continue
@@ -846,7 +841,7 @@ def remove_unused_decls(node):
 
     assert isinstance(node, Block)
 
-    decls = FindInstances(Decl, with_parent=True).visit(node)[Decl]
+    decls = Find(Decl, with_parent=True).visit(node)[Decl]
     references = visit(node, info_items=['symbol_refs'])['symbol_refs']
     for d, p in decls:
         if len(references[d.sym.symbol]) == 1:

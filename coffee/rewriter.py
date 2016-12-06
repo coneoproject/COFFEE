@@ -259,8 +259,7 @@ class ExpressionRewriter(object):
         """
 
         if mode == 'standard':
-            retval = FindInstances.default_retval()
-            symbols = FindInstances(Symbol).visit(self.stmt.rvalue, ret=retval)[Symbol]
+            symbols = Find(Symbol).visit(self.stmt.rvalue)[Symbol]
             # The heuristics privileges linear dimensions
             dims = self.expr_info.out_linear_dims
             if not dims or self.expr_info.dimension >= 2:
@@ -340,8 +339,7 @@ class ExpressionRewriter(object):
         """
 
         if mode == 'standard':
-            retval = FindInstances.default_retval()
-            symbols = FindInstances(Symbol).visit(self.stmt.rvalue, ret=retval)[Symbol]
+            symbols = Find(Symbol).visit(self.stmt.rvalue)[Symbol]
             # The heuristics privileges linear dimensions
             dims = self.expr_info.out_linear_dims
             if not dims or self.expr_info.dimension >= 2:
@@ -432,8 +430,7 @@ class ExpressionRewriter(object):
 
     def replacediv(self):
         """Replace divisions by a constant with multiplications."""
-        retval = FindInstances.default_retval()
-        divisions = FindInstances(Div).visit(self.stmt.rvalue, ret=retval)[Div]
+        divisions = Find(Div).visit(self.stmt.rvalue)[Div]
         to_replace = {}
         for i in divisions:
             if isinstance(i.right, Symbol):
@@ -457,8 +454,7 @@ class ExpressionRewriter(object):
         if not isinstance(stmt, (Incr, Decr, IMul, IDiv)):
             # Not a reduction expression, give up
             return
-        retval = FindInstances.default_retval()
-        expr_syms = FindInstances(Symbol).visit(stmt.rvalue, ret=retval)[Symbol]
+        expr_syms = Find(Symbol).visit(stmt.rvalue)[Symbol]
         reduction_loops = expr_info.out_linear_loops_info
         if any([not is_perfect_loop(l) for l, p in reduction_loops]):
             # Unsafe if not a perfect loop nest
@@ -466,7 +462,7 @@ class ExpressionRewriter(object):
         # The following check is because it is unsafe to simplify if non-loop or
         # non-constant dimensions are present
         hoisted_stmts = self.hoisted.all_stmts
-        hoisted_syms = [FindInstances(Symbol).visit(h)[Symbol] for h in hoisted_stmts]
+        hoisted_syms = [Find(Symbol).visit(h)[Symbol] for h in hoisted_stmts]
         hoisted_dims = [s.rank for s in flatten(hoisted_syms)]
         hoisted_dims = set([r for r in flatten(hoisted_dims) if not is_const_dim(r)])
         if any(d not in expr_info.dims for d in hoisted_dims):
@@ -474,9 +470,7 @@ class ExpressionRewriter(object):
             # not being a loop iteration variable
             return
         for i, (l, p) in enumerate(reduction_loops):
-            retval = SymbolDependencies.default_retval()
-            syms_dep = SymbolDependencies().visit(l, ret=retval,
-                                                  **SymbolDependencies.default_args)
+            syms_dep = SymbolDependencies().visit(l, **SymbolDependencies.default_args)
             if not all([tuple(syms_dep[s]) == expr_info.loops and
                         s.dim == len(expr_info.loops) for s in expr_syms if syms_dep[s]]):
                 # A sufficient (although not necessary) condition for loop reduction to
@@ -490,10 +484,9 @@ class ExpressionRewriter(object):
             if not all([s.symbol in self.hoisted for s in reducible_syms]):
                 return
             # Replace hoisted assignments with reductions
-            finder = FindInstances(Assign, stop_when_found=True, with_parent=True)
+            finder = Find(Assign, stop_when_found=True, with_parent=True)
             for hoisted_loop in self.hoisted.all_loops:
-                retval = FindInstances.default_retval()
-                for assign, parent in finder.visit(hoisted_loop, ret=retval)[Assign]:
+                for assign, parent in finder.visit(hoisted_loop)[Assign]:
                     sym, expr = assign.children
                     decl = self.hoisted[sym.symbol].decl
                     if sym.symbol in [s.symbol for s in reducible_syms]:

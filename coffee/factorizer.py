@@ -163,8 +163,7 @@ class Factorizer(object):
         if not grp:
             return False
         for f in factorizable_term.factors:
-            retval = FindInstances.default_retval()
-            symbols = FindInstances(Symbol).visit(f, ret=retval)[Symbol]
+            symbols = Find(Symbol).visit(f)[Symbol]
             if any(s.urepr in grp for s in symbols):
                 return False
         return True

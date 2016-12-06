@@ -43,7 +43,7 @@ from .base import *
 from .utils import *
 from . import system
 from .logger import warn
-from coffee.visitors import FindInstances
+from coffee.visitors import Find
 
 
 class VectStrategy(object):
@@ -149,7 +149,7 @@ class LoopVectorizer(object):
 
     def _pad(self, p_dim, decls, fors, symbols_dep, symbols_mode, symbol_refs):
         """Apply padding."""
-        to_invert = FindInstances(Invert).visit(self.header)[Invert]
+        to_invert = Find(Invert).visit(self.header)[Invert]
 
         # Loop increments different than 1 are unsupported
         if any([l.increment != 1 for l, _ in flatten(fors)]):
@@ -314,7 +314,7 @@ class LoopVectorizer(object):
                     should_round = False
                     break
 
-                symbols = [sym] + FindInstances(Symbol).visit(expr)[Symbol]
+                symbols = [sym] + Find(Symbol).visit(expr)[Symbol]
                 symbols = [s for s in symbols if s.rank and any(r == l.dim for r in s.rank)]
 
                 # Condition D: the access pattern must be accessible
@@ -369,8 +369,7 @@ class LoopVectorizer(object):
 
     def _transpose_layout(self, decls):
         dim = self.loop.dim
-        retval = FindInstances.default_retval()
-        symbols = FindInstances(Symbol).visit(self.loop, ret=retval)[Symbol]
+        symbols = Find(Symbol).visit(self.loop)[Symbol]
         symbols = [s for s in symbols if any(r == dim for r in s.rank) and s.dim > 1]
 
         # Cannot handle arrays with more than 2 dimensions
