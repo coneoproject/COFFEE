@@ -841,6 +841,25 @@ def remove_empty_loops(node):
             parent.children.remove(loop)
 
 
+def remove_unused_decls(node):
+    """Remove all unused decls within node, which must be of type :class:`Block`."""
+
+    assert isinstance(node, Block)
+
+    decls = FindInstances(Decl, with_parent=True).visit(node)[Decl]
+    references = visit(node, info_items=['symbol_refs'])['symbol_refs']
+    for d, p in decls:
+        if len(references[d.sym.symbol]) == 1:
+            p.children.remove(d)
+
+
+def cleanup(node):
+    """Remove useless nodes in the AST rooted in node."""
+
+    remove_empty_loops(node)
+    remove_unused_decls(node)
+
+
 def postprocess(node):
     """Rearrange the Nodes in the AST rooted in ``node`` to improve the code quality
     when unparsing the tree."""

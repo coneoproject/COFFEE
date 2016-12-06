@@ -505,8 +505,4 @@ class CSEUnpicker(object):
                 self._push_temporaries(levels[i-1], trace, global_trace, ra, decls)
                 self._transform_temporaries(levels[i], decls)
 
-        # Clean up
-        for transformed_loop, nest in reversed(nests.items()):
-            for loop, parent in nest:
-                if loop == transformed_loop and not loop.body:
-                    parent.children.remove(loop)
+        cleanup(self.header)
