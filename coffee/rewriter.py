@@ -56,26 +56,22 @@ class ExpressionRewriter(object):
     * Expansion: transform an expression ``(a + b)*c`` into ``(a*c + b*c)``
     * Factorization: transform an expression ``a*b + a*c`` into ``a*(b+c)``"""
 
-    def __init__(self, stmt, expr_info, decls, header=None, hoisted=None):
+    def __init__(self, stmt, expr_info, header=None, hoisted=None):
         """Initialize the ExpressionRewriter.
 
         :param stmt: the node whose rvalue is the expression for rewriting
         :param expr_info: ``MetaExpr`` object describing the expression
-        :param decls: all declarations for the symbols in ``stmt``.
         :param header: the kernel's top node
         :param hoisted: dictionary that tracks all hoisted expressions
         """
         self.stmt = stmt
         self.expr_info = expr_info
-        self.decls = decls
         self.header = header or Root()
         self.hoisted = hoisted if hoisted is not None else StmtTracker()
 
-        self.expr_hoister = Hoister(self.stmt, self.expr_info, self.header,
-                                    self.decls, self.hoisted)
-        self.expr_expander = Expander(self.stmt, self.expr_info, self.decls,
-                                      self.hoisted)
-        self.expr_factorizer = Factorizer(self.stmt)
+        self.codemotion = Hoister(self.stmt, self.expr_info, self.header, self.hoisted)
+        self.expander = Expander(self.stmt)
+        self.factorizer = Factorizer(self.stmt)
 
     def licm(self, mode='normal', **kwargs):
         """Perform generalized loop-invariant code motion, a transformation
@@ -165,9 +161,9 @@ class ExpressionRewriter(object):
         out_linear_dims = set(self.expr_info.out_linear_dims)
 
         if kwargs.get('look_ahead'):
-            hoist = self.expr_hoister.extract
+            hoist = self.codemotion.extract
         else:
-            hoist = self.expr_hoister.licm
+            hoist = self.codemotion.licm
 
         if mode == 'normal':
             should_extract = lambda d: d != dims
@@ -187,7 +183,7 @@ class ExpressionRewriter(object):
             non_candidates = {l.dim for l in candidates[:-1]}
             self.reassociate(lambda i: not lda[i].intersection(non_candidates))
             hoist(should_extract, with_promotion=True, lda=lda)
-            self.expr_hoister.trim(candidate)
+            self.codemotion.trim(candidate)
         elif mode == 'incremental':
             lda = kwargs.get('lda') or loops_analysis(self.header, value='dim')
             should_extract = lambda d: not (d and d.issubset(dims))
@@ -263,8 +259,7 @@ class ExpressionRewriter(object):
         """
 
         if mode == 'standard':
-            retval = FindInstances.default_retval()
-            symbols = FindInstances(Symbol).visit(self.stmt.rvalue, ret=retval)[Symbol]
+            symbols = Find(Symbol).visit(self.stmt.rvalue)[Symbol]
             # The heuristics privileges linear dimensions
             dims = self.expr_info.out_linear_dims
             if not dims or self.expr_info.dimension >= 2:
@@ -296,7 +291,7 @@ class ExpressionRewriter(object):
             warn('Skipping unknown expansion strategy.')
             return
 
-        self.expr_expander.expand(should_expand, **kwargs)
+        self.expander.expand(should_expand, **kwargs)
         return self
 
     def factorize(self, mode='standard', **kwargs):
@@ -344,8 +339,7 @@ class ExpressionRewriter(object):
         """
 
         if mode == 'standard':
-            retval = FindInstances.default_retval()
-            symbols = FindInstances(Symbol).visit(self.stmt.rvalue, ret=retval)[Symbol]
+            symbols = Find(Symbol).visit(self.stmt.rvalue)[Symbol]
             # The heuristics privileges linear dimensions
             dims = self.expr_info.out_linear_dims
             if not dims or self.expr_info.dimension >= 2:
@@ -388,7 +382,7 @@ class ExpressionRewriter(object):
             return
 
         # Perform the factorization
-        self.expr_factorizer.factorize(should_factorize, **kwargs)
+        self.factorizer.factorize(should_factorize, **kwargs)
         return self
 
     def reassociate(self, reorder=None):
@@ -436,8 +430,7 @@ class ExpressionRewriter(object):
 
     def replacediv(self):
         """Replace divisions by a constant with multiplications."""
-        retval = FindInstances.default_retval()
-        divisions = FindInstances(Div).visit(self.stmt.rvalue, ret=retval)[Div]
+        divisions = Find(Div).visit(self.stmt.rvalue)[Div]
         to_replace = {}
         for i in divisions:
             if isinstance(i.right, Symbol):
@@ -461,8 +454,7 @@ class ExpressionRewriter(object):
         if not isinstance(stmt, (Incr, Decr, IMul, IDiv)):
             # Not a reduction expression, give up
             return
-        retval = FindInstances.default_retval()
-        expr_syms = FindInstances(Symbol).visit(stmt.rvalue, ret=retval)[Symbol]
+        expr_syms = Find(Symbol).visit(stmt.rvalue)[Symbol]
         reduction_loops = expr_info.out_linear_loops_info
         if any([not is_perfect_loop(l) for l, p in reduction_loops]):
             # Unsafe if not a perfect loop nest
@@ -470,7 +462,7 @@ class ExpressionRewriter(object):
         # The following check is because it is unsafe to simplify if non-loop or
         # non-constant dimensions are present
         hoisted_stmts = self.hoisted.all_stmts
-        hoisted_syms = [FindInstances(Symbol).visit(h)[Symbol] for h in hoisted_stmts]
+        hoisted_syms = [Find(Symbol).visit(h)[Symbol] for h in hoisted_stmts]
         hoisted_dims = [s.rank for s in flatten(hoisted_syms)]
         hoisted_dims = set([r for r in flatten(hoisted_dims) if not is_const_dim(r)])
         if any(d not in expr_info.dims for d in hoisted_dims):
@@ -478,9 +470,7 @@ class ExpressionRewriter(object):
             # not being a loop iteration variable
             return
         for i, (l, p) in enumerate(reduction_loops):
-            retval = SymbolDependencies.default_retval()
-            syms_dep = SymbolDependencies().visit(l, ret=retval,
-                                                  **SymbolDependencies.default_args)
+            syms_dep = SymbolDependencies().visit(l, **SymbolDependencies.default_args)
             if not all([tuple(syms_dep[s]) == expr_info.loops and
                         s.dim == len(expr_info.loops) for s in expr_syms if syms_dep[s]]):
                 # A sufficient (although not necessary) condition for loop reduction to
@@ -494,10 +484,9 @@ class ExpressionRewriter(object):
             if not all([s.symbol in self.hoisted for s in reducible_syms]):
                 return
             # Replace hoisted assignments with reductions
-            finder = FindInstances(Assign, stop_when_found=True, with_parent=True)
+            finder = Find(Assign, stop_when_found=True, with_parent=True)
             for hoisted_loop in self.hoisted.all_loops:
-                retval = FindInstances.default_retval()
-                for assign, parent in finder.visit(hoisted_loop, ret=retval)[Assign]:
+                for assign, parent in finder.visit(hoisted_loop)[Assign]:
                     sym, expr = assign.children
                     decl = self.hoisted[sym.symbol].decl
                     if sym.symbol in [s.symbol for s in reducible_syms]:
@@ -513,7 +502,8 @@ class ExpressionRewriter(object):
             self.expr_info._loops_info.remove((l, p))
 
         # Precompute constant expressions
-        evaluator = Evaluate(self.decls, any(d.nonzero for s, d in self.decls.items()))
+        decls = visit(self.header, info_items=['decls'])['decls']
+        evaluator = Evaluate(decls, any(d.nonzero for s, d in decls.items()))
         for hoisted_loop in self.hoisted.all_loops:
             evals = evaluator.visit(hoisted_loop, **Evaluate.default_args)
             # First, find out identical tables

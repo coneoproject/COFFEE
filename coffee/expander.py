@@ -50,25 +50,20 @@ class Expander(object):
     GROUP = 0  # Expression /will/ not trigger expansion
     EXPAND = 1  # Expression /could/ be expanded
 
-    def __init__(self, stmt, expr_info=None, decls=None, hoisted=None):
+    def __init__(self, stmt):
         self.stmt = stmt
-        self.expr_info = expr_info
-        self.decls = decls
-        self.hoisted = hoisted
 
-        self.local_decls = {}
-
-    def _build(self, exp, grp):
+    def _build(self, exp, grp, expansions):
         """Create a node for the expansion and keep track of it."""
         expansion = Prod(exp, dcopy(grp))
         # Track the new expansion
-        self.expansions.append(expansion)
+        expansions.append(expansion)
         # Untrack any expansions occured in children nodes
-        if grp in self.expansions:
-            self.expansions.remove(grp)
+        if grp in expansions:
+            expansions.remove(grp)
         return expansion
 
-    def _expand(self, node, parent):
+    def _expand(self, node, parent, expansions):
         if isinstance(node, Symbol):
             return ([node], self.EXPAND) if self.should_expand(node) \
                 else ([node], self.GROUP)
@@ -77,12 +72,12 @@ class Expander(object):
             # Try to expand /within/ the children, but then return saying "I'm not
             # expandable any further"
             for n in node.children:
-                self._expand(n, node)
+                self._expand(n, node, expansions)
             return ([node], self.GROUP)
 
         elif isinstance(node, Prod):
-            l_exps, l_type = self._expand(node.left, node)
-            r_exps, r_type = self._expand(node.right, node)
+            l_exps, l_type = self._expand(node.left, node, expansions)
+            r_exps, r_type = self._expand(node.right, node, expansions)
             if l_type == self.GROUP and r_type == self.GROUP:
                 return ([node], self.GROUP)
             # At least one child is expandable (marked as EXPAND), whereas the
@@ -92,7 +87,7 @@ class Expander(object):
             expandable = r_exps if l_type == self.GROUP else l_exps
             to_replace = OrderedDict()
             for exp, grp in itertools.product(expandable, groupable):
-                expansion = self._build(exp, grp)
+                expansion = self._build(exp, grp, expansions)
                 to_replace.setdefault(exp, []).append(expansion)
             ast_replace(node, {k: ast_make_expr(Sum, v) for k, v in to_replace.items()},
                         copy=False, mode='symbol')
@@ -102,8 +97,8 @@ class Expander(object):
             return (list(flatten(to_replace.values())) or [expanded], self.EXPAND)
 
         elif isinstance(node, (Sum, Sub)):
-            l_exps, l_type = self._expand(node.left, node)
-            r_exps, r_type = self._expand(node.right, node)
+            l_exps, l_type = self._expand(node.left, node, expansions)
+            r_exps, r_type = self._expand(node.right, node, expansions)
             if l_type == self.EXPAND and r_type == self.EXPAND and isinstance(node, Sum):
                 return (l_exps + r_exps, self.EXPAND)
             elif l_type == self.EXPAND and r_type == self.EXPAND and isinstance(node, Sub):
@@ -120,7 +115,4 @@ class Expander(object):
         self.should_expand = should_expand
 
         for node, parent in expressions:
-            self.expansions = []
-            self._expand(node, parent)
-
-        self.decls.update(self.local_decls)
+            self._expand(node, parent, [])

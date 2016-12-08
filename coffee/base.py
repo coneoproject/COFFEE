@@ -1232,7 +1232,7 @@ class PreprocessNode(Node):
 class Rank(tuple):
 
     def __contains__(self, val):
-        from coffee.visitors import FindInstances
+        from coffee.visitors import Find
         if isinstance(val, Node):
             val, search = str(val), type(Node)
         elif isinstance(val, str):
@@ -1241,7 +1241,7 @@ class Rank(tuple):
             return False
         for i in self:
             if isinstance(i, Node):
-                items = FindInstances(search).visit(i)
+                items = Find(search).visit(i)
                 if any(val == str(i) for i in items[search]):
                     return True
             elif isinstance(i, str) and val == i:

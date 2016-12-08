@@ -47,23 +47,21 @@ from .scheduler import ExpressionFissioner, ZeroRemover, SSALoopMerger
 from .rewriter import ExpressionRewriter
 from .cse import CSEUnpicker
 from .logger import warn
-from coffee.visitors import FindInstances, ProjectExpansion
+from coffee.visitors import Find, ProjectExpansion
 from functools import reduce
 
 
 class LoopOptimizer(object):
 
-    def __init__(self, loop, header, decls, exprs):
+    def __init__(self, loop, header, exprs):
         """Initialize the LoopOptimizer.
 
         :param loop: root AST node of a loop nest
         :param header: the kernel's top node
-        :param decls: list of Decl objects accessible in ``loop``
         :param exprs: list of expressions to be optimized
         """
         self.loop = loop
         self.header = header
-        self.decls = decls
         self.exprs = exprs
 
         # Track nonzero regions accessed in each symbol
@@ -105,8 +103,7 @@ class LoopOptimizer(object):
 
         # Expression rewriting, expressed as a sequence of AST transformation passes
         for stmt, expr_info in self.exprs.items():
-            ew = ExpressionRewriter(stmt, expr_info, self.decls, self.header,
-                                    self.hoisted)
+            ew = ExpressionRewriter(stmt, expr_info, self.header, self.hoisted)
 
             if expr_info.mode == 1:
                 if expr_info.dimension in [0, 1]:
@@ -163,14 +160,14 @@ class LoopOptimizer(object):
         avoid evaluation of arithmetic operations involving zero-valued blocks
         in statically initialized arrays."""
 
-        zls = ZeroRemover(self.exprs, self.decls, self.hoisted)
+        zls = ZeroRemover(self.exprs, self.hoisted)
         self.nz_syms = zls.reschedule(self.header)
 
     def _unpick_cse(self):
         """Search for factorization opportunities across temporaries created by
         common sub-expression elimination. If a gain in operation count is detected,
         unpick CSE and apply factorization + code motion."""
-        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted, self.decls)
+        cse_unpicker = CSEUnpicker(self.exprs, self.header, self.hoisted)
         cse_unpicker.unpick()
 
     def _min_temporaries(self):
@@ -180,34 +177,33 @@ class LoopOptimizer(object):
             * it is written once, AND
             * it is read once OR it is read n times, but it hosts only a Symbol
         """
-        occs = count(self.header, mode='symbol_id', read_only=True)
+
+        occurrences = count(self.header, mode='symbol_id', read_only=True)
 
         for l in self.hoisted.all_loops:
-            info = visit(l)
-            l_occs = count(l, read_only=True)
+            info = visit(l, info_items=['symbol_refs', 'symbols_mode'])
             to_replace, to_remove = {}, []
-            for (temporary, _, _), temporary_occs in l_occs.items():
+            for (temporary, _, _), c in count(l, read_only=True).items():
                 if temporary not in self.hoisted:
                     continue
                 if self.hoisted[temporary].loop is not l:
                     continue
-                if occs.get(temporary) != temporary_occs:
+                if occurrences.get(temporary) != c:
                     continue
                 decl = self.hoisted[temporary].decl
                 place = self.hoisted[temporary].place
                 expr = self.hoisted[temporary].stmt.rvalue
-                if temporary_occs > 1 and explore_operator(expr):
+                if c > 1 and explore_operator(expr):
                     continue
-                temporary_refs = info['symbol_refs'][temporary]
+                references = info['symbol_refs'][temporary]
                 syms_mode = info['symbols_mode']
                 # Note: only one write is possible at this point
-                write = [(s, p) for s, p in temporary_refs if syms_mode[s][0] == WRITE][0]
+                write = [(s, p) for s, p in references if syms_mode[s][0] == WRITE][0]
                 to_replace[write[0]] = expr
                 to_remove.append(write[1])
                 place.children.remove(decl)
                 # Update trackers
                 self.hoisted.pop(temporary)
-                self.decls.pop(temporary)
 
             # Replace temporary symbols and clean up
             l_innermost_body = inner_loops(l)[-1].body
@@ -271,7 +267,7 @@ class LoopOptimizer(object):
                 to_unroll = [(l, p) for l, p in nest if l not in expr_info.loops]
                 unroll_cost = reduce(operator.mul, (l.size for l, p in to_unroll))
 
-                nest_writers = FindInstances(Writer).visit(to_unroll[0][0])
+                nest_writers = Find(Writer).visit(to_unroll[0][0])
                 for op, i_stmts in nest_writers.items():
                     # Check safety of unrolling
                     if op in [Assign, IMul, IDiv]:
@@ -290,7 +286,7 @@ class LoopOptimizer(object):
                         for l, p in reversed(to_unroll):
                             i_expr = [dcopy(i_expr) for i in range(l.size)]
                             for i, e in enumerate(i_expr):
-                                e_syms = FindInstances(Symbol).visit(e)[Symbol]
+                                e_syms = Find(Symbol).visit(e)[Symbol]
                                 for s in e_syms:
                                     s.rank = tuple([r if r != l.dim else i for r in s.rank])
                             i_expr = ast_make_expr(Sum, i_expr)
@@ -312,7 +308,7 @@ class LoopOptimizer(object):
             # that will /not/ be pre-evaluated. To obtain this number, we
             # can exploit the linearity of the expression in the terms
             # depending on the linear loops.
-            syms = FindInstances(Symbol).visit(target_expr)[Symbol]
+            syms = Find(Symbol).visit(target_expr)[Symbol]
             inner = lambda s: any(r == expr_info.linear_dims[-1] for r in s.rank)
             nterms = len(set(s.symbol for s in syms if inner(s)))
             save = nterms * save_factor
@@ -375,7 +371,7 @@ class LoopOptimizer(object):
                     fake_stmt = stmt.__class__(stmt.children[0], dcopy(target_expr))
                     fake_parent = expr_info.parent.children
                     fake_parent[fake_parent.index(stmt)] = fake_stmt
-                    ew = ExpressionRewriter(fake_stmt, expr_info, self.decls)
+                    ew = ExpressionRewriter(fake_stmt, expr_info)
                     ew.expand(mode='all').factorize(mode='all').factorize(mode='linear')
                     nterms = ew.licm(mode='aggressive', look_ahead=True)
                     nterms = len(uniquify(nterms[expr_info.dims])) or 1
@@ -450,6 +446,7 @@ class LoopOptimizer(object):
 
         # 3) Purge the AST from now useless symbols/expressions
         if should_unroll:
+            decls = visit(self.header, info_items=['decls'])['decls']
             for stmt, expr_info in self.exprs.items():
                 nests = [n for n in visit(expr_info.loops_parents[0])['fors']]
                 injectable_nests = [n for n in nests if list(zip(*n))[0] != expr_info.loops]
@@ -458,10 +455,9 @@ class LoopOptimizer(object):
                     for l, p in unrolled:
                         p.children.remove(l)
                         for i_sym in injectable.keys():
-                            decl = self.decls.get(i_sym)
+                            decl = decls.get(i_sym)
                             if decl and decl in p.children:
                                 p.children.remove(decl)
-                                self.decls.pop(i_sym)
 
         # 4) Split the expressions if injection has been performed
         for stmt, expr_info in self.exprs.items():
@@ -478,13 +474,14 @@ class LoopOptimizer(object):
     def _recoil(self):
         """Increase the stack size if the kernel arrays exceed the stack limit
         threshold (at the C level)."""
+        decls = visit(self.header, info_items=['decls'])['decls']
 
         # Assume the size of a C type double is 8 bytes
         c_double_size = 8
         # Assume the stack size is 1.7 MB (2 MB is usually the limit)
         stack_size = 1.7*1024*1024
 
-        decls = [d for d in self.decls.values() if d.sym.rank]
+        decls = [d for d in decls.values() if d.size]
         size = sum([reduce(operator.mul, d.sym.rank) for d in decls])
 
         if size * c_double_size > stack_size:
