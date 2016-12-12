@@ -836,11 +836,13 @@ class ZeroRemover(LoopScheduler):
             # Split the main expressions to maximize the impact of the rescheduling (this
             # helps if different summands have zero-valued blocks at different offsets)
             elf = ExpressionFissioner(cut=1, loops='none')
-            for stmt, expr_info in list(iteritems(self.exprs)):
+            new_exprs = {}
+            for stmt, expr_info in iteritems(self.exprs):
                 if expr_info.is_scalar:
-                    continue
-                self.exprs.pop(stmt)
-                self.exprs.update(elf.fission(stmt, expr_info))
+                    new_exprs[stmt] = expr_info
+                else:
+                    new_exprs.update(elf.fission(stmt, expr_info))
+            self.exprs = new_exprs
 
             # Apply the rescheduling
             nz_syms, nz_info = self._reschedule_itspace(root, candidates, decls)
