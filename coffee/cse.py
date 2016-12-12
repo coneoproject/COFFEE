@@ -32,6 +32,7 @@
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from __future__ import absolute_import, print_function, division
+from six import iterkeys, iteritems, itervalues
 from six.moves import zip
 
 import operator
@@ -99,7 +100,7 @@ class Temporary(object):
 
     @property
     def linear_reads(self):
-        return self.linear_reads_costs.keys() if self.linear_reads_costs else []
+        return list(iterkeys(self.linear_reads_costs)) if self.linear_reads_costs else []
 
     @property
     def loops(self):
@@ -205,11 +206,11 @@ class CSEUnpicker(object):
 
     @property
     def type(self):
-        return self.exprs.values()[0].type
+        return list(itervalues(self.exprs))[0].type
 
     @property
     def linear_dims(self):
-        return self.exprs.values()[0].linear_dims
+        return list(itervalues(self.exprs))[0].linear_dims
 
     def _push_temporaries(self, temporaries, trace, global_trace, ra, decls):
 
@@ -261,14 +262,14 @@ class CSEUnpicker(object):
         # Transform the AST (note: node replacement must happen in the order
         # in which the temporaries have been encountered)
         modified_temporaries = sorted(modified_temporaries.values(),
-                                      key=lambda t: global_trace.keys().index(t.urepr))
+                                      key=lambda t: list(iterkeys(global_trace)).index(t.urepr))
         for t in modified_temporaries:
             ast_replace(t.node, to_replace, copy=True)
         replaced = [t.urepr for t in to_replace.keys()]
 
         # Update the temporaries
         for t in modified_temporaries:
-            for r, c in t.linear_reads_costs.items():
+            for r, c in list(iteritems(t.linear_reads_costs)):
                 if r.urepr in replaced:
                     t.linear_reads_costs.pop(r)
                     r_linear_reads_costs = global_trace[r.urepr].linear_reads_costs
@@ -412,7 +413,7 @@ class CSEUnpicker(object):
                     else:
                         handle = [read]
                     linear_reads.extend(handle)
-                factors = {as_urepr(i): i for i in linear_reads}.values()
+                factors = list(itervalues({as_urepr(i): i for i in linear_reads}))
                 # Take into account the increased number of sums (due to fact)
                 hoist_region = set.union(*[lda[i] for i in factors])
                 niters = t.niters('out', hoist_region)
