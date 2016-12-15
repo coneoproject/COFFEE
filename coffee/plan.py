@@ -93,7 +93,11 @@ class ASTKernel(object):
                 parent, nest = expr_info
                 if not nest:
                     continue
-                metaexpr = MetaExpr(check_type(stmt, info['decls']), parent, nest)
+                if kernel.template:
+                    typ = "double"
+                else:
+                    typ = check_type(stmt, info['decls'])
+                metaexpr = MetaExpr(typ, parent, nest)
                 nests[nest[0]].update({stmt: metaexpr})
             loop_opts = [CPULoopOptimizer(loop, header, exprs)
                          for (loop, header), exprs in nests.items()]
@@ -186,7 +190,11 @@ class ASTKernel(object):
                 parent, nest = expr_info
                 if not nest:
                     continue
-                metaexpr = MetaExpr(check_type(stmt, info['decls']), parent, nest)
+                if kernel.template:
+                    typ = "double"
+                else:
+                    typ = check_type(stmt, info['decls'])
+                metaexpr = MetaExpr(typ, parent, nest)
                 nests[nest[0]].update({stmt: metaexpr})
             loop_opts = [GPULoopOptimizer(loop, header, exprs)
                          for (loop, header), exprs in nests.items()]
