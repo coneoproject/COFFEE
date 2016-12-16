@@ -568,7 +568,7 @@ class ExpressionRewriter(object):
             self.licm('only_const').licm('only_outlinear')
 
         # Transform the expression based on the sharing graph
-        nodes, edges = sgraph.nodes(), sgraph.edges()
+        nodes = [n for n in nodes if n in sgraph.nodes()]
         if not (nodes and all(sgraph.degree(n) > 0 for n in nodes)):
             self.factorize(mode='heuristic')
             self.licm('only_const').licm('only_outlinear')
