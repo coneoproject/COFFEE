@@ -42,9 +42,9 @@ and J. Ramanujam and David A. Ham and Paul H. J. Kelly. Cross-Loop Optimization 
 Arithmetic Intensity for Finite Element Local Assembly. ACM Transactions on Architecture \
 and Code Optimization, 2015.
 """
-LUPORINI2016 = """
+LUPORINI2017 = """
 Fabio Luporini and David A. Ham and Paul H. J. Kelly. An algorithm for the optimization \
-of finite element integration loops. Submitted to ACM TOMS, 2016.
+of finite element integration loops. To appear in ACM TOMS, 2017.
 """
 
 
@@ -63,6 +63,6 @@ def update_citations(params):
         if rewrite == 1 or align_pad or vectorize or split:
             Citations().register('Luporini2015')
         if rewrite > 1 or nozeros:
-            Citations().register('Luporini2016')
+            Citations().register('Luporini2017')
     except ImportError:
         pass
