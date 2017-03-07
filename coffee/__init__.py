@@ -37,10 +37,11 @@ import sys
 
 from coffee.citations import update_citations
 from coffee.logger import LOG_DEFAULT, set_log_level, warn
+from coffee.system import architecture, compiler, isa
 from coffee.system import set_architecture, set_compiler, set_isa
 
 
-__all__ = ['options', 'initialized', 'O0', 'O1', 'O2', 'O3', 'Ofast']
+__all__ = ['options', 'initialized', 'O0', 'O1', 'O2', 'O3']
 
 
 class Options(dict):
@@ -107,16 +108,21 @@ def coffee_init(**kwargs):
         For more details, refer to the ``set_opt_level``'s documentation.
     """
 
-    global initialized, options, architecture, compiler, isa
+    global initialized, options
 
     architecture_id = kwargs.get('architecture', 'default')
     compiler_id = kwargs.get('compiler')
     isa_id = kwargs.get('isa')
     optlevel = kwargs.get('optlevel', O0)
 
-    architecture = set_architecture(architecture_id)
-    compiler = set_compiler(compiler_id)
-    isa = set_isa(isa_id)
+    architecture.clear()
+    architecture.update(set_architecture(architecture_id))
+
+    compiler.clear()
+    compiler.update(set_compiler(compiler_id))
+
+    isa.clear()
+    isa.update(set_isa(isa_id))
 
     if all([architecture, compiler, isa]):
         initialized = True
