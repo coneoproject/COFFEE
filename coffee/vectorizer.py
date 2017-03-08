@@ -139,13 +139,12 @@ class LoopVectorizer(object):
         :arg p_dim: the array dimension that should be padded (defaults to the
             innermost, or -1)
         """
-        info = visit(self.header, info_items=['decls', 'fors', 'symbols_dep',
+        info = visit(self.kernel, info_items=['decls', 'fors', 'symbols_dep',
                                               'symbols_mode', 'symbol_refs'])
 
-        padded = self._pad(p_dim, info['decls'], info['fors'], info['symbols_dep'],
-                           info['symbols_mode'], info['symbol_refs'])
-        if padded:
-            self._align_data(p_dim, info['decls'])
+        self._pad(p_dim, info['decls'], info['fors'], info['symbols_dep'],
+                  info['symbols_mode'], info['symbol_refs'])
+        self._align_data(p_dim, info['decls'])
 
     def _pad(self, p_dim, decls, fors, symbols_dep, symbols_mode, symbol_refs):
         """Apply padding."""
@@ -158,7 +157,6 @@ class LoopVectorizer(object):
         DSpace = namedtuple('DSpace', ['region', 'nest', 'symbols'])
         ISpace = namedtuple('ISpace', ['region', 'nest', 'bag'])
 
-        buf_decl = None
         for decl_name, decl in decls.items():
             if not decl.size or decl.is_pointer_type:
                 continue
@@ -270,8 +268,6 @@ class LoopVectorizer(object):
 
             # D) Update the global data structures
             decls[buf_name] = buf_decl
-
-        return buf_decl
 
     def _align_data(self, p_dim, decls):
         """Apply data alignment. This boils down to:
