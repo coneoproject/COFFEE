@@ -41,7 +41,7 @@ from coffee.system import architecture, compiler, isa
 from coffee.system import set_architecture, set_compiler, set_isa
 
 
-__all__ = ['options', 'initialized', 'O0', 'O1', 'O2', 'O3']
+__all__ = ['options', 'initialized', 'O0', 'O1', 'O2', 'O3', 'Ov']
 
 
 class Options(dict):
@@ -174,6 +174,7 @@ O0 = OptimizationLevel('O0')
 O1 = OptimizationLevel('O1', rewrite=1)
 O2 = OptimizationLevel('O2', rewrite=2, dead_ops_elimination=True)
 O3 = OptimizationLevel('O3', align_pad=True, **O2)
+Ov = OptimizationLevel('Ov', align_pad=True)
 
 initialized = False
 
