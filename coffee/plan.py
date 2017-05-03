@@ -43,7 +43,7 @@ from .expression import MetaExpr
 from .logger import log, warn, PERF_OK, PERF_WARN
 from coffee.visitors import Find, EstimateFlops
 
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict
 import time
 
 
@@ -88,7 +88,7 @@ class ASTKernel(object):
 
             info = visit(kernel, info_items=['decls', 'exprs'])
             # Collect expressions and related metadata
-            nests = defaultdict(OrderedDict)
+            nests = OrderedDict()
             for stmt, expr_info in info['exprs'].items():
                 parent, nest = expr_info
                 if not nest:
@@ -98,7 +98,7 @@ class ASTKernel(object):
                 else:
                     typ = check_type(stmt, info['decls'])
                 metaexpr = MetaExpr(typ, parent, nest)
-                nests[nest[0]].update({stmt: metaexpr})
+                nests.setdefault(nest[0], OrderedDict()).update({stmt: metaexpr})
             loop_opts = [CPULoopOptimizer(loop, header, exprs)
                          for (loop, header), exprs in nests.items()]
 
@@ -185,7 +185,7 @@ class ASTKernel(object):
         for kernel in kernels:
             info = visit(kernel, info_items=['decls', 'exprs'])
             # Collect expressions and related metadata
-            nests = defaultdict(OrderedDict)
+            nests = OrderedDict()
             for stmt, expr_info in info['exprs'].items():
                 parent, nest = expr_info
                 if not nest:
@@ -195,7 +195,7 @@ class ASTKernel(object):
                 else:
                     typ = check_type(stmt, info['decls'])
                 metaexpr = MetaExpr(typ, parent, nest)
-                nests[nest[0]].update({stmt: metaexpr})
+                nests.setdefault(nest[0], OrderedDict()).update({stmt: metaexpr})
             loop_opts = [GPULoopOptimizer(loop, header, exprs)
                          for (loop, header), exprs in nests.items()]
 
