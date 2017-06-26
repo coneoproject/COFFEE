@@ -36,7 +36,7 @@ Abstract Syntax Tree (AST)."""
 from __future__ import absolute_import, print_function, division
 
 from copy import deepcopy as dcopy
-from math import isnan
+from cmath import isnan
 import numbers
 import numpy as np
 
@@ -468,7 +468,7 @@ class Symbol(Expr):
     @property
     def is_number(self):
         try:
-            float(self.symbol)
+            complex(self.symbol)
             return True
         except ValueError:
             return False
