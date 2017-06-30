@@ -38,7 +38,8 @@ import coffee
 from .base import *
 from .utils import *
 from .optimizer import CPULoopOptimizer, GPULoopOptimizer
-from .vectorizer import LoopVectorizer, VectStrategy
+from .vect2 import LoopVectorizer, VectStrategy
+# from .vectorizer import LoopVectorizer, VectStrategy
 from .expression import MetaExpr
 from .logger import log, warn, PERF_OK, PERF_WARN
 from coffee.visitors import Find, EstimateFlops
