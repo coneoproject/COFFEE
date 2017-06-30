@@ -259,20 +259,22 @@ class ArrayInit(Expr):
         self._values = val
 
     def _formatter(self, v):
-        """Format a float into a string, showing up to ``precision`` decimal digits.
+        """Format a complex into a string, showing up to ``precision`` decimal digits.
         This function is partly extracted from the open_source "FFC: the FEniCS Form
         Compiler", freely accessible at https://bitbucket.org/fenics-project/ffc."""
         f = "%%.%dg" % self.precision
         f_int = "%%.%df" % 1
         eps = 10.0**(-self.precision)
+        vr = v.real
+        vi = v.imag
         if not isinstance(v, numbers.Number):
             return v.gencode(not_scope=True)
         elif isnan(v):
             return "NAN"
-        elif abs(v - round(v, 1)) < eps:
-            return f_int % v
+        elif abs(vr - round(vr, 1)) < eps and abs(vi - round(vi, 1)) < eps:
+            return f_int % vr + ' + ' + f_int % vi + ' * I'
         else:
-            return f % v
+            return f % vr + ' + ' + f % vi + ' * I'
 
     def _tabulate_values(self, arr):
         if len(arr.shape) == 1:
