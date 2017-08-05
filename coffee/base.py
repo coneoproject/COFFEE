@@ -171,7 +171,7 @@ class BinExpr(Expr):
 
     def gencode(self, not_scope=True, parent=None):
         children = [n.gencode(not_scope, self) for n in self.children]
-        children = ["("+child+")" for child in children if " * I" in child]
+        children = ["("+child+")" for child in children]
         subtree = (" "+type(self).op+" ").join(children)
         if parent:
             return wrap(subtree)
