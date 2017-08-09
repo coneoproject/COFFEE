@@ -266,16 +266,14 @@ class ArrayInit(Expr):
         f = "%%.%dg" % self.precision
         f_int = "%%.%df" % 1
         eps = 10.0**(-self.precision)
-        vr = v.real
-        vi = v.imag
         if not isinstance(v, numbers.Number):
             return v.gencode(not_scope=True)
         elif isnan(v):
             return "NAN"
-        elif abs(vr - round(vr, 1)) < eps and abs(vi - round(vi, 1)) < eps:
-            return f_int % vr + ' + ' + f_int % vi + ' * I'
+        elif abs(v.real - round(v.real, 1)) < eps and abs(v.imag - round(v.imag, 1)) < eps:
+            return f_int % v.real + ' + ' + f_int % v.imag + ' * I'
         else:
-            return f % vr + ' + ' + f % vi + ' * I'
+            return f % v.real + ' + ' + f % v.imag + ' * I'
 
     def _tabulate_values(self, arr):
         if len(arr.shape) == 1:
