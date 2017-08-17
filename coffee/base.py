@@ -1154,6 +1154,34 @@ class Invert(Statement, LinAlg):
 """ % (str(dim), str(lda), str(sym), str(sym))
 
 
+class ComplexInvert(Statement, LinAlg):
+    """In-place inversion of a square array."""
+    # this should probably be changed later to not require a real and complex version
+    def __init__(self, sym, dim, pragma=None):
+        super(ComplexInvert, self).__init__([sym, dim, dim], pragma)
+
+    def reconstruct(self, sym, dim, **kwargs):
+        return type(self)(sym, dim, **kwargs)
+
+    def operands(self):
+        return [self.children[0], self.children[1]], {'pragma': self.pragma}
+
+    def gencode(self, not_scope=True):
+        sym, dim, lda = self.children
+        return """{
+  int n = %s;
+  int lda = %s;
+  int ipiv[n];
+  int lwork = n*n;
+  double complex work[lwork];
+  int info;
+
+  zgetrf_(&n,&n,%s,&lda,ipiv,&info);
+  zgetri_(&n,%s,&lda,ipiv,work,&lwork,&info);
+}
+""" % (str(dim), str(lda), str(sym), str(sym))
+
+
 class Determinant(Expr, LinAlg):
     """Generic determinant"""
     def __init__(self, sym, pragma=None):
