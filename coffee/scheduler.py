@@ -520,7 +520,7 @@ class ZeroRemover(LoopScheduler):
                 try:
                     # Am I tracking the loop with iteration variable == /r/ ?
                     loop = [l for l, p in nest if l.dim == r][0]
-                except:
+                except IndexError:
                     # No, so I just assume it covers the entire non zero-valued region
                     itspace.append([(r, nz_b) for nz_b in nz_bs])
                     continue

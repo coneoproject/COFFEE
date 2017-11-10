@@ -491,7 +491,7 @@ class OuterProduct(object):
 
         def get_reg(self):
             if len(self.var) == 0:
-                l = self.ntot * 2
+                l = self.ntot * 2  # noqa: E741
                 self.var += [self.i["reg"](v) for v in range(self.ntot, l)]
                 self.ntot = l
             return self.var.pop(0)
