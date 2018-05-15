@@ -53,7 +53,7 @@ def update_citations(params):
 
     # Firedrake
     try:
-        from firedrake import Citations
+        from firedrake_citations import Citations
         rewrite = params.get('rewrite', 0)
         nozeros = params.get('dead_ops_elimination', False)
         align_pad = params.get('align_pad', False)
