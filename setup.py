@@ -31,8 +31,6 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
 # OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from __future__ import absolute_import, print_function, division
-
 try:
     from setuptools import setup
 except ImportError:
@@ -45,11 +43,10 @@ setup(name='COFFEE',
       author='Fabio Luporini',
       author_email='f.luporini12@imperial.ac.uk',
       url='https://github.com/coneoproject/COFFEE',
-      install_requires=["networkx"],
       classifiers=['Development Status :: 3 - Alpha',
                    'Intended Audience :: Developers',
                    'Intended Audience :: Science/Research',
                    'License :: OSI Approved :: BSD License',
                    'Operating System :: OS Independent',
-                   'Programming Language :: Python :: 2.7'],
+                   'Programming Language :: Python :: 3.5'],
       packages=['coffee', 'coffee.visitors'])
