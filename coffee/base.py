@@ -271,9 +271,11 @@ class ArrayInit(Expr):
         elif isnan(v):
             return "NAN"
         elif abs(v.real - round(v.real, 1)) < eps and abs(v.imag - round(v.imag, 1)) < eps:
-            return f_int % v.real + ' + ' + f_int % v.imag + ' * I'
+            formatter = f_int
         else:
-            return f % v.real + ' + ' + f % v.imag + ' * I'
+            formatter = f
+        re, im, zero = map(lambda arg: formatter % arg, (v.real, v.imag, 0))
+        return re if im == zero else re + ' + ' + im + ' * I'
 
     def _tabulate_values(self, arr):
         if len(arr.shape) == 1:
