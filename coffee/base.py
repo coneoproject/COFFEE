@@ -260,9 +260,12 @@ class ArrayInit(Expr):
         self._values = val
 
     def _formatter(self, v):
-        """Format a complex into a string, showing up to ``precision`` decimal digits.
-        This function is partly extracted from the open_source "FFC: the FEniCS Form
-        Compiler", freely accessible at https://bitbucket.org/fenics-project/ffc."""
+        """Format a real or complex value into a string, showing up to
+        ``precision`` decimal digits.  This function is partly
+        extracted from the open_source "FFC: the FEniCS Form
+        Compiler", freely accessible at
+        https://bitbucket.org/fenics-project/ffc.
+        """
         f = "%%.%dg" % self.precision
         f_int = "%%.%df" % 1
         eps = 10.0**(-self.precision)
