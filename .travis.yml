@@ -3,7 +3,6 @@ notifications:
     secure: PU4jH8A1V6/naRID4YVfJ+rJZ6F+NzMMYewDd997P/CNR6epHU8cy5PSbZExb1hs+TbYqj88jy2DxwBxGZdMds022VROPV/B2WaMfho2lSLvLPSqx/GzVJT8F+uMgI/A55IYG1MTuKFN37t1oNrH9Iq07GiVsaBwRFXJ+eVaZ50=
 language: python
 python:
-  - "2.7"
   - "3.5"
 
 addons:
