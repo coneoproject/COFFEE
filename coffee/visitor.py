@@ -44,8 +44,8 @@ class Visitor(object):
             # Check the argument specification
             # Valid options are:
             #    visit_Foo(self, o, [*args, **kwargs])
-            signature = inspect.signature(meth)
-            if len(signature.parameters) < 2:
+            argspec = inspect.getfullargspec(meth)
+            if len(argspec.args) < 2:
                 raise RuntimeError("Visit method signature must be visit_Foo(self, o, [*args, **kwargs])")
             handlers[name[len(prefix):]] = meth
         self._handlers = handlers
