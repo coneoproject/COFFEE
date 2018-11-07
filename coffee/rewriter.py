@@ -37,7 +37,6 @@ from six.moves import zip
 from collections import Counter
 from itertools import combinations
 from operator import itemgetter
-import pulp as ilp
 
 from .base import *
 from .utils import *
@@ -577,6 +576,8 @@ class ExpressionRewriter(object):
         nodes_vars = {i: n for i, n in enumerate(nodes)}
         vars_nodes = {n: i for i, n in nodes_vars.items()}
         edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
+
+        import pulp as ilp
 
         def setup():
             # ... declare variables
