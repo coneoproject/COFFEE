@@ -40,8 +40,6 @@ from six.moves import zip
 from copy import deepcopy as dcopy
 from collections import defaultdict, OrderedDict, namedtuple
 
-import networkx as nx
-
 from coffee.base import *
 from coffee.visitors.inspectors import *
 from coffee.visitors.utilities import Reconstructor
@@ -706,6 +704,7 @@ class ExpressionGraph(object):
 
         :param node: root of the AST visited to initialize the ExpressionGraph.
         """
+        import networkx as nx
         self.deps = nx.DiGraph()
         writes = Find(Writer).visit(node)
         for type, nodes in writes.items():
@@ -733,6 +732,7 @@ class ExpressionGraph(object):
         """Return True if any symbols in ``expr`` is read by ``target_sym``,
         False otherwise. If ``target_sym`` is None, Return True if any symbols
         in ``expr`` are read by at least one symbol, False otherwise."""
+        import networkx as nx
         input_syms = Find(Symbol).visit(expr)[Symbol]
         for s in input_syms:
             if s.symbol not in self.deps:
@@ -748,6 +748,7 @@ class ExpressionGraph(object):
         """Return True if any symbols in ``expr`` is written by ``target_sym``,
         False otherwise. If ``target_sym`` is None, Return True if any symbols
         in ``expr`` are written by at least one symbol, False otherwise."""
+        import networkx as nx
         input_syms = Find(Symbol).visit(expr)[Symbol]
         for s in input_syms:
             if s.symbol not in self.deps:

@@ -37,7 +37,6 @@ from six.moves import zip
 from collections import Counter
 from itertools import combinations
 from operator import itemgetter
-import pulp as ilp
 
 from .base import *
 from .utils import *
@@ -471,8 +470,8 @@ class ExpressionRewriter(object):
             return
         for i, (l, p) in enumerate(reduction_loops):
             syms_dep = SymbolDependencies().visit(l, **SymbolDependencies.default_args)
-            if not all([tuple(syms_dep[s]) == expr_info.loops and
-                        s.dim == len(expr_info.loops) for s in expr_syms if syms_dep[s]]):
+            if not all([(tuple(syms_dep[s]) == expr_info.loops and s.dim == len(expr_info.loops))
+                        for s in expr_syms if syms_dep[s]]):
                 # A sufficient (although not necessary) condition for loop reduction to
                 # be safe is that all symbols in the expression are either constants or
                 # tensors assuming a distinct value in each point of the iteration space.
@@ -577,6 +576,8 @@ class ExpressionRewriter(object):
         nodes_vars = {i: n for i, n in enumerate(nodes)}
         vars_nodes = {n: i for i, n in nodes_vars.items()}
         edges = [(vars_nodes[i], vars_nodes[j]) for i, j in edges]
+
+        import pulp as ilp
 
         def setup():
             # ... declare variables

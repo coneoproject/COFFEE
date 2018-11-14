@@ -286,9 +286,7 @@ class ArrayInit(Expr):
             return init_array(arr, lambda v: self._formatter(v))
         else:
             # n-dimensional case
-            return init_array([self._tabulate_values(arr[0])] +
-                              ["\n%s" % self._tabulate_values(arr[i])
-                               for i in range(1, arr.shape[0])], str)
+            return init_array([self._tabulate_values(arr[0])] + ["\n%s" % self._tabulate_values(arr[i]) for i in range(1, arr.shape[0])], str)
 
     def gencode(self, not_scope=True, parent=None):
         if isinstance(self.values, np.ndarray):
