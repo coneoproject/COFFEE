@@ -470,8 +470,8 @@ class ExpressionRewriter(object):
             return
         for i, (l, p) in enumerate(reduction_loops):
             syms_dep = SymbolDependencies().visit(l, **SymbolDependencies.default_args)
-            if not all([tuple(syms_dep[s]) == expr_info.loops and
-                        s.dim == len(expr_info.loops) for s in expr_syms if syms_dep[s]]):
+            if not all([(tuple(syms_dep[s]) == expr_info.loops and s.dim == len(expr_info.loops))
+                        for s in expr_syms if syms_dep[s]]):
                 # A sufficient (although not necessary) condition for loop reduction to
                 # be safe is that all symbols in the expression are either constants or
                 # tensors assuming a distinct value in each point of the iteration space.

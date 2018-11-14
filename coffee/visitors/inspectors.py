@@ -67,7 +67,7 @@ class CountOccurences(Visitor):
     def default_retval(cls):
         return Counter()
 
-    """Count all occurances of :class:`~.Symbol`\s in an AST.
+    r"""Count all occurances of :class:`~.Symbol`\s in an AST.
 
     :arg key: a comparison key for the symbols.
     :arg only_rvalues: optionally only count rvalues in statements.
@@ -395,7 +395,7 @@ class SymbolModes(Visitor):
     def default_retval(cls):
         return OrderedDict()
 
-    """
+    r"""
     Visit the tree and return a dict mapping Symbols to tuples of
     (access mode, parent class).
 
