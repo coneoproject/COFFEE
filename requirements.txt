@@ -1,4 +1,1 @@
-PuLP
-networkx
 numpy
-six
