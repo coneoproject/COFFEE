@@ -62,6 +62,24 @@ init_array = lambda v, f: '{%s}' % ', '.join([f(i) for i in v])
 as_symbol = lambda s: s if isinstance(s, Node) else Symbol(s)
 
 
+def as_cstr(dtype):
+    """Convert a numpy dtype like object to a C type as a string."""
+    if isinstance(dtype, str):
+        return dtype
+    return {"bool": "unsigned char",
+            "int": "int",
+            "int8": "int8_t",
+            "int16": "int16_t",
+            "int32": "int32_t",
+            "int64": "int64_t",
+            "uint8": "uint8_t",
+            "uint16": "uint16_t",
+            "uint32": "uint32_t",
+            "uint64": "uint64_t",
+            "float32": "float",
+            "float64": "double",
+            "complex128": "double complex"}[np.dtype(dtype).name]
+
 # Base classes of the AST ###
 
 
@@ -818,10 +836,10 @@ class Decl(Writer):
     def gencode(self, not_scope=False):
         pointers = " " + " ".join(['*' + ' '.join(i) for i in self.pointers])
         if isinstance(self.init, EmptyStatement):
-            return decl(spacer(self.qual), self.typ + pointers, self.sym.gencode(),
+            return decl(spacer(self.qual), as_cstr(self.typ) + pointers, self.sym.gencode(),
                         spacer(self.attr)) + semicolon(not_scope)
         else:
-            return decl_init(spacer(self.qual), self.typ + pointers, self.sym.gencode(True),
+            return decl_init(spacer(self.qual), as_cstr(self.typ) + pointers, self.sym.gencode(True),
                              spacer(self.attr), self.init.gencode(True, parent=self)) + \
                 semicolon(not_scope)
 
