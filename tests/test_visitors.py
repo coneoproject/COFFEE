@@ -146,13 +146,18 @@ def fun_aa_in_body(block_aa):
     return FunDecl("void", "foo", [], block_aa)
 
 
-@pytest.mark.parametrize("tree",
-                         [block_aa(),
-                          fun_aa_in_args(),
-                          fun_aa_in_body(block_aa())],
-                         ids=["block-repeated-aa",
-                              "fundecl-repeated-aa-args",
-                              "fundecl-repeated-aa-body"])
+@pytest.fixture(params=["block-repeated-aa",
+                        "fundecl-repeated-aa-args",
+                        "fundecl-repeated-aa-body"])
+def tree(request, block_aa, fun_aa_in_args, fun_aa_in_body):
+    if request.param == "block-repeated-aa":
+        return block_aa
+    elif request.param == "fundecl-repeated-aa-args":
+        return fun_aa_in_args
+    elif request.param == "fundecl-repeated-aa-body":
+        return fun_aa_in_body
+
+
 def test_check_uniqueness(tree):
     v = CheckUniqueness()
 
@@ -160,13 +165,6 @@ def test_check_uniqueness(tree):
         v.visit(tree)
 
 
-@pytest.mark.parametrize("tree",
-                         [block_aa(),
-                          fun_aa_in_args(),
-                          fun_aa_in_body(block_aa())],
-                         ids=["block-repeated-aa",
-                              "fundecl-repeated-aa-args",
-                              "fundecl-repeated-aa-body"])
 def test_uniquify(tree):
     v = Uniquify()
     check = CheckUniqueness()
